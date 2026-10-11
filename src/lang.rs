@@ -39,7 +39,9 @@ impl Lang {
     /// behavior. Input: none. Output: `Lang`. Used by: `prompts::current`, `strings::t`,
     /// `Bot::setup` (to log the choice).
     pub fn current() -> Lang {
-        *CURRENT.get_or_init(|| Self::parse(&std::env::var("BOT_LANG").unwrap_or_default()))
+        *CURRENT.get_or_init(|| {
+            Self::parse(&crate::config::runtime_value("BOT_LANG").unwrap_or_default())
+        })
     }
 }
 

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="{{ page.language.code() }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="htmx-config" content='{"allowEval":false,"allowScriptTags":false,"selfRequestsOnly":true,"includeIndicatorStyles":false,"historyCacheSize":0}'>
+  <title>{{ page.title }} · {{ chrome.brand }}</title>
+  <link rel="stylesheet" href="/assets/panel.css">
+  <script src="/assets/panel.js" defer></script>
+  <script src="/assets/htmx-2.0.4.min.js" defer></script>
+</head>
+<body>
+<a class="skip-link" href="#main">{{ chrome.skip }}</a>
+<div class="shell{% if !page.authenticated %} shell-public{% endif %}">
+  <aside class="sidebar">
+    <a class="brand" href="/?lang={{ page.language.code() }}"><span class="brand-mark" aria-hidden="true">P</span>{{ chrome.brand }}</a>
+    <p class="local-label">{{ chrome.local }}</p>
+    {% if page.authenticated %}
+    <nav aria-label="{{ chrome.navigation }}">
+      {% for item in page.nav %}
+        {% if item.disabled %}
+        <span class="nav-link nav-disabled" aria-disabled="true" title="{{ item.reason }}">{{ item.title }}<small>{{ item.reason }}</small></span>
+        {% else %}
+        <a class="nav-link{% if item.active %} nav-active{% endif %}" href="{{ item.href }}"{% if item.active %} aria-current="page"{% endif %}>{{ item.title }}</a>
+        {% endif %}
+      {% endfor %}
+    </nav>
+    {% endif %}
+  </aside>
+  <div class="content">
+    <header class="topbar">
+      <span>{{ chrome.local }}</span>
+      <form method="get" class="language-form">
+        <label for="ui-language">{{ chrome.language }}</label>
+        {% for step in page.steps %}{% if step.current %}<input type="hidden" name="step" value="{{ loop.index }}">{% endif %}{% endfor %}
+        <select id="ui-language" name="lang" data-language-select>
+          <option value="en"{% if page.language.code() == "en" %} selected{% endif %}>{{ chrome.english }}</option>
+          <option value="tr"{% if page.language.code() == "tr" %} selected{% endif %}>{{ chrome.turkish }}</option>
+        </select>
+        <button type="submit" class="button button-small">{{ chrome.language }}</button>
+      </form>
+    </header>
+    <main id="main" tabindex="-1" data-poll-url="{{ page.poll_url }}" data-refresh-error="{{ chrome.refresh_error }}">
+      <header class="page-heading">
+        <h1>{{ page.title }}</h1>
+        {% if !page.description.is_empty() %}<p>{{ page.description }}</p>{% endif %}
+      </header>
+      {% if !page.notice.is_empty() %}<div class="notice" role="status">{{ page.notice }}</div>{% endif %}
+      {% if !page.error.is_empty() %}<div class="notice notice-error" role="alert">{{ page.error }}</div>{% endif %}
+      <p id="refresh-state" class="muted" role="status" hidden></p>
+      {% if !page.steps.is_empty() %}
+      <ol class="steps">
+        {% for step in page.steps %}
+        <li{% if step.current %} aria-current="step" class="step-current"{% endif %}{% if step.complete %} class="step-complete"{% endif %}>
+          <span class="step-number" aria-hidden="true">{{ loop.index }}</span>
+          {% if !step.href.is_empty() %}<a href="{{ step.href }}">{{ step.title }}</a>{% else %}<span>{{ step.title }}</span>{% endif %}
+        </li>
+        {% endfor %}
+      </ol>
+      {% endif %}
+      <div class="sections">
+      {% for section in page.sections %}
+        {% if section.advanced %}<details class="card" id="{{ section.id }}"><summary>{{ section.title }}</summary><div class="details-content">{% else %}<section class="card" id="{{ section.id }}"><h2>{{ section.title }}</h2>{% endif %}
+        {% if !section.description.is_empty() %}<p class="section-description">{{ section.description }}</p>{% endif %}
+        {% if !section.items.is_empty() %}
+        <dl class="facts">
+          {% for item in section.items %}
+          <div class="fact"><dt>{{ item.label }}</dt><dd>{% if !item.href.is_empty() %}<a class="button" href="{{ item.href }}" rel="noreferrer">{{ item.value }}</a>{% else %}<span{% if !item.key.is_empty() %} data-status-key="{{ item.key }}"{% endif %}>{{ item.value }}</span>{% endif %}{% if !item.detail.is_empty() %}<small>{{ item.detail }}</small>{% endif %}</dd></div>
+          {% endfor %}
+        </dl>
+        {% endif %}
+        {% for form in section.forms %}
+        <form id="{{ form.id }}" action="{{ form.action }}?lang={{ page.language.code() }}" method="post" class="panel-form">
+          <input type="hidden" name="csrf" value="{{ form.csrf }}">
+          <input type="hidden" name="lang" value="{{ page.language.code() }}">
+          {% for hidden in form.hidden %}<input type="hidden" name="{{ hidden.0 }}" value="{{ hidden.1 }}">{% endfor %}
+          {% for field in form.fields %}
+          <div class="field{% if !field.error.is_empty() %} field-invalid{% endif %}">
+            <label for="{{ form.id }}-{{ field.name }}">{{ field.label }}</label>
+            {% if field.kind == "select" %}
+            <select id="{{ form.id }}-{{ field.name }}" name="{{ field.name }}" aria-describedby="{{ form.id }}-{{ field.name }}-help {{ form.id }}-{{ field.name }}-error"{% if field.required %} required{% endif %}{% if field.read_only %} disabled{% endif %}{% if !field.error.is_empty() %} aria-invalid="true"{% endif %}>
+              {% for choice in field.choices %}<option value="{{ choice.value }}"{% if choice.selected %} selected{% endif %}>{{ choice.label }}</option>{% endfor %}
+            </select>
+            {% else if field.kind == "textarea" %}
+            <textarea id="{{ form.id }}-{{ field.name }}" name="{{ field.name }}" rows="6" aria-describedby="{{ form.id }}-{{ field.name }}-help {{ form.id }}-{{ field.name }}-error"{% if field.required %} required{% endif %}{% if field.read_only %} readonly{% endif %}{% if !field.error.is_empty() %} aria-invalid="true"{% endif %}>{{ field.value }}</textarea>
+            {% else if field.kind == "checkbox" %}
+            <input type="checkbox" id="{{ form.id }}-{{ field.name }}" name="{{ field.name }}" value="{{ field.value }}" aria-describedby="{{ form.id }}-{{ field.name }}-help {{ form.id }}-{{ field.name }}-error"{% if field.checked %} checked{% endif %}{% if field.required %} required{% endif %}{% if field.read_only %} disabled{% endif %}{% if !field.error.is_empty() %} aria-invalid="true"{% endif %}>
+            {% else %}
+            <input id="{{ form.id }}-{{ field.name }}" name="{{ field.name }}" type="{% if field.kind == "password" %}password{% else if field.kind == "number" %}number{% else if field.kind == "url" %}url{% else %}text{% endif %}"{% if field.kind == "number" %} step="any"{% endif %}{% if field.kind != "password" %} value="{{ field.value }}"{% endif %} autocomplete="{{ field.autocomplete }}" aria-describedby="{{ form.id }}-{{ field.name }}-help {{ form.id }}-{{ field.name }}-error"{% if field.required %} required{% endif %}{% if field.read_only %} readonly{% endif %}{% if !field.error.is_empty() %} aria-invalid="true"{% endif %}>
+            {% endif %}
+            <p class="field-help" id="{{ form.id }}-{{ field.name }}-help">{{ field.help }}</p>
+            <p class="field-error" id="{{ form.id }}-{{ field.name }}-error">{{ field.error }}</p>
+            {% if !field.configured.is_empty() %}<p class="field-state">{{ chrome.configured }}: {{ field.configured }}</p>{% endif %}
+            {% if !field.source.is_empty() %}<p class="field-state">{{ chrome.source }}: {{ field.source }}</p>{% endif %}
+            {% if field.kind != "password" %}
+              {% if !field.effective.is_empty() %}<p class="field-state">{{ chrome.effective }}: {{ field.effective }}</p>{% endif %}
+              {% if !field.saved.is_empty() %}<p class="field-state">{{ chrome.saved }}: {{ field.saved }}</p>{% endif %}
+              {% if !field.default.is_empty() %}<p class="field-state">{{ chrome.default }}: {{ field.default }}</p>{% endif %}
+            {% endif %}
+          </div>
+          {% endfor %}
+          <div class="form-actions">
+          {% for button in form.buttons %}
+            <button class="button{% if button.secondary %} button-secondary{% endif %}" type="submit"{% if !button.name.is_empty() %} name="{{ button.name }}" value="{{ button.value }}"{% endif %}{% if !button.action.is_empty() %} formaction="{{ button.action }}?lang={{ page.language.code() }}"{% endif %}>{{ button.label }}</button>
+          {% endfor %}
+          </div>
+        </form>
+        {% endfor %}
+        {% if section.advanced %}</div></details>{% else %}</section>{% endif %}
+      {% endfor %}
+      </div>
+      {% if !page.log_stream_url.is_empty() %}
+      <section class="card logs-card" data-log-stream="{{ page.log_stream_url }}" data-log-connected="{{ chrome.log_connected }}" data-log-reconnecting="{{ chrome.log_reconnecting }}" data-log-lag="{{ chrome.log_lag }}" data-log-pause="{{ chrome.log_pause }}" data-log-resume="{{ chrome.log_resume }}">
+        <div class="log-controls" hidden>
+          <div><label for="log-level">{{ chrome.log_level }}</label><select id="log-level"><option value="all">{{ chrome.log_all }}</option><option value="error">{{ chrome.log_error }}</option><option value="warn">{{ chrome.log_warn }}</option><option value="info">{{ chrome.log_info }}</option><option value="debug">{{ chrome.log_debug }}</option><option value="trace">{{ chrome.log_trace }}</option></select></div>
+          <div class="log-search"><label for="log-search">{{ chrome.log_search }}</label><input type="search" id="log-search" maxlength="256"></div>
+          <button id="log-pause" class="button button-secondary" type="button" aria-pressed="false">{{ chrome.log_pause }}</button>
+          <label class="inline-label"><input id="log-follow" type="checkbox" checked>{{ chrome.log_follow }}</label>
+        </div>
+        <p id="log-state" class="muted" role="status" hidden>{{ chrome.log_connecting }}</p>
+        <p id="log-lag" class="notice" role="status" hidden></p>
+        <p id="log-empty" class="muted">{{ chrome.log_empty }}</p>
+        <div id="log-lines" class="log-lines" role="log" aria-label="{{ page.title }}" aria-live="off" tabindex="0"></div>
+        <noscript><p class="notice">{{ chrome.no_js }}</p></noscript>
+      </section>
+      {% endif %}
+    </main>
+  </div>
+</div>
+</body>
+</html>

@@ -8,7 +8,7 @@ repository = "https://github.com/krxi/discord-bot"
 
 [dependencies]
 serenity = { version = "0.12", features = ["cache"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "fs"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "fs", "net", "sync"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -17,6 +17,16 @@ rand = "0.8"
 base64 = "0.22"
 log = "0.4"
 redb = "4"
+axum = "=0.8.4"
+askama = "=0.14.0"
+argon2 = "=0.5.3"
+cookie = "=0.18.1"
+sha2 = "=0.10.9"
+tempfile = "=3.20.0"
+futures-util = "0.3"
+
+[dev-dependencies]
+tower = { version = "=0.5.2", features = ["util"] }
 
 # serenity is vendored (vendor/serenity, copied from crates.io 0.12.5) so it can be
 # modified in-tree; the version requirement above still has to match it

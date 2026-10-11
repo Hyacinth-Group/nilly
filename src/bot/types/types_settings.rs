@@ -82,7 +82,7 @@ const REASONING_BUDGET_BASE: u32 = 1500;
 /// Unset or invalid means no owner.
 fn owner_id() -> Option<u64> {
     static OWNER: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
-    *OWNER.get_or_init(|| match std::env::var("OWNER_ID") {
+    *OWNER.get_or_init(|| match crate::config::runtime_value("OWNER_ID") {
         Ok(v) if !v.trim().is_empty() => match v.trim().parse() {
             Ok(id) => Some(id),
             Err(_) => {

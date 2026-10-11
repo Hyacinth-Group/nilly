@@ -2,6 +2,7 @@ mod agenda;
 mod agents;
 mod chat_cli;
 mod command;
+mod config;
 mod growth;
 mod init;
 mod lang;
@@ -9,6 +10,7 @@ mod logging;
 mod memory;
 mod migrate;
 mod modal;
+mod panel;
 mod prompts;
 mod sleep;
 mod strings;
@@ -47,6 +49,9 @@ include!("bot/setup.rs");
 /// `SHUTTING_DOWN`, `client.start` (serenity).
 #[tokio::main]
 async fn main() -> Result<(), BotError> {
+    if panel::entry().await? {
+        return Ok(());
+    }
     dotenvy::dotenv().ok();
     logging::init();
     // panics should land in the log with a backtrace, so a background task that dies

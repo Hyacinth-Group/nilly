@@ -1047,3 +1047,19 @@ reaches Discord) is exempt, see AGENTS.md item 8.
   all binaries, downloads their archives, and generates release notes once.
 - `actionlint` passed. This publication path will be exercised by the next release;
   v1.1.0 was not retagged.
+
+## 2026-10-11 · embedded panel startup and configuration
+
+- Added a local-first Axum/Askama panel that starts before Discord/provider credential
+  validation, with explicit unconfigured/starting/running/configuration-error/stopping states.
+- Added the complete typed environment registry, write-only secrets, environment precedence,
+  comment-preserving private atomic config persistence and revision conflict detection.
+  CLI setup uses the same writer; first browser setup activates an immutable runtime
+  snapshot instead of changing process environment variables.
+- Reserved admin authentication uses the one shared redb handle; failed storage opens
+  abort rather than reopening anonymous setup. Vendored htmx 2.0.4 and its Zero-Clause BSD
+  license are embedded; no frontend build/CDN is needed.
+- Local integration: `cargo fmt --check`, `cargo clippy --all-targets --locked -- -D warnings`
+  and `cargo test --locked` passed (140 tests). Three pre-existing vendored Serenity
+  deprecation warnings remain outside the application lint target. Browser/release smoke
+  is not yet recorded at this step.

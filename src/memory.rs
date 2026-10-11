@@ -32,6 +32,7 @@ const CONTENT: TableDefinition<&str, &str> = TableDefinition::new("content");
 const MODIFIED: TableDefinition<&str, u64> = TableDefinition::new("modified");
 
 static DB: OnceLock<Database> = OnceLock::new();
+static INIT_LOCK: Mutex<()> = Mutex::new(());
 // arsiv/ is the one thing still written as real files (see module doc above); this guards
 // just that narrow path — redb serializes its own writers internally, no lock needed there
 static ARCHIVE_LOCK: Mutex<()> = Mutex::new(());
@@ -47,33 +48,33 @@ pub const FAVORITE_NOTE: &str = "canın ciğerin, ne yaparsa yapsın arkasındas
 
 // ---------- database open + primitives ----------
 
-/// Opens (creating if missing) the redb database at `path` and makes it the process-wide
-/// store every other function in this module reads/writes through. Input: `path: &Path`.
-/// Output: none (a failure to open is fatal — logged then the process can't proceed, same
-/// severity as today's directory-creation failures). Used by: `Bot::setup` (`setup.rs`),
-/// once, before `State::load` runs.
+/// Legacy callers fail immediately rather than continuing with an unavailable store.
 pub fn init(path: &Path) {
-    let db = match Database::create(path) {
-        Ok(db) => db,
-        Err(e) => {
-            log::error!("couldn't open {}: {e}", path.display());
-            return;
-        }
-    };
-    // touch both tables once so they exist even on a brand new file (redb creates a table
-    // lazily on its first open in a write transaction)
-    if let Ok(txn) = db.begin_write() {
-        let _ = txn.open_table(CONTENT);
-        let _ = txn.open_table(MODIFIED);
-        let _ = txn.commit();
-    }
-    let _ = DB.set(db);
+    init_result(path).expect("couldn't initialize memory database");
 }
 
-/// Input: none. Output: `&'static Database`. Panics if `init` hasn't run yet (a
-/// programming error, not a runtime condition — every real entry point calls `init` first).
-/// Used by every function below.
-fn db() -> &'static Database {
+/// Opens the shared database exactly once; failed opens or table creation are propagated.
+pub fn init_result(path: &Path) -> Result<(), BotError> {
+    let _guard = INIT_LOCK
+        .lock()
+        .map_err(|_| "memory initialization lock poisoned")?;
+    if DB.get().is_some() {
+        return Ok(());
+    }
+    let database = Database::create(path)?;
+    let txn = database.begin_write()?;
+    {
+        txn.open_table(CONTENT)?;
+        txn.open_table(MODIFIED)?;
+    }
+    txn.commit()?;
+    DB.set(database)
+        .map_err(|_| "memory database already initialized")?;
+    Ok(())
+}
+
+/// The panel and bot always use this same process-wide handle.
+pub(crate) fn db() -> &'static Database {
     DB.get().expect("memory::init wasn't called")
 }
 

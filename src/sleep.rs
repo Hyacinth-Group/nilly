@@ -22,7 +22,7 @@ pub fn timezone_offset() -> i64 {
     static OFFSET: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
     let mut invalid = None;
     let offset = *OFFSET.get_or_init(|| {
-        let raw = std::env::var("TZ_OFFSET").unwrap_or_default();
+        let raw = crate::config::runtime_value("TZ_OFFSET").unwrap_or_default();
         match parse_offset(&raw) {
             Some(offset) => offset,
             None => {
