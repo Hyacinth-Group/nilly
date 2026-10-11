@@ -18,7 +18,7 @@ Person records use platform-qualified user identities. Topic records use slugs.
 
 | Record | Writer | Reader | Limit / maintenance |
 |---|---|---|---|
-| `INDEX.md` | `refresh_index` (diarist, summarizer, startup) | every reply (system message), coach | ≤40 people, ≤30 topics, ≤3 months; derived record, don't edit by hand |
+| `INDEX.md` | mutation transaction, explicit refresh, startup | every reply (system message), coach | ≤40 people, ≤30 topics, ≤3 months; derived record, don't edit by hand; browser pagination has no such truncation |
 | `profil.md` | profiler | every reply, news_agent, wanderer, coach | regenerated every 6 hours (max_tokens 1200) |
 | `huy.md` | coach | every reply, wanderer selection, sleep (tension) | evolves every 6 hours (800 tokens) |
 | `duzeltmeler.md` | critic | every reply | rewritten at the end of every chat (400) |
@@ -131,6 +131,56 @@ Person records are keyed by platform-qualified user identity; display names rema
 raw memory (≥2 keywords, ≤200 chars). Total ≤6000 characters; stops at whichever section
 doesn't fit. The index and profile are not counted in the budget (they're the fixed part
 of the system message).
+
+## Revisions, manual edits and live caches
+
+Editable records have a monotonic per-key token in `memory_revisions`; existing
+records begin at revision **0**, and the first coordinated write creates revision
+**1**. `modified` remains a seconds-resolution display timestamp, never a
+conflict token. `read_versioned` reads body, revision and timestamp in one redb
+transaction. Browser people/topic/month listings return full bodies in bounded
+pages (1–100 records), ordered by descending modification time then ascending
+canonical key; cursors retain both values. Searches are limited to 200 characters.
+Context/index limits do not truncate administrative browsing.
+
+The authenticated `/memory` screen browses complete people, topics and monthly
+event documents; event detail includes both summary prose and raw event lines.
+`INDEX.md` stays derived and read-only. Structured person edits protect immutable
+identity and favorite +10/note, and treat bodies with unknown/noncanonical fields
+as read-only rather than dropping material. JSON edits require a strong quoted
+numeric `If-Match`; native forms carry a hidden revision. A 412 conflict preserves
+the submitted draft beside current text rather than automatically merging it.
+
+Manual replacement requires the displayed revision (`If-Match` for JSON).
+A stale draft fails without changing memory or caches. An absent temperament can
+be created at expected revision 0; competing creations conflict after revision 1.
+Every displaced editable body, including its old revision and timestamp, is
+stored verbatim in `memory_history` in the same transaction as its replacement.
+Summarization therefore cannot lose raw material when an `arsiv/` filesystem
+append fails. Filesystem archives remain inspection-only copies; transaction
+history is retained independently. Neither is searched by the bot, and neither
+manual edits nor reset erase prior material. This retention increases database
+size and is not a member-erasure facility.
+
+Person learning applies score/fact/tag/event deltas to the latest transaction
+body, preserving canonical identity, bounded scores/tags, owner favorite rules,
+and unknown original fields/subsections. Topic and event additions likewise
+append to the latest transaction body. Profiler, coach, self-state, corrections,
+agenda and summarizer prose carries the revision used before model work.
+Changed revisions discard generated results; a later cycle uses fresh input
+instead of silently overwriting the edit. Manual edits are **not permanent pins**:
+a fresh agent run may legitimately evolve the newly saved revision.
+
+All editable writers use a synchronous mutation coordinator, entered without a
+Bot state/cache guard. Lock order is mutation gate → redb write transaction →
+commit/drop transaction → short state/cache publication. INDEX is built from
+that write transaction's view (no nested transaction), committed with the body,
+then published with affected temperament/profile/corrections/self/agenda caches.
+Failed commits and conflicts publish nothing. No model/network work, awaits,
+archive append or recursive memory write occurs inside the gate. Model/thinking/
+debug controls also publish only after their own durable coordinated commit;
+they are not arbitrary editable prose records.
+
 
 ## Retention and deletion
 

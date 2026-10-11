@@ -26,18 +26,37 @@ fn extract_sse(line: &str) -> Option<SseData> {
     })
 }
 
+/// The most recent provider-reported cumulative usage, with presence preserved across
+/// partial snapshots. Repeated final payloads cannot multiply token totals.
+#[derive(Default)]
+struct StreamUsage {
+    reported: Option<Usage>,
+}
+
+impl StreamUsage {
+    fn observe(&mut self, usage: Option<Usage>) {
+        if let Some(usage) = usage {
+            if let Some(current) = self.reported.as_mut() {
+                current.update_snapshot(usage);
+            } else {
+                self.reported = Some(usage);
+            }
+        }
+    }
+}
+
 // reader for a streaming request; each call hands back the next chunk, None once the stream ends
 /// Pull-based reader over one streaming HTTP response. Holds: `response` (the raw
 /// `reqwest::Response` body being read chunk-by-chunk), `buffer` (bytes not yet split into
-/// lines), `queue` (parsed `Chunk`s waiting to be handed out), `usage` (running total, see
-/// `apply_data`), `category` (for `add_metric`), `done` (saw `[DONE]`), `finished` (the HTTP
-/// body itself is exhausted). Built by `Bot::ask_raw_stream` (`provider_ask.rs`); driven by
-/// `Bot::send_stream` (`provider_send_stream.rs`) via repeated calls to `next`.
+/// lines), `queue` (parsed `Chunk`s waiting to be handed out), `usage` (provider usage
+/// snapshots, see `apply_data`), `category` (for `add_metric`), `done` (saw `[DONE]`),
+/// `finished` (the HTTP body itself is exhausted). Built by `Bot::ask_raw_stream`
+/// (`provider_ask.rs`); driven by `Bot::send_stream` via repeated calls to `next`.
 struct StreamReader {
     response: reqwest::Response,
     buffer: Vec<u8>,        // bytes not yet split into lines
     queue: Vec<Chunk>,      // parsed chunks waiting to be handed out
-    usage: Usage,           // token counters accumulated from chunks seen so far
+    usage: StreamUsage,     // absent until a provider actually sends a usage object
     category: &'static str, // for the token metrics breakdown (!durum)
     done: bool,             // whether [DONE] was seen (a clean end-of-stream marker)
     finished: bool,
@@ -81,9 +100,7 @@ impl StreamReader {
         if v.done {
             self.done = true;
         }
-        if let Some(k) = v.usage {
-            self.usage.add(k);
-        }
+        self.usage.observe(v.usage);
     }
 
     // only complete lines are processed; trailing incomplete bytes wait in the buffer
@@ -140,4 +157,132 @@ struct StreamContext<'a> {
     history: &'a [ChatMessage],
     instruction: &'a str,
     budget: Option<u32>,
+}
+
+#[cfg(test)]
+mod stream_usage_reporting_tests {
+    use super::*;
+
+    fn observe_lines(lines: &[&str]) -> StreamUsage {
+        let mut usage = StreamUsage::default();
+        for line in lines {
+            if let Some(data) = extract_sse(line) {
+                usage.observe(data.usage);
+            }
+        }
+        usage
+    }
+
+    #[test]
+    fn stream_without_usage_keeps_unknown_fields() {
+        let usage = observe_lines(&[
+            r#"data: {"choices":[{"delta":{"content":"answer"}}],"usage":null}"#,
+            "data: [DONE]",
+        ]);
+        assert!(usage.reported.is_none());
+        let mut metrics = Metrics::default();
+        metrics.observe("chat", usage.reported, MetricObservation::Stream { completed: true }, 1);
+        assert_eq!(metrics.calls, 1);
+        let totals = &metrics.reporting.totals;
+        assert_eq!(totals.counted_successful_calls, 1);
+        assert_eq!(totals.usage_reported_calls, 0);
+        for field in [&totals.input, &totals.output, &totals.cache] {
+            assert_eq!(field.known_total, None);
+            assert_eq!(field.unknown_calls, 1);
+        }
+    }
+
+    #[test]
+    fn partial_and_repeated_final_stream_usage_is_one_snapshot() {
+        let usage = observe_lines(&[
+            r#"data: {"choices":[],"usage":{"prompt_tokens":3}}"#,
+            r#"data: {"choices":[{"delta":{"content":"answer"}}],"usage":{"completion_tokens":1}}"#,
+            r#"data: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":13,"prompt_tokens_details":{"cached_tokens":5}}}"#,
+            r#"data: {"choices":[],"usage":{"prompt_tokens":7,"completion_tokens":13,"prompt_tokens_details":{"cached_tokens":5}}}"#,
+            "data: [DONE]",
+        ]);
+        let mut metrics = Metrics::default();
+        metrics.observe("chat", usage.reported, MetricObservation::Stream { completed: true }, 1);
+        assert_eq!(metrics.calls, 1);
+        assert_eq!(metrics.input_tokens, 7);
+        assert_eq!(metrics.output_tokens, 13);
+        assert_eq!(metrics.cache_tokens, 5);
+        assert_eq!(metrics.input_tokens + metrics.output_tokens, 20);
+        let totals = &metrics.reporting.totals;
+        assert_eq!(totals.counted_successful_calls, 1);
+        assert_eq!(totals.usage_reported_calls, 1);
+        for field in [&totals.input, &totals.output, &totals.cache] {
+            assert_eq!(field.reported_calls, 1);
+            assert_eq!(field.unknown_calls, 0);
+        }
+    }
+
+    #[test]
+    fn partial_stream_usage_retains_only_reported_fields() {
+        let usage = observe_lines(&[
+            r#"data: {"choices":[],"usage":{"prompt_tokens":0}}"#,
+            r#"data: {"choices":[],"usage":{"completion_tokens":4}}"#,
+            "data: [DONE]",
+        ]);
+        let mut metrics = Metrics::default();
+        metrics.observe("chat", usage.reported, MetricObservation::Stream { completed: true }, 1);
+        let totals = &metrics.reporting.totals;
+        assert_eq!(totals.input.known_total, Some(0));
+        assert_eq!(totals.output.known_total, Some(4));
+        assert_eq!(totals.cache.known_total, None);
+        assert_eq!(totals.cache.unknown_calls, 1);
+    }
+
+    #[test]
+    fn empty_usage_object_differs_from_no_stream_usage() {
+        let usage = observe_lines(&[r#"data: {"choices":[],"usage":{}}"#, "data: [DONE]"]);
+        assert!(usage.reported.is_some());
+        let mut metrics = Metrics::default();
+        metrics.observe("chat", usage.reported, MetricObservation::Stream { completed: true }, 1);
+        assert_eq!(metrics.reporting.totals.usage_reported_calls, 1);
+        assert_eq!(metrics.reporting.totals.input.known_total, None);
+        assert_eq!(metrics.reporting.totals.input.unknown_calls, 1);
+    }
+
+    #[test]
+    fn failed_stream_is_not_claimed_as_successful_reporting_coverage() {
+        let usage = observe_lines(&[
+            r#"data: {"choices":[],"usage":{"prompt_tokens":7,"prompt_tokens_details":{"cached_tokens":5}}}"#,
+            r#"data: {"choices":[],"usage":{"prompt_tokens":7,"prompt_tokens_details":{"cached_tokens":5}}}"#,
+        ]);
+        let mut metrics = Metrics::default();
+        metrics.observe("chat", usage.reported, MetricObservation::Stream { completed: false }, 1);
+        // Existing counters counted even a read-failed stream, so retain that behavior.
+        assert_eq!(metrics.calls, 1);
+        assert_eq!(metrics.input_tokens, 7);
+        assert_eq!(metrics.reporting.totals.counted_successful_calls, 0);
+        assert_eq!(metrics.reporting.totals.usage_reported_calls, 1);
+        assert_eq!(metrics.reporting.totals.input.known_total, Some(7));
+        assert_eq!(metrics.reporting.totals.input.reported_calls, 1);
+        assert_eq!(metrics.reporting.totals.input.unknown_calls, 0);
+        assert_eq!(metrics.reporting.totals.cache.known_total, Some(5));
+        assert_eq!(metrics.reporting.totals.cache.reported_calls, 1);
+        assert_eq!(metrics.reporting.totals.cache.unknown_calls, 0);
+        assert_eq!(metrics.reporting.totals.output.known_total, None);
+        assert_eq!(metrics.reporting.totals.output.unknown_calls, 1);
+        let category = &metrics.reporting.categories["chat"];
+        assert_eq!(category.counted_successful_calls, 0);
+        assert_eq!(category.usage_reported_calls, 1);
+        assert_eq!(category.input.known_total, Some(7));
+    }
+
+    #[test]
+    fn failed_stream_without_usage_counts_unknown_fields_once() {
+        let mut metrics = Metrics::default();
+        metrics.observe("chat", None, MetricObservation::Stream { completed: false }, 1);
+        assert_eq!(metrics.calls, 1);
+        let totals = &metrics.reporting.totals;
+        assert_eq!(totals.counted_successful_calls, 0);
+        assert_eq!(totals.usage_reported_calls, 0);
+        for field in [&totals.input, &totals.output, &totals.cache] {
+            assert_eq!(field.known_total, None);
+            assert_eq!(field.reported_calls, 0);
+            assert_eq!(field.unknown_calls, 1);
+        }
+    }
 }

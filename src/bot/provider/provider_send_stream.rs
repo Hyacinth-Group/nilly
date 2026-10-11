@@ -66,7 +66,11 @@ impl Bot {
         }
 
         // usage metrics and a stream summary
-        self.add_metric(reader.category, reader.usage);
+        self.add_metric(
+            reader.category,
+            reader.usage.reported,
+            MetricObservation::Stream { completed: stream_error.is_none() },
+        );
         log::debug!(
             "stream [{channel}]: chunks={chunk_count} first={first_chunk_ms:?}ms total={}ms done={}",
             start.elapsed().as_millis(),

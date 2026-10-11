@@ -13,7 +13,7 @@
 <a class="skip-link" href="#main">{{ chrome.skip }}</a>
 <div class="shell{% if !page.authenticated %} shell-public{% endif %}">
   <aside class="sidebar">
-    <a class="brand" href="/?lang={{ page.language.code() }}"><span class="brand-mark" aria-hidden="true">P</span>{{ chrome.brand }}</a>
+    <a class="brand" href="/?lang={{ page.language.code() }}"><span class="brand-mark" aria-hidden="true">{{ chrome.brand_mark }}</span>{{ chrome.brand }}</a>
     <p class="local-label">{{ chrome.local }}</p>
     {% if page.authenticated %}
     <nav aria-label="{{ chrome.navigation }}">
@@ -65,13 +65,13 @@
         {% if !section.items.is_empty() %}
         <dl class="facts">
           {% for item in section.items %}
-          <div class="fact"><dt>{{ item.label }}</dt><dd>{% if !item.href.is_empty() %}<a class="button" href="{{ item.href }}" rel="noreferrer">{{ item.value }}</a>{% else %}<span{% if !item.key.is_empty() %} data-status-key="{{ item.key }}"{% endif %}>{{ item.value }}</span>{% endif %}{% if item.progress_max > 0 %}<progress value="{{ item.progress_value }}" max="{{ item.progress_max }}" data-progress-key="{{ item.progress_key() }}" data-progress-max-key="{{ item.progress_max_key() }}" aria-label="{{ item.label }}"></progress>{% endif %}{% if !item.detail.is_empty() %}<small>{{ item.detail }}</small>{% endif %}</dd></div>
+          <div class="fact"><dt>{{ item.label }}</dt><dd>{% if !item.href.is_empty() %}<a class="button{% if item.active %} button-current{% endif %}" href="{{ item.href }}" rel="noreferrer"{% if item.active %} aria-current="page"{% endif %}>{{ item.value }}</a>{% else %}<span{% if !item.key.is_empty() %} data-status-key="{{ item.key }}"{% endif %}>{{ item.value }}</span>{% endif %}{% if item.progress_max > 0 %}<progress value="{{ item.progress_value }}" max="{{ item.progress_max }}" data-progress-key="{{ item.progress_key() }}" data-progress-max-key="{{ item.progress_max_key() }}" aria-label="{{ item.label }}"></progress>{% endif %}{% if !item.detail.is_empty() %}<small>{{ item.detail }}</small>{% endif %}</dd></div>
           {% endfor %}
         </dl>
         {% endif %}
         {% for form in section.forms %}
-        <form id="{{ form.id }}" action="{{ form.action }}?lang={{ page.language.code() }}" method="post" class="panel-form">
-          <input type="hidden" name="csrf" value="{{ form.csrf }}">
+        <form id="{{ form.id }}" action="{{ form.action }}?lang={{ page.language.code() }}" method="{% if form.method == "get" %}get{% else %}post{% endif %}" class="panel-form">
+          {% if form.method != "get" %}<input type="hidden" name="csrf" value="{{ form.csrf }}">{% endif %}
           <input type="hidden" name="lang" value="{{ page.language.code() }}">
           {% for hidden in form.hidden %}<input type="hidden" name="{{ hidden.0 }}" value="{{ hidden.1 }}">{% endfor %}
           {% for field in form.fields %}

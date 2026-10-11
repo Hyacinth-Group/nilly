@@ -31,22 +31,17 @@ impl Bot {
         });
     }
 
-    // !debug ac|kapat (toggles if empty); persisted in durum/debug.md. Returns the new state.
-    pub(crate) fn set_debug(&self, arg: &str) -> Result<bool, crate::BotError> {
-        let mut state = self.state();
-        let new_value = match arg.trim().to_lowercase().as_str() {
-            "aç" | "ac" | "açık" | "acik" | "on" => true,
-            "kapat" | "kapalı" | "kapali" | "off" => false,
-            _ => !state.debug,
-        };
-        state.debug = new_value;
-        memory::write_result("debug.md", if new_value { "acik" } else { "kapali" })?;
-        Ok(new_value)
+
+    fn model_catalogue_url(&self) -> Option<&'static str> {
+        match self.api_url.trim_end_matches('/') {
+            crate::OPENROUTER_URL => Some("https://openrouter.ai/api/v1/models"),
+            crate::MISTRAL_URL => Some("https://api.mistral.ai/v1/models"),
+            _ => None,
+        }
     }
 
-    // whether `id` is in openrouter's model catalog (queries the live /models list)
-    /// Fails open if the catalog request fails, so a network hiccup doesn't block `/model`.
-    pub(crate) async fn model_exists(&self, id: &str) -> bool {
+    /// Checks only the official provider catalogue; failures never validate a model.
+    pub(crate) async fn model_exists(&self, id: &str) -> Result<bool, ActionError> {
         #[derive(Deserialize)]
         struct ModelList {
             data: Vec<ModelEntry>,
@@ -55,18 +50,15 @@ impl Bot {
         struct ModelEntry {
             id: String,
         }
-        match self
-            .http
-            .get("https://openrouter.ai/api/v1/models")
-            .send()
-            .await
-        {
-            Ok(resp) => resp
-                .json::<ModelList>()
-                .await
-                .map(|list| list.data.iter().any(|m| m.id == id))
-                .unwrap_or(false),
-            Err(_) => true, // if the list can't be fetched, don't block on it
+        let endpoint = self.model_catalogue_url()
+            .ok_or(ActionError::ModelValidationUnsupported)?;
+        let mut request = self.http.get(endpoint);
+        if endpoint.starts_with("https://api.mistral.ai/") {
+            request = request.bearer_auth(&self.key);
         }
+        let response = request.send().await.map_err(|e| ActionError::Operation(e.into()))?
+            .error_for_status().map_err(|e| ActionError::Operation(e.into()))?;
+        let list = response.json::<ModelList>().await.map_err(|e| ActionError::Operation(e.into()))?;
+        Ok(list.data.iter().any(|model| model.id == id))
     }
 }

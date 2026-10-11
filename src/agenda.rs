@@ -233,12 +233,14 @@ impl Bot {
 
     // browses the news every so often: picks whatever catches its interest from the rss
     // feed, reads it, writes its own take into its journal
-    /// Updates the agenda on disk and in memory; failures are logged, not propagated.
-    pub async fn wander(&self) {
-        let news_items = match rss(&self.http).await {
-            Ok(h) => h,
-            Err(e) => return log::warn!("wander: rss: {e}"),
-        };
+    /// Returns false for an empty feed; propagates model/storage conflicts to administration.
+    pub async fn wander(&self) -> Result<bool, BotError> {
+        let snapshot = memory::read_versioned("gundem.md")?;
+        let expected = snapshot.as_ref().map(|record| record.revision).unwrap_or(0);
+        let news_items = rss(&self.http).await?;
+        if news_items.is_empty() {
+            return Ok(false);
+        }
         let list = news_items
             .iter()
             .take(20)
@@ -260,10 +262,7 @@ impl Bot {
                 )
                 .into_owned()
         };
-        let pick = match self.analyze(&list, &instruction, 20, "gezgin_sec").await {
-            Ok(s) => s,
-            Err(e) => return log::warn!("wander: pick: {e}"),
-        };
+        let pick = self.analyze(&list, &instruction, 20, "gezgin_sec").await?;
         let selected: Vec<usize> = pick
             .split(|c: char| !c.is_ascii_digit())
             .filter_map(|s| s.parse().ok())
@@ -271,7 +270,7 @@ impl Bot {
             .take(3)
             .collect();
         if selected.is_empty() {
-            return log::warn!("wander: couldn't parse the pick: {pick}");
+            return Err("wander: couldn't parse selected news".into());
         }
 
         let mut read_text = String::new();
@@ -288,28 +287,34 @@ impl Bot {
         }
 
         let note_instruction = context.render(prompts::current().wanderer_note);
-        let note = match self
+        let note = self
             .generate(
                 &[user(read_text)],
                 &note_instruction,
                 Some(350),
                 "gezgin_not",
             )
-            .await
-        {
-            Ok(n) => n,
-            Err(e) => return log::warn!("wander: note: {e}"),
-        };
+            .await?;
 
-        let mut list = entries(&memory::read("gundem.md"));
+        let mut list = entries(
+            snapshot
+                .as_ref()
+                .map(|record| record.content.as_str())
+                .unwrap_or(""),
+        );
         list.push(format!("## {}\n{}", memory::date_time(), note.trim()));
+        let mut archived = Vec::new();
         while list.len() > AGENDA_ENTRIES {
-            memory::archive("gundem.md", &list.remove(0));
+            archived.push(list.remove(0));
         }
         let text = list.join("\n\n");
-        memory::write("gundem.md", &text);
-        self.state().agenda = latest_agenda(&text);
+        memory::replace_generated(self, "gundem.md", expected, &text)?;
+        // Transaction history retains displaced prose even if these filesystem copies fail.
+        for entry in archived {
+            memory::archive("gundem.md", &entry);
+        }
         log::debug!("wander: agenda note written");
+        Ok(true)
     }
 }
 

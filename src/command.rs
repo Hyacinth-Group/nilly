@@ -1,6 +1,6 @@
 //! Transport-neutral administration. Native registration, interaction deadlines and
 //! card builders live in platform adapters; every entry surface shares this schema.
-use crate::{memory, now_unix, sleep, Bot};
+use crate::{now_unix, sleep, Bot};
 use serde::Deserialize;
 
 pub mod parser;

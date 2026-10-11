@@ -28,11 +28,30 @@ The single binary embeds an axum server, Askama templates, and local assets; the
 
 When no administrator exists, startup exposes a one-use `/setup#token=...` console link valid for 15 minutes. Claiming it creates a temporary setup session; successfully setting an administrator password of at least 12 characters persists ownership before the remaining setup work. The five steps are claim/protect, Discord, provider/model, language/timezone/access/news, and invite/start. Discord verification uses its authenticated application API; the invite uses that verified application ID and permission mask `67226688`. Provider verification makes authenticated GET requests only, not paid completions. Neither test proves gateway health, model reply compatibility, or available credit.
 
-Setup completion writes configuration and signals the runtime owner through its bounded start channel. Normal headless startup uses `platform::runtime::run`; the panel owner uses the same supervisor through `run_with_shutdown`, forwarding its shutdown watch instead of constructing an SDK client. Lifecycle distinguishes unconfigured, configured/starting, running, configuration error, and stopping. Owned `ConnectionSnapshot` values report actual connection/account/room capabilities independently of panel availability; no Serenity cache/shard state is read by panel status. Moods belong to active conversations, not a global summary. Process-local model-call/token counters are not provider cost accounting or durable usage history. Memory/personality editors, runtime action buttons, and the dedicated usage page remain intentionally disabled.
+Setup completion writes configuration and signals the runtime owner through its bounded start channel. Normal headless startup uses `platform::runtime::run`; the panel owner uses the same supervisor through `run_with_shutdown`, forwarding its shutdown watch instead of constructing an SDK client. Lifecycle distinguishes unconfigured, configured/starting, running, configuration error, and stopping. Owned `ConnectionSnapshot` values report actual connection/account/room capabilities independently of panel availability; no Serenity cache/shard state is read by panel status. Moods belong to active conversations, not a global summary. Memory and temperament edits use the same durable revision coordinator as background learning. Actions dispatch the shared administration service; Usage reports process-local observations, not durable billing history.
 
 Status JSON includes the unmodified `connections: Vec<ConnectionSnapshot>`, unique ready `rooms`/`spaces`, and localized `display.connections` details. Connecting and disconnected configurations remain distinguishable from ready accounts. Conversation rows use canonical room/thread/source identities rather than assuming Discord numeric channel IDs.
 
-The interface uses system fonts and server-rendered forms with a visible, wrapping mobile navigation. Core setup, sign-in, settings, and account forms work without JavaScript; the console claim code can be pasted manually. JavaScript adds setup-fragment handling, passive dashboard refreshes, and live logs, while recent log entries remain server-rendered. Ordinary settings never receive secret-status labels; credential fields show only configured/source flags, not stored values.
+The interface uses system fonts and server-rendered forms with a visible, wrapping mobile navigation and a full-height sidebar background. An unconfigured Overview shows one setup invitation instead of unavailable runtime cards. Setup, sign-in, settings, account, memory edits, temperament edits, and action confirmations work without JavaScript; the console claim code can be pasted manually. JavaScript adds setup-fragment handling, passive status refreshes, native unsaved-prose navigation warnings, and live logs. The product name has one source, `views::PROJECT_NAME`, inserted through the shared localized brand pattern. Ordinary settings never receive secret-status labels; credential fields show only configured/source flags.
+
+Responses use `Referrer-Policy: same-origin`: external destinations receive no referrer, while native same-origin form submissions retain a verifiable Origin header. `no-referrer` caused Chrome to submit `Origin: null`; null and cross-origin submissions remain rejected rather than weakening origin/CSRF validation.
+
+### Memory and personality editing
+
+The browser exposes only canonical People, safe Topics, and monthly Events, not arbitrary database paths or control/authentication tables. Searches and cursor pages cover the complete record collection, independently of retrieval-index limits. Person identities are immutable; favorite scores remain +10. Unknown or noncanonical person formats are read-only rather than silently dropping fields. Monthly events show both summary prose and raw dated lines.
+
+The shared redb handle stores editable bodies, monotonic per-record revisions, and exact displaced snapshots. HTTP replacements require a strong `If-Match` ETag (428 if missing, 412 if stale); native forms submit the same revision precondition. Conflict screens keep the submitted draft beside the current text without automatically overwriting it. Previous material remains sensitive retained history, not member erasure.
+
+Every editable writer enters a synchronous mutation gate without holding Bot state: apply latest-value deltas or snapshot CAS, derive `INDEX.md` from the same write transaction, commit/drop, then publish affected caches under a short state lock. Conflicting generated prose is discarded for a fresh later run; failed commits publish nothing. Summarizer originals remain durable in history independently of optional filesystem archive copies.
+
+Personality separates the compiled `BOT_LANG` core, CAS-editable `huy.md`, read-only group profile/self-state/corrections/growth, and temporary per-conversation mood. A later coach run may evolve or replace manual temperament; edits do not pin learning or train model weights.
+
+### Actions and observed usage
+
+The Actions page uses all sixteen shared action definitions, canonical connection/room/thread discovery, explicit argument and side-effect review, and the authenticated `Actor::LocalOperator` boundary. Read-only controls navigate to their pages; mutations run bounded, session-idempotent jobs with real completion/failure and shutdown interruption. A queued job is not proof of delivery, and interruption cannot undo an already committed state change or already accepted external message.
+
+Usage preserves missing versus explicitly reported zero token fields and separates cached input as a subset of input. Per-category observations include background agents where their existing accounting hooks run. Usage/token observations actually reported by a stream remain known even if that stream later fails. `counted_successful_calls` counts only decoded successful responses and fully drained streams; reporting counts may exceed successful counts, so they are not a ratio or billing denominator. Monetary cost, currency, and overall billing coverage stay **Not reported** when unavailable. There is no estimated price, spending enforcement, or persistent usage history.
+
 
 ### Configuration and settings
 
@@ -291,6 +310,11 @@ as a native async function, with no Serenity context or manufactured interaction
 `Actor::User(UserKey)` identifies a platform account; `Actor::LocalOperator`
 denotes an already-authenticated local panel operator. The latter is an explicit
 trust boundary, not a synthetic Discord owner account.
+
+The panel constructs `AdminService::new_owned(&Arc<Bot>)`. This offloads bounded synchronous reads and commit/publication closures to blocking workers while leaving provider/delivery futures normally awaited and cancellable. The borrowed native constructor keeps its existing scheduling boundary. `use_default_model(&Actor)` is a typed operation, not a magic model ID; it validates the configured default and removes the durable override before publication.
+
+Action errors are localized without exposing provider/storage bodies. Delivery acknowledgments distinguish accepted public delivery from model silence, empty input/news, and unchanged sleep state. Resets reject busy generations instead of clearing flags owned by in-flight work. Cancellation restores unanswered wake mentions through RAII; a timeout cannot silently discard them.
+
 
 `ActionTarget` carries optional connection and normalized room metadata (including
 space/thread). Shared-brain reads/settings can run without a room; conversational

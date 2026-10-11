@@ -1,6 +1,6 @@
 impl Bot {
     /// Builds the fixed/variable system-message pair for a chat reply.
-    fn chat_system(&self, history: &[ChatMessage], instruction: &str, context: &platform::prompt_context::PromptContext) -> (String, String, String) {
+    fn chat_system(&self, history: &[ChatMessage], instruction: &str, context: &platform::prompt_context::PromptContext) -> Result<(String, String, String), BotError> {
         let mut participants: Vec<String> = Vec::new();
         let mut texts: Vec<String> = Vec::new();
         for m in history.iter().filter(|m| m.role == "user") {
@@ -18,9 +18,9 @@ impl Bot {
         let keywords = memory::keywords(&texts);
         let s = self.state();
         let identities = observed_users(history).into_iter().map(|(label, person)| (label, person.id)).collect();
-        let retrieved = memory::retrieve(&participants, &identities, &keywords, &s.recent_messages, CHAT_SIZE);
+        let retrieved = memory::retrieve(&participants, &identities, &keywords, &s.recent_messages, CHAT_SIZE)?;
         let (fixed, variable) = system_text_with(&s, instruction, &retrieved, context);
-        (fixed, variable, s.bot_name.clone())
+        Ok((fixed, variable, s.bot_name.clone()))
     }
 
     // talks with personality: chat, welcome, unprompted remarks, introducing news, pranks.
@@ -35,7 +35,7 @@ impl Bot {
         budget: Option<u32>,
         category: &'static str,
     ) -> Result<String, BotError> {
-        let (fixed, variable, bot_name) = self.chat_system(history, instruction, &self.default_prompt_context());
+        let (fixed, variable, bot_name) = self.chat_system(history, instruction, &self.default_prompt_context())?;
         let reply = self
             .ask_split(&fixed, &variable, history, budget, category)
             .await?;
@@ -61,7 +61,11 @@ impl Bot {
     /// Routed personality generation; `instruction` is already rendered and never expanded again.
     async fn generate_for(&self, channel: &ConversationKey, history: &[ChatMessage], instruction: &str,
         budget: Option<u32>, category: &'static str) -> Result<String, BotError> {
-        let (fixed, variable, bot_name) = self.chat_system(history, instruction, &self.prompt_context(channel));
+        let (adapter, room) = self.transport(channel)?;
+        if !adapter.capabilities(&room).send {
+            return Err(platform::PlatformError::Unsupported("send").into());
+        }
+        let (fixed, variable, bot_name) = self.chat_system(history, instruction, &self.prompt_context(channel))?;
         let reply = self.ask_split(&fixed, &variable, history, budget, category).await?;
         Ok(clean(reply, &bot_name))
     }
@@ -69,7 +73,7 @@ impl Bot {
     /// Routed streaming counterpart, using the same prepared-instruction contract.
     async fn generate_stream_for(&self, channel: &ConversationKey, history: &[ChatMessage], instruction: &str,
         budget: Option<u32>, category: &'static str) -> Result<(StreamReader, String), BotError> {
-        let (fixed, variable, bot_name) = self.chat_system(history, instruction, &self.prompt_context(channel));
+        let (fixed, variable, bot_name) = self.chat_system(history, instruction, &self.prompt_context(channel))?;
         let reader = self.ask_raw_stream(&fixed, &variable, history, budget, category).await?;
         Ok((reader, bot_name))
     }
@@ -192,7 +196,7 @@ impl Bot {
 
     // mentions always go out disabled: even if the model writes @everyone, nobody gets pinged.
     // everything sent lands in own_messages, which the coach and critic read from.
-    /// Sends one message and records it; send failures are logged.
+    /// Sends one message and records only accepted delivery.
     /// `ping` is the only user allowed to be mentioned.
     async fn send(
         &self,
@@ -201,17 +205,32 @@ impl Bot {
         ping: Option<&UserKey>,
         file: Option<&PathBuf>,
         reply_to: Option<&MessageKey>,
-    ) {
-        let (transport, room) = match self.transport(channel) {
-            Ok(transport) => transport,
-            Err(e) => { log::error!("send failed ({channel}): {e}"); return; }
-        };
+    ) -> Result<(), BotError> {
+        let (transport, room) = self.transport(channel)?;
+        let capabilities = transport.capabilities(&room);
+        if !capabilities.send {
+            return Err(platform::PlatformError::Unsupported("send").into());
+        }
+        if file.is_some() && !capabilities.send_attachments {
+            return Err(platform::PlatformError::Unsupported("attachments").into());
+        }
 
         let target = reply_to.map(|id| platform::types::MessageRef {
             id: id.clone(), room: channel.room.clone(), author: None,
         });
-        let attachments = file
-            .map(|path| platform::outgoing::OutgoingAttachment::LocalPath(path.as_path()));
+        // Load before handing off: native LocalPath adapters may otherwise omit unreadable files.
+        let file_bytes = match file {
+            Some(path) => Some(tokio::fs::read(path).await?),
+            None => None,
+        };
+        let attachments = match (file, file_bytes.as_deref()) {
+            (Some(path), Some(data)) => Some(platform::outgoing::OutgoingAttachment::Bytes {
+                filename: path.file_name().and_then(|name| name.to_str()).ok_or("invalid attachment filename")?,
+                data,
+                mime: None,
+            }),
+            _ => None,
+        };
         let mut body = platform::outgoing::OutgoingMessage::text(text);
         body.reply_to = target.as_ref();
         body.mentions = platform::outgoing::MentionPolicy {
@@ -220,10 +239,7 @@ impl Bot {
             prefix_user: ping,
         };
         body.attachments = attachments.as_slice();
-        let receipt = match transport.send(&room, &body).await {
-            Ok(receipt) => receipt,
-            Err(e) => { log::error!("send failed ({channel}): {e}"); return; }
-        };
+        let receipt = transport.send(&room, &body).await?;
         let mut s = self.state();
         s.own_messages.push_back(receipt.last_accepted_text.clone());
         if s.own_messages.len() > 50 {
@@ -231,6 +247,7 @@ impl Bot {
         }
         let line = format!("{}: {}", s.bot_name, receipt.last_accepted_text);
         channel_note(&mut s, channel, line);
+        Ok(())
     }
 
     // sends a chat reply as a stream: the message appears early and is edited at intervals.

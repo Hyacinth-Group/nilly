@@ -38,7 +38,7 @@
             response: resp,
             buffer: Vec::new(),
             queue: Vec::new(),
-            usage: Usage::default(),
+            usage: StreamUsage::default(),
             category: "test",
             done: false,
             finished: false,
@@ -51,6 +51,7 @@
         }
         assert_eq!(thought, "önce düşün");
         assert_eq!(text, "Güneş bugün güzel");
+        assert!(reader.usage.reported.is_none());
     }
 
     /// Verifies `strip_name` removes a `"name: "` prefix case-insensitively, and leaves text without that prefix untouched.

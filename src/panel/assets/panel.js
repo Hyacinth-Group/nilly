@@ -44,6 +44,21 @@ if (languageSelect) {
   });
 }
 
+// Native navigation warnings protect prose drafts; browsers provide localized copy.
+const draftForms = [...document.querySelectorAll("form.panel-form")]
+  .filter((form) => form.querySelector("textarea:not([readonly])"));
+const dirtyDrafts = new Set();
+for (const form of draftForms) {
+  form.addEventListener("input", () => dirtyDrafts.add(form));
+  form.addEventListener("submit", () => dirtyDrafts.delete(form));
+}
+window.addEventListener("beforeunload", (event) => {
+  if (dirtyDrafts.size) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
+
 const main = document.getElementById("main");
 const pollUrl = main && localEndpoint(main.dataset.pollUrl);
 if (pollUrl) {

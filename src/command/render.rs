@@ -15,6 +15,8 @@ pub fn localized_description(error: &ActionError) -> String {
                 "unknown choice" => "admin.error.reason.choice",
                 "missing default" => "admin.error.reason.default",
                 "too many arguments" => "admin.error.reason.arguments",
+                "invalid model id" => "admin.error.reason.model_id",
+                "unknown model" => "admin.error.reason.model_unknown",
                 _ => "admin.error.reason.type",
             };
             strings::t("admin.error.argument")
@@ -27,11 +29,12 @@ pub fn localized_description(error: &ActionError) -> String {
         ActionError::MissingRoom => strings::t("admin.error.room").to_string(),
         ActionError::UnboundRoom => strings::t("admin.error.unbound").to_string(),
         ActionError::PrivateSurfaceRequired => strings::t("admin.error.private").to_string(),
-        ActionError::Memory(error) => {
-            strings::t("admin.error.memory").replace("{error}", &error.to_string())
-        }
-        ActionError::Platform(error) => {
-            strings::t("admin.error.platform").replace("{error}", &error.to_string())
+        ActionError::Memory(_) => strings::t("admin.error.memory").to_string(),
+        ActionError::Platform(_) => strings::t("admin.error.platform").to_string(),
+        ActionError::Operation(_) => strings::t("admin.error.operation").to_string(),
+        ActionError::Busy => strings::t("admin.error.busy").to_string(),
+        ActionError::ModelValidationUnsupported => {
+            strings::t("admin.error.model_validation_unsupported").to_string()
         }
     }
 }
@@ -199,6 +202,18 @@ mod tests {
         let text = plain(&help, true).unwrap();
         for id in super::super::ActionId::ALL {
             assert!(text.contains(id.as_str()));
+        }
+    }
+    #[test]
+    fn localized_failures_do_not_expose_provider_or_storage_details() {
+        for error in [
+            ActionError::Operation("private-provider-response".into()),
+            ActionError::Memory("private-storage-path".into()),
+            ActionError::Platform(crate::platform::PlatformError::Transport(
+                "private-platform-token".into(),
+            )),
+        ] {
+            assert!(!localized_description(&error).contains("private-"));
         }
     }
 }

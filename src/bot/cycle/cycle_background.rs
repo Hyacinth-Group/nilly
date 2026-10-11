@@ -41,7 +41,7 @@ async fn poke_cycle(bot: Arc<Bot>) {
                 // post a small code gripe to the dev channel
                 if let Some(channel) = default_channel(&bot) {
                     if !bot.state().chats.contains_key(&channel) {
-                        bot.post_problem(&channel).await;
+                        if let Err(e) = bot.post_problem(&channel).await { log::warn!("problem: {e}"); }
                     }
                 }
                 continue;
@@ -62,13 +62,14 @@ async fn poke_cycle(bot: Arc<Bot>) {
             }
         };
         match bot
-            .send_lines(&channel, &line, None, None, None)
+            .send_lines(&channel, &line, None, None, None, true)
             .await
         {
-            Some(p) => {
+            Ok(Some(p)) => {
                 start_chat(&mut bot.state(), &channel, Some(p));
             }
-            None => log::debug!("poke: model stayed silent, skipped"),
+            Ok(None) => log::debug!("poke: model stayed silent, skipped"),
+            Err(e) => log::warn!("poke delivery: {e}"),
         }
     }
 }
@@ -89,8 +90,9 @@ async fn prank_cycle(bot: Arc<Bot>) {
         let Some((channel, _)) = idle_channel(&bot) else {
             continue;
         };
-        bot.run_prank(&channel, rand::random::<f64>() < HACK_SHARE)
-            .await;
+        if let Err(e) = bot.run_prank(&channel, rand::random::<f64>() < HACK_SHARE).await {
+            log::warn!("prank: {e}");
+        }
     }
 }
 
@@ -109,7 +111,9 @@ async fn wanderer_cycle(bot: Arc<Bot>) {
             return;
         }
         if sleep::is_awake(&bot.state()) {
-            bot.wander().await;
+            if let Err(error) = bot.wander().await {
+                log::warn!("wander: deferred: {error}");
+            }
         }
     }
 }
@@ -180,7 +184,7 @@ async fn sleep_cycle(bot: Arc<Bot>) {
             let mut state = bot.state();
             sleep::update(&mut state);
         }
-        bot.sleep_transition().await;
+        if let Err(e) = bot.sleep_transition().await { log::warn!("sleep transition: {e}"); }
         bot.close_timed_out().await;
     }
 }

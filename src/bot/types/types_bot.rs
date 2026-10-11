@@ -80,22 +80,16 @@ impl Bot {
         Ok((adapter, room))
     }
 
-    // adds model usage to the session metrics, broken down by category too (!status dumps this)
-    /// Folds one API call's token usage into the session-wide metrics.
-    fn add_metric(&self, category: &'static str, usage: Usage) {
-        log::debug!(
-            "api [{category}]: in={} cache={} out={}",
-            usage.prompt_tokens,
-            usage.prompt_tokens_details.cached_tokens,
-            usage.completion_tokens,
-        );
-        let mut s = self.state();
-        s.metrics.calls += 1;
-        s.metrics.input_tokens += usage.prompt_tokens;
-        s.metrics.cache_tokens += usage.prompt_tokens_details.cached_tokens;
-        s.metrics.output_tokens += usage.completion_tokens;
-        s.metrics.last_call_secs = now_unix();
-        s.metrics.categories.entry(category).or_default().add(usage);
+    /// Records one provider observation without treating missing usage as reported zero.
+    /// Legacy process counters remain compatible; reporting retains field coverage.
+    fn add_metric(
+        &self,
+        category: &'static str,
+        usage: Option<Usage>,
+        observation: MetricObservation,
+    ) {
+        log::debug!("api [{category}]: usage={usage:?}");
+        self.state().metrics.observe(category, usage, observation, now_unix());
     }
 
     // has this model already been seen refusing to turn reasoning off?

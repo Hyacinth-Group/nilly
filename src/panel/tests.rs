@@ -28,6 +28,7 @@ pub(super) async fn fixture() -> (Arc<App>, tempfile::TempDir) {
             stop,
             tests: Arc::new(tokio::sync::Semaphore::new(2)),
             streams: Arc::new(tokio::sync::Semaphore::new(8)),
+            jobs: Arc::new(actions::JobStore::new()),
         }),
         directory,
     )
@@ -81,6 +82,15 @@ async fn every_private_route_requires_administrator_and_liveness_is_public() {
         "/logs",
         "/account",
         "/help",
+        "/memory",
+        "/personality",
+        "/actions",
+        "/usage",
+        "/api/v1/memory/people",
+        "/api/v1/personality",
+        "/api/v1/actions",
+        "/api/v1/connections",
+        "/api/v1/usage",
         "/api/v1/status",
         "/api/v1/settings",
         "/api/v1/logs",
@@ -178,6 +188,7 @@ async fn dns_rebinding_and_cross_origin_posts_are_rejected_with_security_headers
     let response = router.oneshot(malicious).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert!(response.headers().contains_key("content-security-policy"));
+    assert_eq!(response.headers()["referrer-policy"], "same-origin");
 }
 
 #[tokio::test]
@@ -424,13 +435,15 @@ async fn dashboard_refresh_keeps_localized_empty_states_and_write_only_secrets()
             .to_vec(),
     )
     .unwrap();
-    assert!(body.contains("/api/v1/status?lang=tr"));
-    assert!(body.contains("data-status-key=\"display.lifecycle\""));
-    assert!(body.contains(views::text(views::Language::Tr, "panel.overview.no_chats").unwrap()));
-    assert!(body.contains("data-status-key=\"display.connections\""));
-    assert!(
-        body.contains(views::text(views::Language::Tr, "panel.overview.no_connections").unwrap())
-    );
+    assert!(!body.contains("/api/v1/status?lang=tr"));
+    assert!(!body.contains("data-status-key=\"display.lifecycle\""));
+    assert!(body.contains(views::text(views::Language::Tr, "panel.overview.finish_setup").unwrap()));
+    assert!(body.contains("href=\"/setup?lang=tr\""));
+    assert!(!body.contains(views::text(views::Language::Tr, "panel.state.not_reported").unwrap()));
+    assert!(body.contains(views::PROJECT_NAME));
+    for href in ["/memory", "/personality", "/actions", "/usage"] {
+        assert!(body.contains(&format!("href=\"{href}?lang=tr\"")));
+    }
 }
 
 #[tokio::test]
@@ -1248,4 +1261,72 @@ async fn disabled_matrix_config_remains_repairable_in_protected_settings_without
         Lifecycle::Unconfigured
     ));
     assert!(app.runtime.lock().bot.is_none());
+}
+
+#[tokio::test]
+async fn unconfigured_usage_has_one_setup_card_and_no_fabricated_totals() {
+    let (app, _directory) = fixture().await;
+    let admin = owner(&app).await;
+    let router = routes::router(app);
+    for language in [views::Language::En, views::Language::Tr] {
+        let response = router
+            .clone()
+            .oneshot(request(
+                "GET",
+                &format!("/usage?lang={}", language.code()),
+                Some(&admin.token),
+                "",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = String::from_utf8(
+            to_bytes(response.into_body(), 128 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert_eq!(body.matches("<section class=\"card\"").count(), 1);
+        assert!(body.contains(views::text(language, "panel.overview.finish_setup").unwrap()));
+        assert!(body.contains(&format!("href=\"/setup?lang={}\"", language.code())));
+        assert!(!body.contains(views::text(language, "panel.usage.field_reported").unwrap()));
+    }
+}
+
+#[tokio::test]
+async fn editor_runtime_guard_prevents_cache_loading_between_selection_and_commit() {
+    let (app, _directory) = fixture().await;
+    let guard = routes::edit_runtime(&app).unwrap();
+    assert_eq!(guard.lifecycle, Lifecycle::Unconfigured);
+    assert!(app.runtime.try_lock().is_none());
+    drop(guard);
+    app.runtime.lock().lifecycle = Lifecycle::ConfiguredStarting;
+    assert!(routes::edit_runtime(&app).is_err());
+    app.runtime.lock().lifecycle = Lifecycle::Stopping;
+    assert!(routes::edit_runtime(&app).is_err());
+}
+
+#[tokio::test]
+async fn actions_keep_authenticated_navigation_in_both_languages() {
+    let (app, _directory) = fixture().await;
+    let admin = owner(&app).await;
+    let router = routes::router(app);
+    for language in [views::Language::En, views::Language::Tr] {
+        let response = router
+            .clone()
+            .oneshot(request(
+                "GET",
+                &format!("/actions?lang={}", language.code()),
+                Some(&admin.token),
+                "",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = std::str::from_utf8(&body).unwrap();
+        assert_eq!(body.matches("class=\"nav-link").count(), 9);
+        assert_eq!(body.matches("class=\"nav-link nav-active\"").count(), 1);
+    }
 }

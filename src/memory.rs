@@ -14,9 +14,9 @@
 // data: values retain their original markdown bytes through the atomic identity migration.
 // Active person and room keys use canonical platform-qualified domain identities; unknown
 // historical keys remain stored but are never treated as runtime identity aliases.
-// `arsiv/` stays real files on disk: write-mostly, human-inspection-only, never read back by
-// the bot — keeping it out of the transactional store avoids unbounded DB growth and keeps
-// its documented "for humans" purpose intact.
+// `arsiv/` stays real files for human inspection, never read back by the bot. Every
+// displaced editable record is additionally retained transactionally in memory_history,
+// so archive filesystem failure cannot delete the original prose.
 
 use super::*;
 use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
@@ -24,6 +24,19 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
+
+mod revisions;
+pub use revisions::{
+    browse_versioned, read_versioned, refresh_index_for, replace_generated, replace_versioned,
+    set_debug_mode, set_model_override, set_thinking_mode, update_record, MutationError,
+    RecordSnapshot,
+};
+
+#[derive(Debug, serde::Serialize)]
+pub struct RecordPage {
+    pub records: Vec<RecordSnapshot>,
+    pub next_cursor: Option<String>,
+}
 
 // path -> the exact text a file held before the redb migration
 const CONTENT: TableDefinition<&str, &str> = TableDefinition::new("content");
@@ -82,6 +95,7 @@ pub fn init_result(path: &Path) -> Result<(), BotError> {
         txn.open_table(CONTENT)?;
         txn.open_table(MODIFIED)?;
         txn.open_table(PANEL_ADMIN)?;
+        revisions::initialize(&txn)?;
     }
     txn.commit()?;
     crate::memory_migration::migrate_database(&database, path)?;
@@ -176,6 +190,9 @@ fn write_database(
     content: &str,
     modified: u64,
 ) -> Result<(), BotError> {
+    if editable_record(rel) {
+        return revisions::write_coordinated(database, rel, content, modified);
+    }
     let txn = database.begin_write()?;
     {
         txn.open_table(CONTENT)?.insert(rel, content)?;
@@ -192,30 +209,13 @@ pub fn record_count_result() -> Result<u64, BotError> {
     Ok(table.len()?)
 }
 
-// a real append instead of read-modify-write from the caller's side; the get+insert
-// happens inside one write transaction, so it's atomic even under concurrent writers (redb
-// serializes write transactions internally — the get here can never race with another
-// writer's insert)
-fn append(rel: &str, line: &str) {
-    let result: Result<(), redb::Error> = (|| {
-        let txn = db().begin_write()?;
-        {
-            let mut table = txn.open_table(CONTENT)?;
-            let mut new_content = table
-                .get(rel)?
-                .map(|g| g.value().to_string())
-                .unwrap_or_default();
-            new_content.push_str(line);
-            new_content.push('\n');
-            table.insert(rel, new_content.as_str())?;
-            txn.open_table(MODIFIED)?.insert(rel, now_unix() as u64)?;
-        }
-        txn.commit()?;
-        Ok(())
-    })();
-    if let Err(e) = result {
-        log::error!("couldn't append to {rel}: {e}");
-    }
+fn editable_record(key: &str) -> bool {
+    matches!(
+        key,
+        "huy.md" | "profil.md" | "kendim.md" | "duzeltmeler.md" | "gundem.md"
+    ) || key.starts_with("kisiler/")
+        || key.starts_with("konular/")
+        || key.starts_with("olaylar/")
 }
 
 // a raw chunk dropped by summarizing goes to the archive; nothing is ever deleted. arsiv/
@@ -229,22 +229,24 @@ pub fn archive(rel: &str, content: &str) {
 }
 
 fn archive_append(rel: &str, line: &str) {
-    let _lock = ARCHIVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let p = Path::new(STATE_DIR).join(rel);
-    if let Some(parent) = p.parent() {
-        let _ = fs::create_dir_all(parent);
+    if let Err(error) = archive_write_root(Path::new(STATE_DIR), rel, line) {
+        log::error!("couldn't append archive {rel}: {error}");
     }
-    let result = fs::OpenOptions::new()
+}
+
+fn archive_write_root(root: &Path, rel: &str, line: &str) -> Result<(), BotError> {
+    let _lock = ARCHIVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let path = root.join(rel);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&p)
-        .and_then(|mut f| {
-            f.write_all(line.as_bytes())
-                .and_then(|_| f.write_all(b"\n"))
-        });
-    if let Err(e) = result {
-        log::error!("couldn't append to {}: {e}", p.display());
-    }
+        .open(path)?;
+    file.write_all(line.as_bytes())?;
+    file.write_all(b"\n")?;
+    Ok(())
 }
 
 /// Lowercase, Turkish-letter-simplified slug; defaults to "bilinmeyen" without alphanumerics.
@@ -337,7 +339,13 @@ impl Person {
         let mut section = "";
         for line in text.lines() {
             let s = line.trim();
-            if let Some(title) = s.strip_prefix("# ") {
+            if section == "unknown" && !s.starts_with("## ") {
+                continue;
+            }
+            if !section.is_empty() && !s.starts_with("## ") && !s.starts_with("- ") {
+                continue;
+            }
+            if let Some(title) = s.strip_prefix("# ").filter(|_| section.is_empty()) {
                 p.name = title.trim().to_string();
             } else if let Some(title) = s.strip_prefix("## ") {
                 section = if title.starts_with("Bildik") {
@@ -345,7 +353,7 @@ impl Person {
                 } else if title.starts_with("Son") {
                     "olay"
                 } else {
-                    ""
+                    "unknown"
                 };
             } else if s.starts_with("id:") {
                 // The caller's record identity is authoritative, including for old numeric ids.
@@ -380,72 +388,143 @@ impl Person {
 
     /// Serializes the persisted person-record format.
     pub fn text(&self) -> String {
-        let mut s = format!(
-            "# {}\nid: {}\nkullanici_adi: {}\neski_adlar: {}\npuan: {:+}\netiket: {}\nnot: {}\n\n## Bildiklerin\n",
-            self.name,
-            self.id,
-            self.username,
-            self.previous_names.join(", "),
-            self.score,
-            self.tags.join(", "),
-            self.note
+        self.text_preserving("")
+    }
+
+    /// Keeps unknown text in its original header/subsection rather than reclassifying it.
+    pub fn text_preserving(&self, original: &str) -> String {
+        let mut output =
+            format!(
+            "# {}\nid: {}\nkullanici_adi: {}\neski_adlar: {}\npuan: {:+}\netiket: {}\nnot: {}\n",
+            self.name, self.id, self.username, self.previous_names.join(", "),
+            self.score, self.tags.join(", "), self.note
         );
-        for f in &self.facts {
-            s.push_str(&format!("- {f}\n"));
+        let append_items = |output: &mut String, items: &[String]| {
+            for item in items {
+                output.push_str("- ");
+                output.push_str(item);
+                output.push('\n');
+            }
+        };
+        let mut section = "header";
+        let mut seen_facts = false;
+        let mut seen_events = false;
+        for line in original.split_inclusive('\n') {
+            let text = line.trim();
+            if let Some(title) = text.strip_prefix("## ") {
+                output.push_str(line);
+                if title.starts_with("Bildik") {
+                    section = "facts";
+                    if !output.ends_with('\n') {
+                        output.push('\n');
+                    }
+                    if !seen_facts {
+                        append_items(&mut output, &self.facts);
+                    }
+                    seen_facts = true;
+                } else if title.starts_with("Son") {
+                    section = "events";
+                    if !output.ends_with('\n') {
+                        output.push('\n');
+                    }
+                    if !seen_events {
+                        append_items(&mut output, &self.events);
+                    }
+                    seen_events = true;
+                } else {
+                    section = "unknown";
+                }
+            } else if section == "header"
+                && (text.starts_with("# ")
+                    || [
+                        "id:",
+                        "kullanici_adi:",
+                        "eski_adlar:",
+                        "puan:",
+                        "etiket:",
+                        "not:",
+                    ]
+                    .iter()
+                    .any(|prefix| text.starts_with(prefix)))
+            {
+                // Header fields are regenerated from the current structured person.
+            } else if matches!(section, "facts" | "events") && text.starts_with("- ") {
+                // These lists were emitted from the latest structured person at their heading.
+            } else {
+                output.push_str(line);
+            }
         }
-        s += "\n## Son olaylar\n";
-        for e in &self.events {
-            s.push_str(&format!("- {e}\n"));
+        if !seen_facts {
+            output.push_str("\n## Bildiklerin\n");
+            append_items(&mut output, &self.facts);
         }
-        s
+        if !seen_events {
+            output.push_str("\n## Son olaylar\n");
+            append_items(&mut output, &self.events);
+        }
+        output
     }
 }
 
-/// A missing record yields an empty person with the requested ID.
-pub fn read_person(id: &UserKey) -> Person {
-    Person::parse(id, &read(&platform::keys::person_record(id)))
+/// Applies person changes to the latest record, preserving unknown original fields/sections.
+pub fn update_person<F>(
+    bot: Option<&Bot>,
+    id: &UserKey,
+    update: F,
+) -> Result<RecordSnapshot, BotError>
+where
+    F: FnOnce(&mut Person),
+{
+    update_record(bot, &platform::keys::person_record(id), |original| {
+        Ok(person_updated_content(id, original, is_owner(id), update))
+    })
 }
 
-pub fn write_person(p: &Person) -> Result<(), BotError> {
-    write_result(&platform::keys::person_record(&p.id), &p.text())
+fn person_updated_content<F>(id: &UserKey, original: &str, favorite: bool, update: F) -> String
+where
+    F: FnOnce(&mut Person),
+{
+    let mut person = Person::parse(id, original);
+    update(&mut person);
+    person.id = id.clone();
+    person.score = person.score.clamp(-10, 10);
+    person.tags.truncate(6);
+    person.previous_names.truncate(5);
+    if favorite {
+        person.score = 10;
+        person.note = FAVORITE_NOTE.to_owned();
+    }
+    person.text_preserving(original)
 }
 
 // ---------- topics and events ----------
 
 /// Uses the topic name as the header and its slug as the record key; appends a dated note.
-pub fn add_topic(name: &str, note: &str) {
+pub fn add_topic(bot: Option<&Bot>, name: &str, note: &str) -> Result<(), BotError> {
     let rel = format!("konular/{}.md", slug(name));
-    let result: Result<(), redb::Error> = (|| {
-        let txn = db().begin_write()?;
-        {
-            let mut table = txn.open_table(CONTENT)?;
-            let existing = table
-                .get(rel.as_str())?
-                .map(|g| g.value().to_string())
-                .unwrap_or_default();
-            let mut new_content = existing.clone();
-            if existing.is_empty() {
-                new_content.push_str(&format!("# {name}\netiket: \n\n"));
-            }
-            new_content.push_str(&format!("- {}: {}\n", date_time(), note.trim()));
-            table.insert(rel.as_str(), new_content.as_str())?;
-            txn.open_table(MODIFIED)?
-                .insert(rel.as_str(), now_unix() as u64)?;
+    update_record(bot, &rel, |existing| {
+        let mut content = existing.to_owned();
+        if content.is_empty() {
+            content.push_str(&format!("# {name}\netiket: \n\n"));
         }
-        txn.commit()?;
-        Ok(())
-    })();
-    if let Err(e) = result {
-        log::error!("couldn't append to {rel}: {e}");
-    }
+        content.push_str(&format!("- {}: {}\n", date_time(), note.trim()));
+        Ok(content)
+    })?;
+    Ok(())
 }
 
 /// Appends a timestamped channel/event entry to the current month's record.
-pub fn add_event(channel: &str, event: &str) {
-    append(
-        &format!("olaylar/{}.md", month()),
-        &format!("- {} #{}: {}", date_time(), channel, event.trim()),
-    );
+pub fn add_event(bot: Option<&Bot>, channel: &str, event: &str) -> Result<(), BotError> {
+    update_record(bot, &format!("olaylar/{}.md", month()), |existing| {
+        Ok(format!(
+            "{}- {} #{}: {}\n",
+            existing,
+            date_time(),
+            channel,
+            event.trim()
+        ))
+    })?;
+    Ok(())
 }
 
 /// Administrative readers propagate access failures instead of presenting empty memory.
@@ -523,7 +602,14 @@ pub fn read_person_result(id: &UserKey) -> Result<Person, BotError> {
 // reads durum/kanallar/<id> records: (channel id, recent lines)
 pub fn load_channel_history() -> Vec<(ConversationKey, VecDeque<String>)> {
     let mut list = Vec::new();
-    for key in files("kanallar") {
+    let keys = match db_result().and_then(|database| files_database(database, "kanallar")) {
+        Ok(keys) => keys,
+        Err(error) => {
+            log::error!("couldn't load channel history: {error}");
+            return list;
+        }
+    };
+    for key in keys {
         let Some(id) = platform::keys::parse_room_record(&key) else {
             continue;
         };
@@ -539,8 +625,14 @@ pub fn load_channel_history() -> Vec<(ConversationKey, VecDeque<String>)> {
 
 /// Companion metadata leaves old history text byte-for-byte unchanged and unattributed.
 pub fn load_channel_observations() -> Vec<(ConversationKey, VecDeque<Option<UserRef>>)> {
-    files("kanal-kimlikleri")
-        .into_iter()
+    let keys = match db_result().and_then(|database| files_database(database, "kanal-kimlikleri")) {
+        Ok(keys) => keys,
+        Err(error) => {
+            log::error!("couldn't load channel observations: {error}");
+            return Vec::new();
+        }
+    };
+    keys.into_iter()
         .filter_map(|key| {
             let canonical = key.replacen("kanal-kimlikleri/", "kanallar/", 1);
             let conversation = platform::keys::parse_room_record(&canonical)?;
@@ -579,17 +671,6 @@ pub fn write_channel_history(
 }
 
 // ---------- index ----------
-
-/// Lists keys under a folder prefix, most recently modified first.
-fn files(folder: &str) -> Vec<String> {
-    match files_database(db(), folder) {
-        Ok(keys) => keys,
-        Err(error) => {
-            log::error!("couldn't list {folder}: {error}");
-            Vec::new()
-        }
-    }
-}
 
 fn files_database(database: &Database, folder: &str) -> Result<Vec<String>, BotError> {
     let prefix = format!("{folder}/");
@@ -678,18 +759,47 @@ pub fn refresh_index() -> String {
 
 /// Regenerates the derived index without swallowing database failures.
 pub fn refresh_index_result() -> Result<String, BotError> {
-    refresh_index_database(db_result()?)
+    refresh_index_for(None)
 }
 
 fn refresh_index_database(database: &Database) -> Result<String, BotError> {
+    let transaction = database.begin_write()?;
+    let output = build_index_transaction(&transaction)?;
+    transaction
+        .open_table(CONTENT)?
+        .insert("INDEX.md", output.as_str())?;
+    transaction
+        .open_table(MODIFIED)?
+        .insert("INDEX.md", now_unix() as u64)?;
+    transaction.commit()?;
+    Ok(output)
+}
+
+fn build_index_transaction(transaction: &redb::WriteTransaction) -> Result<String, BotError> {
     use std::fmt::Write as _;
+    let content_table = transaction.open_table(CONTENT)?;
+    let modified = transaction.open_table(MODIFIED)?;
+    let keys = |prefix: &str| -> Result<Vec<String>, BotError> {
+        let mut keys = Vec::new();
+        for entry in content_table.range(prefix..)? {
+            let (key, _) = entry?;
+            if !key.value().starts_with(prefix) {
+                break;
+            }
+            let when = modified.get(key.value())?.map(|v| v.value()).unwrap_or(0);
+            keys.push((when, key.value().to_owned()));
+        }
+        keys.sort_unstable_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+        Ok(keys.into_iter().map(|(_, key)| key).collect())
+    };
     let mut output = String::from("## Kişiler\n");
-    for key in files_database(database, "kisiler")?
+    for key in keys("kisiler/")?
         .into_iter()
         .filter(|key| platform::keys::parse_person_record(key).is_some())
         .take(INDEX_PEOPLE)
     {
-        let header = person_header(&read_database(database, &key)?.unwrap_or_default());
+        let body = content_table.get(key.as_str())?;
+        let header = person_header(body.as_ref().map(|value| value.value()).unwrap_or(""));
         if header.name.is_empty() {
             continue;
         }
@@ -703,9 +813,9 @@ fn refresh_index_database(database: &Database) -> Result<String, BotError> {
         output.push('\n');
     }
     output.push_str("\n## Konular\n");
-    for key in files_database(database, "konular")?.into_iter().take(30) {
-        // a single read: the name and latest note both come from the same content
-        let content = read_database(database, &key)?.unwrap_or_default();
+    for key in keys("konular/")?.into_iter().take(30) {
+        let body = content_table.get(key.as_str())?;
+        let content = body.as_ref().map(|value| value.value()).unwrap_or("");
         let name = content
             .lines()
             .next()
@@ -720,15 +830,19 @@ fn refresh_index_database(database: &Database) -> Result<String, BotError> {
         let _ = writeln!(output, "- {name} · son: {latest}");
     }
     output.push_str("\n## Olaylar\n");
-    for key in files_database(database, "olaylar")?.into_iter().take(3) {
-        let n = read_database(database, &key)?
-            .unwrap_or_default()
+    for key in keys("olaylar/")?.into_iter().take(3) {
+        let body = content_table.get(key.as_str())?;
+        let n = body
+            .as_ref()
+            .map(|value| value.value())
+            .unwrap_or("")
             .lines()
             .filter(|l| l.starts_with("- "))
             .count();
         let _ = writeln!(output, "- {} · {n} kayıt", stem(&key));
     }
-    write_database(database, "INDEX.md", &output, now_unix() as u64)?;
+    drop(modified);
+    drop(content_table);
     Ok(output)
 }
 
@@ -795,33 +909,37 @@ pub fn retrieve(
     keywords: &[String],
     history: &VecDeque<String>,
     exclude_recent: usize,
-) -> String {
+) -> Result<String, BotError> {
     let mut sections: Vec<String> = Vec::new();
 
     for name in participants.iter().take(4) {
         let Some(id) = name_to_id.get(&name.to_lowercase()) else {
             continue;
         };
-        let content = read(&platform::keys::person_record(id));
+        let content = read_result(&platform::keys::person_record(id))?.unwrap_or_default();
         if !content.is_empty() {
             sections.push(trim(&content, 1200));
         }
     }
 
     // content travels bundled with its score: the top two records aren't read a second time
-    let mut topics: Vec<(usize, String)> = files("konular")
+    let mut topics: Vec<(usize, String)> = Vec::new();
+    for key in files_database(db_result()?, "konular")?
         .into_iter()
         .take(30)
-        .map(|key| read(&key))
-        .map(|content| (score_matches(&content, keywords), content))
-        .filter(|(score, _)| *score >= 1)
-        .collect();
+    {
+        let content = read_result(&key)?.unwrap_or_default();
+        let score = score_matches(&content, keywords);
+        if score >= 1 {
+            topics.push((score, content));
+        }
+    }
     topics.sort_by_key(|k| std::cmp::Reverse(k.0));
     for (_, content) in topics.into_iter().take(2) {
         sections.push(trim(&content, 800));
     }
 
-    let events = read(&format!("olaylar/{}.md", month()));
+    let events = read_result(&format!("olaylar/{}.md", month()))?.unwrap_or_default();
     let recent_events: Vec<&str> = events.lines().filter(|l| l.starts_with("- ")).collect();
     if !recent_events.is_empty() {
         let skip = recent_events.len().saturating_sub(8);
@@ -869,36 +987,37 @@ pub fn retrieve(
         result.push_str(&section);
         size += section_len;
     }
-    result
+    Ok(result)
 }
 
 // records over their limit: (kind, record key)
 /// Compares record byte lengths against the person/topic/event limits;
 /// only the current month's event record is considered.
-pub fn over_limit() -> Vec<(&'static str, String)> {
+pub fn over_limit() -> Result<Vec<(&'static str, String)>, BotError> {
     let mut list = Vec::new();
-    for key in files("kisiler") {
+    for key in files_database(db_result()?, "kisiler")? {
         if platform::keys::parse_person_record(&key).is_none() {
             continue;
         }
-        if read(&key).len() > PERSON_LIMIT {
+        if read_result(&key)?.unwrap_or_default().len() > PERSON_LIMIT {
             list.push(("kisi", key));
         }
     }
-    for key in files("konular") {
-        if read(&key).len() > TOPIC_LIMIT {
+    for key in files_database(db_result()?, "konular")? {
+        if read_result(&key)?.unwrap_or_default().len() > TOPIC_LIMIT {
             list.push(("konu", key));
         }
     }
     let event_key = format!("olaylar/{}.md", month());
-    if read(&event_key).len() > EVENT_LIMIT {
+    if read_result(&event_key)?.unwrap_or_default().len() > EVENT_LIMIT {
         list.push(("olay", event_key));
     }
-    list
+    Ok(list)
 }
 
 #[cfg(test)]
 pub(crate) mod test {
+    pub(crate) use super::revisions::historical_snapshot;
     use super::*;
 
     // every test in this module shares the process-wide `DB` static, so they all open the
@@ -1009,24 +1128,25 @@ pub(crate) mod test {
         assert!(empty.name.is_empty());
     }
 
-    /// Verifies `write`/`append`/`read` round-trip through the database, and that `files`
-    /// finds a written key under its folder prefix.
+    /// Verifies write/atomic update/read round-trip and Result-based prefix listing.
     #[test]
     fn write_append_read_round_trip() {
         ensure_test_db();
         let key = "test/gecici.md";
         write(key, "ilk\n");
-        append(key, "ikinci");
+        update_record(None, key, |current| Ok(format!("{current}ikinci\n"))).unwrap();
         assert_eq!(read(key), "ilk\nikinci\n");
-        assert!(files("test").contains(&key.to_string()));
+        assert!(files_database(db(), "test")
+            .unwrap()
+            .contains(&key.to_string()));
     }
 
     /// Verifies `add_topic` writes a header on first use and only appends on later calls.
     #[test]
     fn add_topic_writes_header_once() {
         ensure_test_db();
-        add_topic("test konusu", "ilk not");
-        add_topic("test konusu", "ikinci not");
+        add_topic(None, "test konusu", "ilk not").unwrap();
+        add_topic(None, "test konusu", "ikinci not").unwrap();
         let content = read("konular/test-konusu.md");
         assert_eq!(content.matches("# test konusu").count(), 1);
         assert!(content.contains("ilk not"));
@@ -1157,8 +1277,8 @@ pub(crate) mod test {
         assert_eq!(summaries.len(), 2);
         assert_eq!(summaries[0].id, telegram);
         assert_eq!(summaries[1].id, discord);
-        assert_eq!(read_person(&discord).id, discord);
-        assert_eq!(read_person(&telegram).id, telegram);
+        assert_eq!(read_person_result(&discord).unwrap().id, discord);
+        assert_eq!(read_person_result(&telegram).unwrap().id, telegram);
         assert_eq!(
             read_result(&discord_path).unwrap().as_deref(),
             Some(old_body)
@@ -1187,7 +1307,8 @@ pub(crate) mod test {
             &[],
             &VecDeque::new(),
             0,
-        );
+        )
+        .unwrap();
         assert!(discord_context.contains("discord-only-fact"));
         assert!(!discord_context.contains("telegram-only-fact"));
         let telegram_context = retrieve(
@@ -1196,12 +1317,12 @@ pub(crate) mod test {
             &[],
             &VecDeque::new(),
             0,
-        );
+        )
+        .unwrap();
         assert!(telegram_context.contains("telegram-only-fact"));
         assert!(!telegram_context.contains("discord-only-fact"));
 
-        let person = read_person(&discord);
-        write_person(&person).unwrap();
+        update_person(None, &discord, |_| {}).unwrap();
         assert!(read_result(&discord_path)
             .unwrap()
             .unwrap()
@@ -1264,7 +1385,8 @@ pub(crate) mod test {
             &["rust".into(), "derleme".into()],
             &history,
             1,
-        );
+        )
+        .unwrap();
         assert!(result.contains("rust derleme süresi"));
         assert!(!result.contains("hava güzel"));
         assert!(!result.contains("son mesaj"));

@@ -1,4 +1,14 @@
 impl Bot {
+    /// Automatic replies must still be approved at delivery, not just when queued.
+    fn authorize_automatic_delivery(&self, channel: &ConversationKey) -> Result<(), BotError> {
+        let (adapter, room) = self.transport(channel)?;
+        let registry = self.adapters.lock().unwrap_or_else(|error| error.into_inner());
+        if !registry.allows(adapter.connection_id(), &room) {
+            return Err(platform::PlatformError::PermissionDenied.into());
+        }
+        Ok(())
+    }
+
     /// Parses raw model text and sends it via the non-streaming, line-by-line protocol.
     /// Returns protocol text if anything was sent, or `None` for silence/empty output.
     async fn send_lines(
@@ -8,15 +18,17 @@ impl Bot {
         reply_to: Option<&MessageKey>,
         reaction_target: Option<&MessageKey>,
         ping: Option<&UserKey>,
-    ) -> Option<String> {
+        approved_only: bool,
+    ) -> Result<Option<String>, BotError> {
         let bot_name = self.state().bot_name.clone();
-        let (transport, room) = match self.transport(channel) {
-            Ok(transport) => transport,
-            Err(e) => { log::error!("send_lines [{channel}]: {e}"); return None; }
-        };
+        let (transport, room) = self.transport(channel)?;
+        if approved_only { self.authorize_automatic_delivery(channel)?; }
+        if !transport.capabilities(&room).send {
+            return Err(platform::PlatformError::Unsupported("send").into());
+        }
 
         let reply = parse_reply(strip_name(raw, &bot_name), transport.capabilities(&room).output);
-        self.send_reply(channel, reply, reply_to, reaction_target, ping)
+        self.send_reply(channel, reply, reply_to, reaction_target, ping, approved_only)
             .await
     }
 
@@ -32,8 +44,10 @@ impl Bot {
         reply_to: Option<&MessageKey>,
         reaction_target: Option<&MessageKey>,
         ping: Option<&UserKey>,
-    ) -> Option<String> {
+        approved_only: bool,
+    ) -> Result<Option<String>, BotError> {
         let bot_name = self.state().bot_name.clone();
+        if approved_only { self.authorize_automatic_delivery(channel)?; }
         // no message for the reaction to land on (the opening paths): the reaction is
         // dropped, otherwise nothing would go to the channel at all and the chat would
         // still be reported as "opened"
@@ -45,12 +59,9 @@ impl Bot {
                 "send_lines [{channel}]: nothing to send (silent={})",
                 reply.silent
             );
-            return None;
+            return Ok(None);
         }
-        let (transport, room) = match self.transport(channel) {
-            Ok(transport) => transport,
-            Err(e) => { log::error!("send_lines [{channel}]: {e}"); return None; }
-        };
+        let (transport, room) = self.transport(channel)?;
 
         let capabilities = transport.capabilities(&room);
         for (i, line) in reply.lines.iter().enumerate() {
@@ -64,26 +75,27 @@ impl Bot {
             }
             let (ping_i, reply_i) = if i == 0 { (ping, reply_to) } else { (None, None) };
             // Prefix mentions are rendered only after parsing the reply protocol.
-            self.send(channel, line, ping_i, None, reply_i).await;
+            if approved_only { self.authorize_automatic_delivery(channel)?; }
+            self.send(channel, line, ping_i, None, reply_i).await?;
         }
         if let (Some(emoji), Some(target)) = (&reply.reaction, reaction_target) {
+            if approved_only { self.authorize_automatic_delivery(channel)?; }
             if capabilities.react {
                 let target = platform::types::MessageRef {
                     id: target.clone(), room: channel.room.clone(), author: None,
                 };
-                if let Err(e) = transport.react(&target, &platform::types::Emoji::Unicode(emoji.clone())).await {
-                    log::warn!("couldn't add reaction ({channel}): {e}");
-                    if matches!(e, platform::PlatformError::Unsupported(_)) {
-                        self.send(channel, emoji, None, None, None).await;
-                    }
+                match transport.react(&target, &platform::types::Emoji::Unicode(emoji.clone())).await {
+                    Ok(()) => {}
+                    Err(platform::PlatformError::Unsupported(_)) => self.send(channel, emoji, None, None, None).await?,
+                    Err(error) => return Err(error.into()),
                 }
             } else {
-                self.send(channel, emoji, None, None, None).await;
+                self.send(channel, emoji, None, None, None).await?;
             }
             // send() already recorded the lines; the reaction is recorded here (in protocol form)
             let mut s = self.state();
             channel_note(&mut s, channel, format!("{bot_name}: tepki: {emoji}"));
         }
-        Some(reply.protocol_text())
+        Ok(Some(reply.protocol_text()))
     }
 }

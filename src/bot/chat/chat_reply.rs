@@ -217,11 +217,12 @@ impl Bot {
                             let mut fallback = parse_reply(strip_name(&c, &bot_name), capabilities.output);
                             fallback.lines.retain(|s| !self.is_repeat(channel, s));
                             match self
-                                .send_reply(channel, fallback, reply_to, last_message.as_ref(), None)
+                                .send_reply(channel, fallback, reply_to, last_message.as_ref(), None, true)
                                 .await
                             {
-                                Some(p) => p,
-                                None => return,
+                                Ok(Some(p)) => p,
+                                Ok(None) => return,
+                                Err(e) => { log::error!("fallback delivery [{channel}]: {e}"); return; }
                             }
                         }
                         Err(e) => {

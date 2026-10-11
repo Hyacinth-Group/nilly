@@ -582,6 +582,7 @@ mod test {
             strings::t("cmd.uyu.opt.saat.description"),
         );
         sleep["min_value"] = json!(1);
+        sleep["max_value"] = json!(24);
         expected_options[12] = json!([sleep]);
         let mut thinking = option(
             3,

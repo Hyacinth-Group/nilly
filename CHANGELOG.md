@@ -16,6 +16,9 @@ Notable changes are recorded here in [Keep a Changelog](https://keepachangelog.c
 - Feature-gated Matrix CLI setup with hidden access-token/password entry, typed atomic patch/save, qualified owner identity, bilingual guidance, and a beginner plaintext-room/privacy guide; encrypted rooms and attachments have no decryption or plaintext fallback.
 - Opt-in ignored `matrix_live` integration tests for session restoration, native transport operations and encryption rejection on disposable homeservers.
 - Independent room-level attachment-sending capabilities, separate from optional upload ceilings, using native Discord/Telegram/Slack/Matrix permissions and safe unavailable defaults.
+- Browser memory browsing, search and structured/full-document editing with revision conflicts, preserved pre-edit history, and atomic index/cache publication; background writers use the same revision discipline.
+- Browser personality inspection with revision-checked temperament editing, all sixteen shared administration actions with destination/side-effect review and bounded jobs, and honest process-local usage reporting.
+- A full-height responsive administration shell, one product-name source, and friendly unfinished-setup states.
 
 ### Changed
 - Default prompts identify the bot honestly and omit a fictional university biography and fixed political identity.

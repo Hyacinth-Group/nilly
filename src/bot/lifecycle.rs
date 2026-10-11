@@ -211,9 +211,13 @@ impl Bot {
             // Discord historically profiles after its one attempted scan even on
             // fetch failure; other adapters never claim unsupported history succeeded.
             if success || policy == HistoryInitializationPolicy::AttemptOnce {
-                bot.profiler().await;
+                if let Err(error) = bot.profiler().await {
+                    log::warn!("profiler: deferred: {error}");
+                }
                 if bot.state().temperament.is_empty() {
-                    bot.coach().await;
+                    if let Err(error) = bot.coach().await {
+                        log::warn!("coach: deferred: {error}");
+                    }
                 }
             }
         });

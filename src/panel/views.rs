@@ -9,6 +9,9 @@ pub const CSS: &str = include_str!("assets/panel.css");
 pub const JS: &str = include_str!("assets/panel.js");
 pub const HTMX_JS: &str = include_str!("assets/htmx-2.0.4.min.js");
 
+/// One product-name source for the shell, page titles, and future project renames.
+pub const PROJECT_NAME: &str = "discord-bot";
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Language {
     #[default]
@@ -77,6 +80,7 @@ pub struct Item {
     pub key: String,
     /// Verified link supplied by the service, never persisted user text.
     pub href: String,
+    pub active: bool,
     pub progress_value: u64,
     pub progress_max: u64,
 }
@@ -137,6 +141,8 @@ pub struct Button {
 pub struct Form {
     pub id: String,
     pub action: String,
+    /// Empty means POST; explicit GET supports accessible, bookmarkable search forms.
+    pub method: String,
     pub csrf: String,
     pub hidden: Vec<(String, String)>,
     pub fields: Vec<Field>,
@@ -175,10 +181,10 @@ impl Page {
         let mut nav = Vec::with_capacity(9);
         for (name, href, disabled) in [
             ("overview", "/", false),
-            ("memory", "", true),
-            ("personality", "", true),
-            ("actions", "", true),
-            ("usage", "", true),
+            ("memory", "/memory", false),
+            ("personality", "/personality", false),
+            ("actions", "/actions", false),
+            ("usage", "/usage", false),
             ("logs", "/logs", false),
             ("settings", "/settings", false),
             ("account", "/account", false),
@@ -229,7 +235,8 @@ impl Page {
 }
 
 struct Chrome {
-    brand: &'static str,
+    brand: String,
+    brand_mark: char,
     local: &'static str,
     skip: &'static str,
     navigation: &'static str,
@@ -276,7 +283,12 @@ pub fn render(page: &Page) -> Result<String, ViewError> {
     validate_urls(page)?;
     let t = |key| text(page.language, key);
     let chrome = Chrome {
-        brand: t("panel.brand")?,
+        brand: t("panel.brand")?.replace("{project}", PROJECT_NAME),
+        brand_mark: PROJECT_NAME
+            .chars()
+            .next()
+            .expect("project name is nonempty")
+            .to_ascii_uppercase(),
         local: t("panel.local")?,
         skip: t("panel.skip")?,
         navigation: t("panel.navigation")?,

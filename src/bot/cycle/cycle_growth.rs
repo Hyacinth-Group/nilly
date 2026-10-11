@@ -158,13 +158,14 @@ impl Bot {
             .await
         {
             Ok(announcement) => match self
-                .send_lines(&channel, &announcement, None, None, None)
+                .send_lines(&channel, &announcement, None, None, None, true)
                 .await
             {
-                Some(p) => {
+                Ok(Some(p)) => {
                     start_chat(&mut self.state(), &channel, Some(p));
                 }
-                None => log::debug!("name: model stayed silent for the announcement, skipped"),
+                Ok(None) => log::debug!("name: model stayed silent for the announcement, skipped"),
+                Err(e) => log::error!("name delivery: {e}"),
             },
             Err(e) => log::error!("name: {e}"),
         }

@@ -89,7 +89,7 @@ pub(super) async fn snapshot(app: &App, language: Language) -> Value {
             Value::Null,
             |trip| json!({"place":trip.place,"reason":trip.reason,"return_day":trip.end}),
         );
-        result["usage"] = json!({"period":"this_process","calls":state.metrics.calls,"input":state.metrics.input_tokens,"cached":state.metrics.cache_tokens,"output":state.metrics.output_tokens,"cost":null});
+        result["usage"] = super::usage::metric_snapshot(Some(&state.metrics), language);
     }
     let connection = result["connection"].as_str().unwrap_or("offline");
     let lifecycle = result["lifecycle"].as_str().unwrap_or("unconfigured");
@@ -275,6 +275,19 @@ pub(super) async fn overview(
     if data["pending_restart"] == true {
         page.notice = t(language, "panel.settings.pending");
     }
+    if data["lifecycle"] == "unconfigured" {
+        page.description = t(language, "panel.overview.setup_body");
+        page.poll_url.clear();
+        let mut welcome = section(language, "panel.overview.finish_setup");
+        welcome.description = t(language, "panel.overview.setup_help");
+        welcome.items.push(Item {
+            value: t(language, "panel.action.finish_setup"),
+            href: format!("/setup?lang={}", language.code()),
+            ..Default::default()
+        });
+        page.sections.push(welcome);
+        return html(&page);
+    }
     let mut health = section(language, "panel.overview.health");
     for (label, key) in [
         ("panel.label.status", "lifecycle"),
@@ -391,10 +404,10 @@ pub(super) async fn overview(
     let mut usage = section(language, "panel.usage.title");
     usage.description = t(language, "panel.overview.usage_help");
     for (label, key) in [
-        ("panel.usage.calls", "calls"),
-        ("panel.usage.input", "input"),
-        ("panel.usage.cached", "cached"),
-        ("panel.usage.output", "output"),
+        ("panel.usage.reported_calls", "reported_calls"),
+        ("panel.usage.input", "input_tokens"),
+        ("panel.usage.cached", "cached_input_tokens"),
+        ("panel.usage.output", "output_tokens"),
     ] {
         usage.items.push(item(
             language,

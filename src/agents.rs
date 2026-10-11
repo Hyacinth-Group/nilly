@@ -11,7 +11,7 @@
 //   wanderer    (agenda.rs) browses the news, writes its take -> gundem.md
 
 use super::*;
-use crate::memory::{self, Person};
+use crate::memory::{self, Person, RecordSnapshot};
 use base64::Engine;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -72,14 +72,26 @@ struct TopicRecord {
     not: String,
 }
 
+fn agent_snapshot(key: &str) -> Result<RecordSnapshot, BotError> {
+    Ok(
+        memory::read_versioned(key)?.unwrap_or_else(|| RecordSnapshot {
+            key: key.to_owned(),
+            content: String::new(),
+            revision: 0,
+            modified: 0,
+        }),
+    )
+}
+
 impl Bot {
     /// Updates the persisted group profile from recent messages.
-    pub async fn profiler(&self) {
+    pub async fn profiler(&self) -> Result<bool, BotError> {
+        let snapshot = agent_snapshot("profil.md")?;
         let sample = recent_messages(&self.state(), 600);
         if sample.is_empty() {
-            return;
+            return Ok(false);
         }
-        match self
+        let result = self
             .analyze(
                 &sample,
                 &self
@@ -88,15 +100,10 @@ impl Bot {
                 1200,
                 "profilci",
             )
-            .await
-        {
-            Ok(result) => {
-                memory::write("profil.md", &result);
-                self.state().profile = result;
-                log::debug!("profiler: profile updated");
-            }
-            Err(e) => log::warn!("profiler: {e}"),
-        }
+            .await?;
+        memory::replace_generated(self, "profil.md", snapshot.revision, &result)?;
+        log::debug!("profiler: profile updated");
+        Ok(true)
     }
 
     // pulls what should be written to memory out of a finished chat (or a 6-hour
@@ -118,6 +125,7 @@ impl Bot {
             .filter(|kind| platforms.all(|other| other == *kind))
             .unwrap_or(platform::types::PlatformKind::Terminal);
         let context = platform::prompt_context::PromptContext::for_platform(kind);
+        let self_snapshot = agent_snapshot("kendim.md")?;
         let (instruction, bot_name) = {
             let state = self.state();
             let text = context
@@ -164,7 +172,7 @@ impl Bot {
         };
 
         if !record.olay.is_empty() {
-            memory::add_event(channel, &record.olay);
+            memory::add_event(Some(self), channel, &record.olay)?;
             summary.events = 1;
         }
         for pr in record.kisiler {
@@ -177,67 +185,64 @@ impl Bot {
                 continue;
             };
             let id = &observation.id;
-            let mut person: Person = memory::read_person(id);
-            if person.name.is_empty() {
-                person.name = observation.display_name.clone();
-            } else if !person.name.eq_ignore_ascii_case(&observation.display_name) {
-                // display name changed: don't lose the old one
-                if !person
-                    .previous_names
-                    .iter()
-                    .any(|e| e.eq_ignore_ascii_case(&person.name))
-                {
-                    person.previous_names.push(person.name.clone());
-                    person.previous_names.truncate(5);
+            memory::update_person(Some(self), id, |person| {
+                if person.name.is_empty() {
+                    person.name = observation.display_name.clone();
+                } else if !person.name.eq_ignore_ascii_case(&observation.display_name) {
+                    // display name changed: don't lose the old one
+                    if !person
+                        .previous_names
+                        .iter()
+                        .any(|e| e.eq_ignore_ascii_case(&person.name))
+                    {
+                        person.previous_names.push(person.name.clone());
+                    }
+                    person.name = observation.display_name.clone();
                 }
-                person.name = observation.display_name.clone();
-            }
-            if person.username.is_empty() {
-                if let Some(username) = &observation.username {
-                    person.username = username.clone();
+                if person.username.is_empty() {
+                    if let Some(username) = &observation.username {
+                        person.username = username.clone();
+                    }
                 }
-            }
-            // whatever the model says, the limits are ours
-            person.score = (person.score + pr.puan_degisimi.clamp(-3, 3)).clamp(-10, 10);
-            if !pr.not.trim().is_empty() {
-                person.note = pr.not.trim().to_string();
-            }
-            for fact in pr.bilgiler {
-                let fact = fact.trim().to_string();
-                if !fact.is_empty() && !person.facts.contains(&fact) {
-                    person.facts.push(fact);
+                // whatever the model says, the limits are ours
+                person.score = person.score.clamp(-10, 10) + pr.puan_degisimi.clamp(-3, 3);
+                if !pr.not.trim().is_empty() {
+                    person.note = pr.not.trim().to_string();
                 }
-            }
-            for tag in pr.etiketler {
-                let tag = tag.trim().to_lowercase();
-                if !tag.is_empty() && !person.tags.contains(&tag) {
-                    person.tags.push(tag);
+                for fact in pr.bilgiler {
+                    let fact = fact.trim().to_string();
+                    if !fact.is_empty() && !person.facts.contains(&fact) {
+                        person.facts.push(fact);
+                    }
                 }
-            }
-            person.tags.truncate(6);
-            if !record.olay.is_empty() {
-                person
-                    .events
-                    .push(format!("{}: {}", memory::date_time(), record.olay));
-            }
-            if is_owner(id) {
-                person.score = 10;
-                person.note = memory::FAVORITE_NOTE.to_string();
-            }
-            memory::write_person(&person)?;
+                for tag in pr.etiketler {
+                    let tag = tag.trim().to_lowercase();
+                    if !tag.is_empty() && !person.tags.contains(&tag) {
+                        person.tags.push(tag);
+                    }
+                }
+                if !record.olay.is_empty() {
+                    person
+                        .events
+                        .push(format!("{}: {}", memory::date_time(), record.olay));
+                }
+            })?;
             summary.people += 1;
         }
         for tr in record.konular {
             if !tr.ad.trim().is_empty() && !tr.not.trim().is_empty() {
-                memory::add_topic(tr.ad.trim(), &tr.not);
+                memory::add_topic(Some(self), tr.ad.trim(), &tr.not)?;
                 summary.topics += 1;
             }
         }
         if !record.kendim.trim().is_empty() {
-            memory::write("kendim.md", record.kendim.trim());
-            self.state().myself = record.kendim.trim().to_string();
+            memory::replace_generated(
+                self,
+                "kendim.md",
+                self_snapshot.revision,
+                record.kendim.trim(),
+            )?;
         }
-        self.state().index = memory::refresh_index();
         log::info!(
             "mind: diarist [{source}]: {} person(s), {} topic(s), {} event(s) written",
             summary.people,
@@ -245,20 +250,23 @@ impl Bot {
             summary.events
         );
 
-        self.summarizer().await;
+        self.summarizer().await?;
         Ok(summary)
     }
 
     // shrinks files that are over their limit; the raw chunk that comes out goes to the archive
-    pub async fn summarizer(&self) {
+    pub async fn summarizer(&self) -> Result<(), BotError> {
         let context = self.default_prompt_context();
-        for (kind, rel) in memory::over_limit() {
-            let old = memory::read(&rel);
+        for (kind, rel) in memory::over_limit()? {
+            let Some(snapshot) = memory::read_versioned(&rel)? else {
+                continue;
+            };
+            let old = &snapshot.content;
 
             let result = match kind {
                 "kisi" => {
                     self.analyze(
-                        &old,
+                        old,
                         &context.render_with(
                             prompts::current().summarizer_person,
                             &[("{sinir}", &memory::PERSON_TARGET.to_string())],
@@ -270,7 +278,7 @@ impl Bot {
                 }
                 "konu" => {
                     self.analyze(
-                        &old,
+                        old,
                         &context.render_with(
                             prompts::current().summarizer_topic,
                             &[("{sinir}", &memory::TOPIC_TARGET.to_string())],
@@ -296,15 +304,12 @@ impl Bot {
                         )
                         .await
                     {
-                        Ok(summary_text) => {
-                            memory::archive(&rel, &older.join("\n"));
-                            Ok(format!(
-                                "{}\n{}\n\n{}\n",
-                                other_lines.join("\n").trim(),
-                                summary_text.trim(),
-                                newer.join("\n")
-                            ))
-                        }
+                        Ok(summary_text) => Ok(format!(
+                            "{}\n{}\n\n{}\n",
+                            other_lines.join("\n").trim(),
+                            summary_text.trim(),
+                            newer.join("\n")
+                        )),
                         Err(e) => Err(e),
                     }
                 }
@@ -314,30 +319,61 @@ impl Bot {
                 Ok(new_content)
                     if !new_content.trim().is_empty() && new_content.len() < old.len() =>
                 {
-                    if kind != "olay" {
-                        memory::archive(&rel, &old);
+                    let content = if let Some(id) = platform::keys::parse_person_record(&rel) {
+                        let mut person = Person::parse(&id, &new_content);
+                        if person.name.is_empty()
+                            || !new_content.contains("## Bildik")
+                            || !new_content.contains("## Son")
+                        {
+                            return Err(
+                                format!("summarizer: invalid person record for {rel}").into()
+                            );
+                        }
+                        let original = Person::parse(&id, old);
+                        person.name = original.name;
+                        person.username = original.username;
+                        person.previous_names = original.previous_names;
+                        person.score = original.score.clamp(-10, 10);
+                        person.tags = original.tags;
+                        person.note = original.note;
+                        if is_owner(&id) {
+                            person.score = 10;
+                            person.note = memory::FAVORITE_NOTE.to_owned();
+                        }
+                        person.text_preserving(old)
+                    } else {
+                        new_content.trim_end().to_owned()
+                    };
+                    if content.len() >= old.len() {
+                        return Err(format!(
+                            "summarizer: {rel} didn't shrink after preserving fields"
+                        )
+                        .into());
                     }
-                    memory::write(&rel, new_content.trim_end());
+                    memory::replace_generated(self, &rel, snapshot.revision, &content)?;
+                    // Durable history already retains the entire displaced body.
+                    memory::archive(&rel, old);
                     log::debug!(
                         "summarizer: {rel} {} -> {} characters",
                         old.len(),
-                        new_content.len()
+                        content.len()
                     );
                 }
-                Ok(_) => log::warn!("summarizer: {rel} didn't shrink, left as is"),
-                Err(e) => log::warn!("summarizer: {rel}: {e}"),
+                Ok(_) => return Err(format!("summarizer: {rel} didn't shrink").into()),
+                Err(error) => return Err(error),
             }
         }
-        self.state().index = memory::refresh_index();
+        Ok(())
     }
 
     /// Updates temperament notes; does nothing until message history exists.
-    pub async fn coach(&self) {
+    pub async fn coach(&self) -> Result<bool, BotError> {
         let context = self.default_prompt_context();
+        let snapshot = agent_snapshot("huy.md")?;
         let (text, instruction) = {
             let state = self.state();
             if state.recent_messages.is_empty() {
-                return;
+                return Ok(false);
             }
             let own = state
                 .own_messages
@@ -351,7 +387,7 @@ impl Bot {
                 state.index,
                 if state.agenda.is_empty() { "(henüz gezmedi)" } else { &state.agenda },
                 if state.myself.is_empty() { "(bir şey yok)" } else { &state.myself },
-                if state.temperament.is_empty() { "(henüz yok, ilk kez yazıyorsun)" } else { &state.temperament },
+                if snapshot.content.is_empty() { "(henüz yok, ilk kez yazıyorsun)" } else { &snapshot.content },
                 recent_messages(&state, 200),
                 if own.is_empty() { "(henüz konuşmadı)" } else { &own },
             );
@@ -362,14 +398,10 @@ impl Bot {
                     .into_owned(),
             )
         };
-        match self.analyze(&text, &instruction, 800, "hoca").await {
-            Ok(result) => {
-                memory::write("huy.md", &result);
-                self.state().temperament = result;
-                log::debug!("coach: temperament updated");
-            }
-            Err(e) => log::warn!("coach: {e}"),
-        }
+        let result = self.analyze(&text, &instruction, 800, "hoca").await?;
+        memory::replace_generated(self, "huy.md", snapshot.revision, &result)?;
+        log::debug!("coach: temperament updated");
+        Ok(true)
     }
 
     /// Saves corrections from a finished chat; ignores an empty transcript.
@@ -378,12 +410,16 @@ impl Bot {
             return;
         }
         let context = self.default_prompt_context();
+        let snapshot = match agent_snapshot("duzeltmeler.md") {
+            Ok(snapshot) => snapshot,
+            Err(error) => return log::warn!("critic: {error}"),
+        };
         let instruction = {
             let state = self.state();
             context
                 .render_with(
                     prompts::current().critic,
-                    &[("{ad}", &state.bot_name), ("{mevcut}", &state.corrections)],
+                    &[("{ad}", &state.bot_name), ("{mevcut}", &snapshot.content)],
                 )
                 .into_owned()
         };
@@ -392,17 +428,18 @@ impl Bot {
             .await
         {
             Ok(notes) => {
-                memory::write("duzeltmeler.md", &notes);
-                self.state().corrections = notes;
-                log::debug!("critic: notes updated");
+                match memory::replace_generated(self, "duzeltmeler.md", snapshot.revision, &notes) {
+                    Ok(_) => log::debug!("critic: notes updated"),
+                    Err(error) => log::warn!("critic: discarded result: {error}"),
+                }
             }
             Err(e) => log::warn!("critic: {e}"),
         }
     }
 
     // gathers news from two sources (hacker news + Turkey's agenda), picks one based on the profile
-    /// Fails if both news sources are empty or unavailable.
-    pub async fn news_agent(&self) -> Result<News, BotError> {
+    /// None means successfully fetched sources contain no unposted news.
+    pub async fn news_agent(&self) -> Result<Option<News>, BotError> {
         let posted = self.state().posted_news.clone();
         let mut news_items: Vec<News> = Vec::new();
 
@@ -413,14 +450,17 @@ impl Bot {
             .await?
             .error_for_status()?
             .json()
-            .await
-            .unwrap_or_default();
+            .await?;
         for id in ids.into_iter().filter(|id| !posted.contains(id)).take(12) {
             let url = format!("https://hacker-news.firebaseio.com/v0/item/{id}.json");
-            let mut item: News = match self.http.get(&url).send().await {
-                Ok(r) => r.json().await.unwrap_or_default(),
-                Err(_) => continue,
-            };
+            let mut item: News = self
+                .http
+                .get(&url)
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
             if item.title.is_empty() {
                 continue;
             }
@@ -428,25 +468,20 @@ impl Bot {
             news_items.push(item);
         }
 
-        match agenda::rss(&self.http).await {
-            Ok(feed) => {
-                for article in feed.into_iter().take(12) {
-                    let id = agenda::link_id(&article.link);
-                    if !posted.contains(&id) {
-                        news_items.push(News {
-                            id,
-                            title: article.title,
-                            url: article.link,
-                            score: 0,
-                            source: "gündem",
-                        });
-                    }
-                }
+        for article in agenda::rss(&self.http).await?.into_iter().take(12) {
+            let id = agenda::link_id(&article.link);
+            if !posted.contains(&id) {
+                news_items.push(News {
+                    id,
+                    title: article.title,
+                    url: article.link,
+                    score: 0,
+                    source: "gündem",
+                });
             }
-            Err(e) => log::warn!("news_agent: rss: {e}"),
         }
         if news_items.is_empty() {
-            return Err("no news found".into());
+            return Ok(None);
         }
 
         let list = news_items
@@ -470,10 +505,11 @@ impl Bot {
             .chars()
             .filter(|c| c.is_ascii_digit())
             .collect::<String>()
-            .parse()
-            .unwrap_or(0);
-        let n = if n < news_items.len() { n } else { 0 };
-        Ok(news_items.swap_remove(n))
+            .parse()?;
+        if n >= news_items.len() {
+            return Err("news selection is outside the fetched candidates".into());
+        }
+        Ok(Some(news_items.swap_remove(n)))
     }
 
     // shows the model the image and gets a one-line personality comment; if the model

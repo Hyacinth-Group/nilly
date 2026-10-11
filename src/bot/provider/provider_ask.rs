@@ -125,7 +125,7 @@ impl Bot {
                 response: resp,
                 buffer: Vec::new(),
                 queue: Vec::new(),
-                usage: Usage::default(),
+                usage: StreamUsage::default(),
                 category,
                 done: false,
                 finished: false,

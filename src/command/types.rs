@@ -220,6 +220,9 @@ pub enum ActionError {
     PrivateSurfaceRequired,
     Memory(crate::BotError),
     Platform(crate::platform::PlatformError),
+    Operation(crate::BotError),
+    Busy,
+    ModelValidationUnsupported,
 }
 impl std::fmt::Display for ActionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -235,6 +238,11 @@ impl std::fmt::Display for ActionError {
             }
             Self::Memory(error) => write!(f, "memory: {error}"),
             Self::Platform(error) => write!(f, "platform: {error}"),
+            Self::Operation(_) => f.write_str("action operation failed"),
+            Self::Busy => f.write_str("conversation generation is in progress"),
+            Self::ModelValidationUnsupported => {
+                f.write_str("model validation is unavailable for this endpoint")
+            }
         }
     }
 }

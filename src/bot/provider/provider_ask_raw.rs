@@ -75,9 +75,7 @@ impl Bot {
                 return Err(error);
             }
             let response: Response = serde_json::from_str(&body_text)?;
-            if let Some(k) = response.usage {
-                self.add_metric(category, k);
-            }
+            self.add_metric(category, response.usage, MetricObservation::Response);
             let first = response.choices.into_iter().next();
             let thought_chars = first.as_ref().map_or(0, |s| thought_length(&s.message));
             let content_empty = first.as_ref().is_none_or(|s| {

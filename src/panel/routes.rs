@@ -1,4 +1,6 @@
-use super::{auth, dashboard, settings, setup, views, App, Lifecycle};
+use super::{
+    actions, auth, dashboard, memory, personality, settings, setup, usage, views, App, Lifecycle,
+};
 use crate::config::{Patch, PatchValue};
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -16,13 +18,21 @@ use std::time::Instant;
 use views::{Button, Field, Form as ViewForm, Item, Language, Page, Section};
 
 pub(super) type WebResult<T> = Result<T, WebError>;
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(super) struct WebError {
     status: StatusCode,
     code: String,
     key: String,
     fields: HashMap<String, String>,
 }
+
+/// Fully localized HTML errors (including editable conflict drafts) keep their body.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PreserveErrorBody;
+
+/// Safe structured error metadata, serialized once with the middleware's request ID.
+#[derive(Clone, Debug)]
+pub(super) struct ErrorDetails(pub Value);
 impl WebError {
     pub(super) fn new(status: StatusCode, code: &str, key: &str) -> Self {
         Self {
@@ -110,6 +120,28 @@ pub(super) fn mutation(app: &App, headers: &HeaderMap, csrf: &str) -> WebResult<
         ));
     }
     Ok(token)
+}
+
+/// Use inside a synchronous editor worker, never across `.await`.
+/// Holding this lifecycle guard prevents setup from loading caches between an
+/// offline edit's Bot selection and its commit/publication.
+pub(super) fn edit_runtime(app: &App) -> WebResult<parking_lot::MutexGuard<'_, super::Runtime>> {
+    let runtime = app.runtime.lock();
+    if runtime.lifecycle == Lifecycle::ConfiguredStarting {
+        return Err(WebError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "runtime_starting",
+            "panel.memory.runtime_starting",
+        ));
+    }
+    if runtime.lifecycle == Lifecycle::Stopping || *app.stop.borrow() {
+        return Err(WebError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "stopping",
+            "panel.state.stopping",
+        ));
+    }
+    Ok(runtime)
 }
 fn draft_key(token: &str) -> String {
     format!("{:x}", Sha256::digest(token.as_bytes()))
@@ -259,6 +291,10 @@ pub fn router(app: Arc<App>) -> Router {
         )
         .route("/api/v1/logs", get(logs_api))
         .route("/api/v1/logs/stream", get(log_stream))
+        .merge(memory::router())
+        .merge(personality::router())
+        .merge(actions::router())
+        .merge(usage::router())
         .layer(DefaultBodyLimit::max(32 * 1024))
         .layer(middleware::from_fn_with_state(app.clone(), security))
         .with_state(app)
@@ -288,7 +324,14 @@ async fn security(
         Ok(()) => next.run(request).await,
         Err(error) => WebError::from(error).into_response(),
     };
-    if response.status().is_client_error() || response.status().is_server_error() {
+    if let Some(ErrorDetails(mut details)) = response.extensions_mut().remove::<ErrorDetails>() {
+        details["request_id"] = json!(identifier);
+        let headers = std::mem::take(response.headers_mut());
+        response = (response.status(), Json(details)).into_response();
+        response.headers_mut().extend(headers);
+    } else if (response.status().is_client_error() || response.status().is_server_error())
+        && response.extensions().get::<PreserveErrorBody>().is_none()
+    {
         let status = response.status();
         let error = response
             .extensions()
@@ -304,15 +347,24 @@ async fn security(
                 .collect();
             response = (status, Json(json!({"code":error.code,"message":t(language,key),"field_errors":fields,"request_id":identifier}))).into_response();
         } else {
-            let (title, back) = if path.contains("/auth/login") {
-                ("panel.title.login", "/login")
-            } else if path.contains("/settings") {
-                ("panel.title.settings", "/settings")
-            } else if path.contains("/setup") {
-                ("panel.title.setup", "/setup")
-            } else {
-                ("panel.title.account", "/account")
-            };
+            let (title, back) =
+                if status == StatusCode::UNAUTHORIZED || path.contains("/auth/login") {
+                    ("panel.title.login", "/login")
+                } else if path.contains("/settings") {
+                    ("panel.title.settings", "/settings")
+                } else if path.contains("/setup") {
+                    ("panel.title.setup", "/setup")
+                } else if path.contains("/memory") {
+                    ("panel.title.memory", "/memory")
+                } else if path.contains("/personality") {
+                    ("panel.title.personality", "/personality")
+                } else if path.contains("/actions") || path.contains("/jobs") {
+                    ("panel.actions.title", "/actions")
+                } else if path.contains("/usage") {
+                    ("panel.title.usage", "/usage")
+                } else {
+                    ("panel.title.account", "/account")
+                };
             if let Ok(mut error_page) = Page::new(language, title, "") {
                 error_page.error = t(language, key);
                 for (field, key) in &error.fields {
@@ -354,7 +406,7 @@ async fn security(
     }
     for (name,value) in [
         ("content-security-policy","default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"),
-        ("x-content-type-options","nosniff"),("referrer-policy","no-referrer"),("cache-control","no-store"),("x-frame-options","DENY")
+        ("x-content-type-options","nosniff"),("referrer-policy","same-origin"),("cache-control","no-store"),("x-frame-options","DENY")
     ] { response.headers_mut().insert(name,HeaderValue::from_static(value)); }
     response.headers_mut().insert(
         "x-request-id",

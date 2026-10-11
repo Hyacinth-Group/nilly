@@ -1,8 +1,12 @@
+mod actions;
 mod auth;
 mod dashboard;
+mod memory;
+mod personality;
 mod routes;
 mod settings;
 mod setup;
+mod usage;
 mod views;
 
 use crate::{config, platform, Bot, BotError, SHUTTING_DOWN};
@@ -51,6 +55,7 @@ pub struct App {
     stop: watch::Receiver<bool>,
     tests: Arc<tokio::sync::Semaphore>,
     streams: Arc<tokio::sync::Semaphore>,
+    jobs: Arc<actions::JobStore>,
 }
 
 pub async fn entry() -> Result<bool, BotError> {
@@ -166,6 +171,7 @@ async fn run(config: config::Config) -> Result<(), BotError> {
         stop: stop.clone(),
         tests: Arc::new(tokio::sync::Semaphore::new(2)),
         streams: Arc::new(tokio::sync::Semaphore::new(8)),
+        jobs: Arc::new(actions::JobStore::new()),
     });
     register_secrets(&config)?;
     if valid {
@@ -180,6 +186,7 @@ async fn run(config: config::Config) -> Result<(), BotError> {
     .with_graceful_shutdown(async move {
         crate::wait_for_shutdown().await;
         shutdown_app.runtime.lock().lifecycle = Lifecycle::Stopping;
+        shutdown_app.jobs.shutdown();
         SHUTTING_DOWN.store(true, Ordering::SeqCst);
         let _ = stop_sender.send(true);
     });

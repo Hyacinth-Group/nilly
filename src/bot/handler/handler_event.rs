@@ -36,13 +36,14 @@ impl Bot {
         // unrecognizable
         match self
 
-            .send_lines(channel, &greeting, None, None, Some(&member.id))
+            .send_lines(channel, &greeting, None, None, Some(&member.id), true)
             .await
         {
-            Some(p) => {
+            Ok(Some(p)) => {
                 start_chat(&mut self.state(), channel, Some(p));
             }
-            None => log::debug!("hos_geldin: model stayed silent, skipped"),
+            Ok(None) => log::debug!("hos_geldin: model stayed silent, skipped"),
+            Err(e) => log::error!("hos_geldin delivery: {e}"),
         }
     }
 

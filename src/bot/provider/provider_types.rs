@@ -70,28 +70,51 @@ fn thought_length(content: &Content) -> usize {
         .map_or(0, |r| r.chars().count())
 }
 
-// token counters as reported by the provider; accumulated for cost visibility
-/// One request's (or, after `add`, several requests' summed) token counts. Holds
-/// `prompt_tokens`, `completion_tokens`, `prompt_tokens_details` (see `CacheDetail`).
-/// Field names match the OpenAI-compatible `usage` JSON object exactly (serde). Appears as
-/// `Response.usage`/`StreamResponse.usage`, and accumulated into `Metrics.categories`.
+// Numeric fields remain compatible with the existing process totals and status views.
+// Presence is retained separately: a default value is not a provider-reported zero.
 #[derive(Deserialize, Default, Clone, Copy, Debug)]
+#[serde(from = "ReportedUsage")]
 struct Usage {
-    #[serde(default)]
     prompt_tokens: u64,
-    #[serde(default)]
     completion_tokens: u64,
-    #[serde(default)]
     prompt_tokens_details: CacheDetail,
+    prompt_tokens_reported: bool,
+    completion_tokens_reported: bool,
+    cache_tokens_reported: bool,
 }
 
-// the field OpenAI-compatible providers use to report a prompt-cache hit; 0 if absent
-/// Holds `cached_tokens` — the portion of `prompt_tokens` served from the provider's prompt
-/// cache. Nested inside `Usage.prompt_tokens_details`.
 #[derive(Deserialize, Default, Clone, Copy, Debug)]
 struct CacheDetail {
     #[serde(default)]
     cached_tokens: u64,
+}
+
+#[derive(Deserialize)]
+struct ReportedUsage {
+    prompt_tokens: Option<u64>,
+    completion_tokens: Option<u64>,
+    prompt_tokens_details: Option<ReportedCacheDetail>,
+}
+
+#[derive(Deserialize)]
+struct ReportedCacheDetail {
+    cached_tokens: Option<u64>,
+}
+
+impl From<ReportedUsage> for Usage {
+    fn from(value: ReportedUsage) -> Self {
+        let cached = value.prompt_tokens_details.and_then(|detail| detail.cached_tokens);
+        Self {
+            prompt_tokens: value.prompt_tokens.unwrap_or_default(),
+            completion_tokens: value.completion_tokens.unwrap_or_default(),
+            prompt_tokens_details: CacheDetail {
+                cached_tokens: cached.unwrap_or_default(),
+            },
+            prompt_tokens_reported: value.prompt_tokens.is_some(),
+            completion_tokens_reported: value.completion_tokens.is_some(),
+            cache_tokens_reported: cached.is_some(),
+        }
+    }
 }
 
 impl Usage {
@@ -101,15 +124,27 @@ impl Usage {
         self.completion_tokens += other.completion_tokens;
         self.prompt_tokens_details.cached_tokens += other.prompt_tokens_details.cached_tokens;
     }
+
+    /// Stream usage payloads are cumulative snapshots, not additive deltas.
+    /// Retain earlier reported fields when a later partial snapshot omits them.
+    fn update_snapshot(&mut self, other: Usage) {
+        if other.prompt_tokens_reported {
+            self.prompt_tokens = other.prompt_tokens;
+            self.prompt_tokens_reported = true;
+        }
+        if other.completion_tokens_reported {
+            self.completion_tokens = other.completion_tokens;
+            self.completion_tokens_reported = true;
+        }
+        if other.cache_tokens_reported {
+            self.prompt_tokens_details.cached_tokens = other.prompt_tokens_details.cached_tokens;
+            self.cache_tokens_reported = true;
+        }
+    }
 }
 
-// model usage accumulated for the whole session; shown by !durum.
-// categories give a breakdown by call type (sohbet/isteklilik/profilci/...).
-/// Session-wide token accounting. Holds `calls` (count), `input_tokens`/`output_tokens`,
-/// `cache_tokens` (the cached share of `input_tokens`), `last_call_secs` (unix time of the
-/// most recent call), and `categories` (per-call-site `Usage` breakdown, keyed by the same
-/// tags as `JSON_CATEGORIES` and more — e.g. `"sohbet"`, `"profilci"`). Lives at
-/// `State.metrics`; read by `modal::status_message`/`summary_modal`/`token_breakdown`.
+/// Legacy process totals, plus presence-aware accounting for successfully observed
+/// provider responses. Neither accounting represents all billed attempts.
 #[derive(Default, Clone, Debug)]
 struct Metrics {
     calls: u32,
@@ -118,6 +153,93 @@ struct Metrics {
     output_tokens: u64,
     last_call_secs: i64,
     categories: HashMap<&'static str, Usage>,
+    reporting: UsageReporting,
+}
+
+/// A known subtotal and its coverage. Cache tokens are a subset of input, not extra input.
+#[derive(Default, Clone, Debug, Serialize)]
+struct ReportedTokens {
+    known_total: Option<u64>,
+    reported_calls: u32,
+    unknown_calls: u32,
+}
+
+impl ReportedTokens {
+    fn observe(&mut self, value: Option<u64>) {
+        if let Some(value) = value {
+            *self.known_total.get_or_insert(0) += value;
+            self.reported_calls += 1;
+        } else {
+            self.unknown_calls += 1;
+        }
+    }
+}
+
+#[derive(Default, Clone, Debug, Serialize)]
+struct CategoryUsageReporting {
+    counted_successful_calls: u32,
+    usage_reported_calls: u32,
+    input: ReportedTokens,
+    output: ReportedTokens,
+    cache: ReportedTokens,
+}
+
+impl CategoryUsageReporting {
+    fn observe(&mut self, usage: Option<Usage>, successful: bool) {
+        self.counted_successful_calls += u32::from(successful);
+        self.usage_reported_calls += u32::from(usage.is_some());
+        self.input.observe(usage.filter(|u| u.prompt_tokens_reported).map(|u| u.prompt_tokens));
+        self.output.observe(
+            usage.filter(|u| u.completion_tokens_reported).map(|u| u.completion_tokens),
+        );
+        self.cache.observe(
+            usage.filter(|u| u.cache_tokens_reported)
+                .map(|u| u.prompt_tokens_details.cached_tokens),
+        );
+    }
+}
+
+/// Coverage includes decoded successful HTTP responses and every drained/read-failed
+/// stream observation. Reported fields survive stream failure; only missing fields are
+/// unknown. `counted_successful_calls` excludes read-failed streams independently.
+/// Empty replies retried after a decoded response are still observations.
+/// Costs/currencies are intentionally absent: the existing parser has no normalized
+/// monetary reporting contract, and token totals cannot establish one.
+#[derive(Default, Clone, Debug, Serialize)]
+struct UsageReporting {
+    #[serde(flatten)]
+    totals: CategoryUsageReporting,
+    categories: HashMap<&'static str, CategoryUsageReporting>,
+}
+
+enum MetricObservation {
+    Response,
+    Stream { completed: bool },
+}
+
+impl Metrics {
+    fn observe(
+        &mut self,
+        category: &'static str,
+        usage: Option<Usage>,
+        observation: MetricObservation,
+        at: i64,
+    ) {
+        // Keep existing counters: non-stream responses used to count only with usage;
+        // streams were counted once even when usage was missing or reading failed.
+        if usage.is_some() || matches!(observation, MetricObservation::Stream { .. }) {
+            let legacy = usage.unwrap_or_default();
+            self.calls += 1;
+            self.input_tokens += legacy.prompt_tokens;
+            self.cache_tokens += legacy.prompt_tokens_details.cached_tokens;
+            self.output_tokens += legacy.completion_tokens;
+            self.last_call_secs = at;
+            self.categories.entry(category).or_default().add(legacy);
+        }
+        let successful = !matches!(observation, MetricObservation::Stream { completed: false });
+        self.reporting.totals.observe(usage, successful);
+        self.reporting.categories.entry(category).or_default().observe(usage, successful);
+    }
 }
 
 // one streamed chunk: reasoning models also send a thought, plain models send content only
@@ -169,4 +291,143 @@ struct SseData {
     done: bool,
 }
 
-// parses a single "data: ..." SSE line; None for keepalives/malformed lines
+#[cfg(test)]
+mod usage_reporting_tests {
+    use super::*;
+
+    fn usage(value: serde_json::Value) -> Usage {
+        serde_json::from_value(value).unwrap()
+    }
+
+    #[test]
+    fn missing_usage_and_reported_zero_are_distinct() {
+        let mut metrics = Metrics::default();
+        metrics.observe("test", None, MetricObservation::Response, 1);
+        metrics.observe(
+            "test",
+            Some(usage(serde_json::json!({
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "prompt_tokens_details": {"cached_tokens": 0}
+            }))),
+            MetricObservation::Response,
+            2,
+        );
+        let totals = &metrics.reporting.totals;
+        assert_eq!(totals.counted_successful_calls, 2);
+        assert_eq!(totals.usage_reported_calls, 1);
+        for field in [&totals.input, &totals.output, &totals.cache] {
+            assert_eq!(field.known_total, Some(0));
+            assert_eq!(field.reported_calls, 1);
+            assert_eq!(field.unknown_calls, 1);
+        }
+        // Preserve the legacy rule: absent non-stream usage never incremented calls.
+        assert_eq!(metrics.calls, 1);
+        assert_eq!(metrics.input_tokens + metrics.output_tokens, 0);
+    }
+
+    #[test]
+    fn partial_usage_and_categories_keep_independent_coverage() {
+        let mut metrics = Metrics::default();
+        metrics.observe(
+            "chat",
+            Some(usage(serde_json::json!({"prompt_tokens": 10}))),
+            MetricObservation::Response,
+            1,
+        );
+        metrics.observe(
+            "agent",
+            Some(usage(serde_json::json!({"completion_tokens": 4}))),
+            MetricObservation::Response,
+            2,
+        );
+        metrics.observe("chat", None, MetricObservation::Response, 3);
+        let totals = &metrics.reporting.totals;
+        assert_eq!(totals.counted_successful_calls, 3);
+        assert_eq!(totals.usage_reported_calls, 2);
+        assert_eq!(totals.input.known_total, Some(10));
+        assert_eq!(totals.output.known_total, Some(4));
+        assert_eq!(totals.input.unknown_calls, 2);
+        assert_eq!(totals.output.unknown_calls, 2);
+        assert_eq!(totals.cache.known_total, None);
+        assert_eq!(totals.cache.unknown_calls, 3);
+        let chat = &metrics.reporting.categories["chat"];
+        assert_eq!(chat.counted_successful_calls, 2);
+        assert_eq!(chat.usage_reported_calls, 1);
+        assert_eq!(chat.input.known_total, Some(10));
+        assert_eq!(chat.input.unknown_calls, 1);
+        assert_eq!(chat.output.known_total, None);
+        let agent = &metrics.reporting.categories["agent"];
+        assert_eq!(agent.counted_successful_calls, 1);
+        assert_eq!(agent.input.known_total, None);
+        assert_eq!(agent.output.known_total, Some(4));
+    }
+
+    #[test]
+    fn valid_provider_response_retains_totals_with_cached_input_subset() {
+        let response: Response = serde_json::from_value(serde_json::json!({
+            "choices": [{"message": {"content": "answer"}}],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 25,
+                "total_tokens": 125,
+                "prompt_tokens_details": {"cached_tokens": 80}
+            }
+        })).unwrap();
+        assert_eq!(response_content(&response.choices[0].message, "sohbet").as_deref(), Some("answer"));
+        let mut metrics = Metrics::default();
+        metrics.observe("chat", response.usage, MetricObservation::Response, 10);
+        metrics.observe("chat", response.usage, MetricObservation::Response, 11);
+        assert_eq!(metrics.calls, 2);
+        assert_eq!(metrics.input_tokens, 200);
+        assert_eq!(metrics.output_tokens, 50);
+        assert_eq!(metrics.cache_tokens, 160);
+        assert_eq!(metrics.input_tokens + metrics.output_tokens, 250);
+        assert_eq!(metrics.categories["chat"].prompt_tokens, 200);
+        assert_eq!(metrics.categories["chat"].completion_tokens, 50);
+        assert_eq!(metrics.categories["chat"].prompt_tokens_details.cached_tokens, 160);
+        let reporting = serde_json::to_value(&metrics.reporting).unwrap();
+        assert_eq!(reporting["input"]["known_total"], 200);
+        assert_eq!(reporting["cache"]["known_total"], 160);
+        assert!(reporting.get("cost").is_none());
+        assert!(reporting.get("currency").is_none());
+    }
+
+    #[test]
+    fn empty_and_null_usage_fields_are_not_reported_zero() {
+        for value in [
+            serde_json::json!({}),
+            serde_json::json!({
+                "prompt_tokens": null,
+                "completion_tokens": null,
+                "prompt_tokens_details": null
+            }),
+            serde_json::json!({"prompt_tokens_details": {"cached_tokens": null}}),
+        ] {
+            let mut metrics = Metrics::default();
+            metrics.observe("test", Some(usage(value)), MetricObservation::Response, 1);
+            let totals = &metrics.reporting.totals;
+            assert_eq!(totals.usage_reported_calls, 1);
+            for field in [&totals.input, &totals.output, &totals.cache] {
+                assert_eq!(field.known_total, None);
+                assert_eq!(field.reported_calls, 0);
+                assert_eq!(field.unknown_calls, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn reporting_does_not_backfill_legacy_counters() {
+        let mut metrics = Metrics {
+            calls: 8,
+            input_tokens: 400,
+            ..Default::default()
+        };
+        metrics.observe("test", None, MetricObservation::Response, 1);
+        assert_eq!(metrics.calls, 8);
+        assert_eq!(metrics.input_tokens, 400);
+        assert_eq!(metrics.reporting.totals.counted_successful_calls, 1);
+        assert_eq!(metrics.reporting.totals.input.known_total, None);
+        assert_eq!(metrics.reporting.totals.input.unknown_calls, 1);
+    }
+}

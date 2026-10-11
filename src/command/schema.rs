@@ -160,14 +160,17 @@ const DEFINITIONS: &[ActionDefinition] = &[
     action!(
         Sleep,
         "cmd.uyu",
-        &[option!(
-            "hours",
-            "cmd.uyu.opt.saat",
-            Integer,
-            Some(OptionDefault::Integer(8)),
-            &[],
-            Some(1)
-        )],
+        &[OptionDefinition {
+            max: Some(24),
+            ..option!(
+                "hours",
+                "cmd.uyu.opt.saat",
+                Integer,
+                Some(OptionDefault::Integer(8)),
+                &[],
+                Some(1)
+            )
+        }],
         Always,
         Administrator
     ),
