@@ -15,6 +15,7 @@ Notable changes are recorded here in [Keep a Changelog](https://keepachangelog.c
 - Default-enabled, removable `matrix` feature using native `matrix-sdk` 0.19.1 for plaintext sync, explicit room approval, owner-only prefix administration and stable persisted session/device state; source MSRV 1.96.
 - Feature-gated Matrix CLI setup with hidden access-token/password entry, typed atomic patch/save, qualified owner identity, bilingual guidance, and a beginner plaintext-room/privacy guide; encrypted rooms and attachments have no decryption or plaintext fallback.
 - Opt-in ignored `matrix_live` integration tests for session restoration, native transport operations and encryption rejection on disposable homeservers.
+- Independent room-level attachment-sending capabilities, separate from optional upload ceilings, using native Discord/Telegram/Slack/Matrix permissions and safe unavailable defaults.
 
 ### Changed
 - Default prompts identify the bot honestly and omit a fictional university biography and fixed political identity.

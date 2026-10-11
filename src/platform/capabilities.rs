@@ -52,6 +52,8 @@ pub struct Capabilities {
     pub replies: bool,
     pub threads: bool,
     pub send: bool,
+    /// Sending the attachment types implemented by this adapter is permitted here.
+    pub send_attachments: bool,
     pub react: bool,
     pub observe_reactions: bool,
     pub edit: bool,
@@ -65,6 +67,7 @@ pub struct Capabilities {
     pub private_results: bool,
     pub output: OutputLimits,
     pub edit_cadence: Duration,
+    /// Known upload ceiling; None means unknown, not that attachments are unsupported.
     pub upload_bytes: Option<u64>,
 }
 impl Capabilities {
@@ -77,6 +80,7 @@ impl Capabilities {
             replies: false,
             threads: false,
             send: false,
+            send_attachments: false,
             react: false,
             observe_reactions: false,
             edit: false,
@@ -98,4 +102,29 @@ impl Capabilities {
 pub enum PresentationPolicy {
     Normal,
     Quiet,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attachment_support_is_independent_of_text_sending_and_upload_ceiling() {
+        let mut capabilities = Capabilities::unavailable();
+        assert!(!capabilities.send_attachments);
+        assert_eq!(capabilities.upload_bytes, None);
+        capabilities.send = true;
+        capabilities.upload_bytes = Some(1024);
+        assert!(!capabilities.send_attachments);
+        capabilities.send_attachments = true;
+        capabilities.upload_bytes = None;
+        assert!(capabilities.send_attachments);
+        assert_eq!(capabilities.upload_bytes, None);
+        let json = serde_json::to_value(&capabilities).unwrap();
+        assert_eq!(json["send_attachments"], true);
+        assert_eq!(
+            serde_json::from_value::<Capabilities>(json).unwrap(),
+            capabilities
+        );
+    }
 }

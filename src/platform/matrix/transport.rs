@@ -105,6 +105,7 @@ impl MatrixAdapter {
                 >= power.for_action(PowerLevelAction::SendMessage(
                     MessageLikeEventType::RoomMessage,
                 ));
+            caps.send_attachments = caps.send;
             caps.react = level
                 >= power.for_action(PowerLevelAction::SendMessage(
                     MessageLikeEventType::Reaction,

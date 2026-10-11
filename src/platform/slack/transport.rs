@@ -436,6 +436,7 @@ impl Platform for SlackAdapter {
         };
         caps.decryption_available = readable;
         caps.send = send;
+        caps.send_attachments = send && scopes.contains("files:write");
         caps.replies = send;
         caps.threads = send;
         caps.react = readable && scopes.contains("reactions:write");
@@ -477,7 +478,7 @@ impl Platform for SlackAdapter {
         if !caps.send {
             return Err(PlatformError::PermissionDenied);
         }
-        if !body.attachments.is_empty() && caps.upload_bytes.is_none() {
+        if !body.attachments.is_empty() && !caps.send_attachments {
             return Err(PlatformError::PermissionDenied);
         }
         if body.attachments.len() > 10 {
@@ -947,11 +948,22 @@ mod tests {
         let adapter = adapter();
         let room = events::room("T123", "C123").unwrap();
         assert!(!adapter.capabilities(&room).send);
+        assert!(!adapter.capabilities(&room).send_attachments);
         adapter.rooms.lock().insert(room.id.clone(), room.clone());
         assert!(!adapter.capabilities(&room).send);
+        assert!(!adapter.capabilities(&room).send_attachments);
         adapter.scopes.lock().insert("chat:write".into());
         assert!(adapter.capabilities(&room).send);
         assert_eq!(adapter.capabilities(&room).history, HistoryAccess::None);
+        assert!(!adapter.capabilities(&room).send_attachments);
+        adapter.scopes.lock().insert("files:write".into());
+        assert!(adapter.capabilities(&room).send_attachments);
+        assert_eq!(
+            adapter.capabilities(&room).upload_bytes,
+            Some(MEDIA_LIMIT as u64)
+        );
+        adapter.scopes.lock().remove("chat:write");
+        assert!(!adapter.capabilities(&room).send_attachments);
     }
 
     #[test]

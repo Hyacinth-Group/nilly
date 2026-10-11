@@ -150,6 +150,15 @@ nickname scope, private results, rich UI, output count units/limits, edit cadenc
 and upload constraints. Unknown rooms use unavailable capabilities, not assumed
 success. Discord retains a 1900-Unicode-scalar output budget.
 
+`Capabilities.send_attachments` is independent of `upload_bytes`: the former
+reports permission/support for the outgoing attachment kinds implemented by the
+adapter, while the latter is an optional upload ceiling (`None` means unknown,
+not unsupported). Unknown/unavailable routes set attachment sending to false.
+Discord requires sending permission plus `ATTACH_FILES`; Telegram requires sending
+permission plus native photo rights (or a direct/admin room); Slack additionally
+requires `files:write`; plaintext Matrix uses `m.room.message` power levels.
+Actual attachment types, size checks and transport failures remain adapter-local.
+
 Offline characterization tests preserve input exclusions, first MIME image/off
 selection, safe content, welcome and reply-user mentions, custom emoji labels,
 thought/stealth rendering, slash registration and private UI builder semantics.

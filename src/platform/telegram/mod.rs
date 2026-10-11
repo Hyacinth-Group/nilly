@@ -36,6 +36,25 @@ pub struct TelegramAdapter {
     client: Arc<TelegramClient>,
     rooms: Mutex<HashMap<RoomKey, KnownRoom>>,
 }
+fn photo_permission(
+    kind: RoomKind,
+    status: &str,
+    member: &Value,
+    chat: &Value,
+    send: bool,
+) -> bool {
+    send && match status {
+        "creator" | "administrator" => true,
+        "member" if kind == RoomKind::Direct => true,
+        "member" => {
+            chat.pointer("/permissions/can_send_photos")
+                .and_then(Value::as_bool)
+                == Some(true)
+        }
+        "restricted" => member.get("can_send_photos").and_then(Value::as_bool) == Some(true),
+        _ => false,
+    }
+}
 impl TelegramAdapter {
     pub(crate) fn new(
         connection: ConnectionId,
@@ -98,6 +117,7 @@ impl TelegramAdapter {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         capabilities.send = send;
+        capabilities.send_attachments = photo_permission(room.kind, status, &member, &info, send);
         // Reactions must be explicitly listed by getChat; do not assume all emoji are usable.
         capabilities.react = send
             && info
@@ -519,6 +539,87 @@ impl Platform for TelegramAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn photo_capability_uses_explicit_group_and_restricted_member_photo_rights() {
+        let allowed = json!({"permissions":{"can_send_photos":true}});
+        let denied = json!({"permissions":{"can_send_photos":false}});
+        let member = json!({"can_send_photos":true});
+        assert!(photo_permission(
+            RoomKind::Group,
+            "member",
+            &member,
+            &allowed,
+            true
+        ));
+        assert!(!photo_permission(
+            RoomKind::Group,
+            "member",
+            &member,
+            &denied,
+            true
+        ));
+        assert!(!photo_permission(
+            RoomKind::Group,
+            "member",
+            &member,
+            &json!({}),
+            true
+        ));
+        assert!(photo_permission(
+            RoomKind::Group,
+            "restricted",
+            &member,
+            &denied,
+            true
+        ));
+        assert!(!photo_permission(
+            RoomKind::Group,
+            "restricted",
+            &json!({}),
+            &allowed,
+            true
+        ));
+        assert!(!photo_permission(
+            RoomKind::Group,
+            "restricted",
+            &json!({"can_send_photos":false}),
+            &allowed,
+            true
+        ));
+    }
+
+    #[test]
+    fn photo_capability_requires_sending_even_for_direct_and_admin_rooms() {
+        for (kind, status) in [
+            (RoomKind::Direct, "member"),
+            (RoomKind::Group, "administrator"),
+            (RoomKind::Group, "creator"),
+        ] {
+            assert!(photo_permission(kind, status, &json!({}), &json!({}), true));
+            assert!(!photo_permission(
+                kind,
+                status,
+                &json!({}),
+                &json!({}),
+                false
+            ));
+        }
+        assert!(!photo_permission(
+            RoomKind::Group,
+            "left",
+            &json!({}),
+            &json!({}),
+            true
+        ));
+        assert!(!photo_permission(
+            RoomKind::Group,
+            "unknown",
+            &json!({}),
+            &json!({}),
+            true
+        ));
+    }
+
     #[test]
     fn privacy_visibility_requires_disabled_mode_or_group_administration() {
         assert!(!ordinary_visibility(RoomKind::Group, false, None));

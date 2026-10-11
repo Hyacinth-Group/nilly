@@ -253,6 +253,7 @@ impl DiscordAdapter {
             replies: send && history,
             threads: visible && text_based && perms.contains(Permissions::SEND_MESSAGES_IN_THREADS),
             send,
+            send_attachments: send && perms.contains(Permissions::ATTACH_FILES),
             react: history && perms.contains(Permissions::ADD_REACTIONS) && send,
             observe_reactions: visible && text_based,
             // These refer to the adapter's own messages, not moderator powers.
@@ -675,6 +676,7 @@ mod tests {
         ));
         let capabilities = adapter.capabilities(&room);
         assert!(!capabilities.send);
+        assert!(!capabilities.send_attachments);
         assert_eq!(capabilities.history, HistoryAccess::None);
     }
 
