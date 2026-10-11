@@ -281,7 +281,10 @@ impl Bot {
                 Ok(m) if !m.trim().is_empty() => m,
                 _ => item.summary.clone(),
             };
-            read_text += &format!("## {}\n{}\n{}\n\n", item.title, item.link, content);
+            read_text.push_str(&format!(
+                "## {}\n{}\n{}\n\n",
+                item.title, item.link, content
+            ));
         }
 
         let note_instruction = context.render(prompts::current().wanderer_note);

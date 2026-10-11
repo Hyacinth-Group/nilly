@@ -335,11 +335,11 @@ impl Person {
             self.note
         );
         for f in &self.facts {
-            s += &format!("- {f}\n");
+            s.push_str(&format!("- {f}\n"));
         }
         s += "\n## Son olaylar\n";
         for e in &self.events {
-            s += &format!("- {e}\n");
+            s.push_str(&format!("- {e}\n"));
         }
         s
     }

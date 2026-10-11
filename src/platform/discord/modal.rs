@@ -137,18 +137,18 @@ pub fn mind_embeds(view: &MindView) -> Vec<CreateEmbed> {
 
     let mut people_lines = String::new();
     for p in people.iter().take(8) {
-        people_lines += &format!("**{}** ({:+})", p.name, p.score);
+        people_lines.push_str(&format!("**{}** ({:+})", p.name, p.score));
         if !p.tags.is_empty() {
-            people_lines += &format!(" · {}", p.tags.join(", "));
+            people_lines.push_str(&format!(" · {}", p.tags.join(", ")));
         }
         people_lines.push('\n');
     }
 
     let mut topic_lines = String::new();
     for (name, latest) in topics.iter().take(8) {
-        topic_lines += &format!("**{name}**");
+        topic_lines.push_str(&format!("**{name}**"));
         if !latest.is_empty() {
-            topic_lines += &strings::t("mind.topic_latest").replace("{latest}", latest);
+            topic_lines.push_str(&strings::t("mind.topic_latest").replace("{latest}", latest));
         }
         topic_lines.push('\n');
     }
@@ -176,7 +176,7 @@ pub fn mind_embeds(view: &MindView) -> Vec<CreateEmbed> {
     for chunk in chunks {
         for item in chunk {
             // "- date time #channel: text" -> a readable single line
-            event_lines += &memory::trim(item.trim_start_matches("- "), 90);
+            event_lines.push_str(&memory::trim(item.trim_start_matches("- "), 90));
             event_lines.push('\n');
         }
     }
@@ -355,11 +355,13 @@ pub fn person_modal(p: &PersonView) -> CreateModal {
         .replace("{name}", &p.name)
         .replace("{id}", &display_id);
     if !p.username.is_empty() {
-        identity += &strings::t("person.username_line").replace("{username}", &p.username);
+        identity.push_str(&strings::t("person.username_line").replace("{username}", &p.username));
     }
     if !p.previous_names.is_empty() {
-        identity += &strings::t("person.previous_names_line")
-            .replace("{names}", &p.previous_names.join(", "));
+        identity.push_str(
+            &strings::t("person.previous_names_line")
+                .replace("{names}", &p.previous_names.join(", ")),
+        );
     }
     sections.push(Section::new(
         strings::t("person.identity_label"),
@@ -369,7 +371,7 @@ pub fn person_modal(p: &PersonView) -> CreateModal {
 
     let mut impression = strings::t("person.score").replace("{score}", &format!("{:+}", p.score));
     if !p.note.is_empty() {
-        impression += &format!("\n{}", p.note);
+        impression.push_str(&format!("\n{}", p.note));
     }
     sections.push(Section::new(
         strings::t("person.impression_label"),
@@ -483,8 +485,9 @@ pub fn summary_modal(state: &StatusView) -> CreateModal {
         .replace("{travel}", &state.travel);
     let mut token_text = token_summary(metrics);
     if !metrics.categories.is_empty() {
-        token_text +=
-            &strings::t("common.breakdown_line").replace("{breakdown}", &token_breakdown(metrics));
+        token_text.push_str(
+            &strings::t("common.breakdown_line").replace("{breakdown}", &token_breakdown(metrics)),
+        );
     }
     let mut sections = vec![
         Section::new(strings::t("summary.status_label"), "summary_status", status),
