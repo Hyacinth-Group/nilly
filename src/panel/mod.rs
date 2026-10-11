@@ -80,6 +80,8 @@ pub async fn entry() -> Result<bool, BotError> {
     );
     let config = config::Config::load(&path, &environment)?;
     if config.get("PANEL_ENABLED") == "off" {
+        register_secrets(&config)?;
+        config::activate(config)?;
         return Ok(false);
     }
     crate::logging::init_with_settings(config.get("LOG_LEVEL"), config.get("LOG_COLOR"));

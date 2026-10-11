@@ -492,10 +492,10 @@ impl Log for Sink {
 
 static SINK: Sink = Sink;
 
-/// Headless startup uses the environment; panel startup supplies its config snapshot.
+/// Headless startup shares the immutable typed snapshot, with an environment fallback.
 pub fn init() {
-    let level = std::env::var("LOG_LEVEL").unwrap_or_default();
-    let color = std::env::var("LOG_COLOR").unwrap_or_default();
+    let level = crate::config::runtime_value("LOG_LEVEL").unwrap_or_default();
+    let color = crate::config::runtime_value("LOG_COLOR").unwrap_or_default();
     init_with_settings(&level, &color);
 }
 

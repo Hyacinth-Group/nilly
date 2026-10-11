@@ -1,6 +1,6 @@
 # Your first Discord bot
 
-This bot keeps conversation notes and uses them alongside a fixed persona in later replies. You do not need to write code, but setup still requires copying commands into Terminal or PowerShell.
+This bot keeps conversation notes and uses them alongside a fixed persona in later replies. You do not need to write code. Start the package from Terminal or PowerShell, then connect your accounts and configure the bot in your browser.
 
 ## What you need
 
@@ -23,7 +23,7 @@ Keep the computer on for the bot to stay online.
 
 The bot itself is free, open-source software. You bring your own model account. A **model** is the AI that writes the bot's replies.
 
-**You can try a free model.** The live OpenRouter catalog listed `google/gemma-4-31b-it:free` on 11 October 2026. This is a catalog-verified example, not an end-to-end bot compatibility claim. Availability and limits can change. Copy the exact ID into the wizard's model prompt. Enter alone selects the provider's **paid** default, not a free model.
+**You can try a free model.** The live OpenRouter catalog listed `google/gemma-4-31b-it:free` on 11 October 2026. This is a catalog-verified example, not an end-to-end bot compatibility claim. Availability and limits can change. Copy the exact ID into setup's **Model** field. Leaving it blank selects the provider's **paid** default, not a free model.
 
 Free-model requests are rate-limited; consult [OpenRouter's current limits](https://openrouter.ai/docs/api_reference/limits). A **request** is one model call, not one Discord message. Background analysis makes requests too and can exhaust the free allowance before ordinary chat does.
 
@@ -52,10 +52,10 @@ An **API key** is the password that lets the bot use your AI account.
 1. Open [openrouter.ai/keys](https://openrouter.ai/keys).
 2. Sign up or sign in.
 3. Create a key. Give it a name such as `Discord bot`, and set a spending limit.
-4. Copy the key and keep it private. You will paste it into the setup wizard.
+4. Copy the key and keep it private. You will paste it into browser setup.
 5. If you want a paid model, add credits to your OpenRouter account. If you want to start free, choose a current `:free` model instead.
 
-Already using Mistral? You can use your Mistral API key instead. Choose `mistral` when the wizard asks for a provider. The free limits above are for OpenRouter, not Mistral.
+Already using Mistral? You can use your Mistral API key instead. Choose `mistral` in browser setup. The free limits above are for OpenRouter, not Mistral.
 
 ## 3. Find your Discord user ID
 
@@ -93,6 +93,8 @@ If a later Docker command says `permission denied`, put `sudo` before `docker`, 
 
 Open **Terminal** on Mac or Linux, or **PowerShell** on Windows. This is a window where you paste commands. Paste one command at a time and press Enter.
 
+**Upgrading an existing installation?** Complete [the configuration and volume migration](#existing-compose-installations) before downloading the new launch settings or starting the service. Changing Compose's volume name alone would start with different storage.
+
 ### Command 1: make a folder
 
 ```sh
@@ -122,55 +124,108 @@ On Windows PowerShell, use:
 curl.exe -O https://raw.githubusercontent.com/krxi/discord-bot/main/docker-compose.yml
 ```
 
-### Command 3: run the setup wizard
+### Command 3: create the editable configuration folder
 
 ```sh
-docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/data" ghcr.io/krxi/discord-bot:latest init
+mkdir -p config photos
 ```
 
-This downloads the bot's ready-made package and asks you for its settings.
+On Linux, give the container's account access to the private configuration folder:
 
-On Windows PowerShell, use this version instead:
-
-```powershell
-docker run --rm -it -v "${PWD}:/data" ghcr.io/krxi/discord-bot:latest init
+```sh
+sudo chown 10001:10001 config
+sudo chmod 700 config
 ```
 
-The wizard asks these questions in order:
+On Windows PowerShell: `mkdir config` then `mkdir photos`. Docker Desktop manages mount
+permissions; Linux ownership commands are not required there.
 
-| Question | What to enter |
-| --- | --- |
-| Discord bot token | The token from step 1; terminal input is hidden. |
-| Provider | Press Enter for `openrouter`, or type `mistral`. |
-| API key | Your chosen provider's key from step 2; terminal input is hidden. |
-| Model ID | Free OpenRouter example: `google/gemma-4-31b-it:free`. Enter alone uses the provider's **paid** default. |
-| Language | Press Enter for `en` (English), or type `tr` (Turkish). |
-| Your Discord user ID | Paste the number from step 3, or press Enter to skip. |
-| UTC offset hours | Your local time difference from UTC, or Enter for `0`. For example, `3` means UTC+3. This sets the bot's day and night. |
-
-The wizard saves a file called `.env` in `mybot`. It contains your settings and secret keys. It also prints an invite link and a reminder about the two intent switches.
-
-Before command 4, open `.env` and add `GUILD_ID=<your server ID>` and `CHANNELS=<channel ID>` (comma-separated for several channels). With Discord Developer Mode enabled, right-click the server or channel to copy its ID. Remove the `<...>` example text and paste the numeric IDs. Empty values mean **all** accessible servers/channels, including history scanning.
-
-Keep this folder private. Never upload or share `.env`. On Windows restrict folder access in **Properties → Security**; Unix init sets mode `600`. Rotate a leaked Discord token in Developer Portal and a leaked model key in its provider account.
-
-**Keep the invite link handy. Do not share your `.env` file.**
-
-### Command 4: start the bot
+### Command 4: start, then open browser setup
 
 ```sh
 docker compose up -d
+docker compose logs bot
 ```
 
-This starts the bot in the background, so closing the terminal does not stop it.
+The panel starts before checking the bot's credentials, so a new installation does not need an existing `.env`. Open the printed `http://localhost:8080/setup#token=...` link within **15 minutes**. Treat it as a password: do not share it or the log containing it. The claim token is consumed when claimed, before you save a password. If it expires, or you lose that setup session before saving a password, run `docker compose restart bot` and use the new link. Once the password is saved, use it to log in; restarts no longer print a claim link.
 
-The first download can take a little while. Leave Docker Desktop running if you use it.
+### The five browser steps
+
+1. **Claim and protect.** Use the one-use link and set an administrator password of at least **12 characters**. Save it in a password manager. The panel administrator password is separate from your Discord token and optional Discord owner ID.
+2. **Connect Discord.** Paste the token from step 1 and test it. Setup checks Discord's API for the actual application identity; the invite is generated from that verified ID, not decoded from the token. A successful test is not yet a gateway connection.
+3. **Choose AI.** Select `openrouter` or `mistral`, paste its key, and enter a model ID. To start free on OpenRouter, explicitly choose a current `:free` model; leaving **Model** blank uses a paid default. The key test makes authenticated **GET** requests only, not a paid completion. It does not prove that the model can produce a reply or that you have sufficient credit.
+4. **Make it fit.** Choose `en` (English) or `tr` (Turkish), your UTC offset (for example `3` or `5.5`), optional Discord owner ID, and news settings. **Set access before starting:** fill `GUILD_ID` with your server ID and `CHANNELS` with channel IDs, comma-separated for several channels. With Developer Mode enabled, right-click a server or channel to copy its ID. Blank values mean **all accessible servers/channels**, including the first history scan.
+5. **Invite and start.** Open **Add to server**, choose your server, and approve Discord's prompts. The invite requests bot and slash-command scopes with permission mask `67226688`, not Administrator access. Confirm **Message Content Intent** and **Server Members Intent** are enabled in the Developer Portal, then finish setup to start the bot.
+
+Credential tests do not save your keys to disk. Finish saves the private `config/.env` and starts the Discord runtime **without restarting the process**. Once its password has been saved, the administrator account survives an interrupted setup; log in to resume, rather than trying to reclaim it. Unfinished credential drafts are session-local, expire 15 minutes after creation or the latest successful credential test, and do not survive logout or process restart.
+
+Keep `config/.env` private: it contains plaintext tokens and keys. Browser saves replace the file atomically and preserve unrelated settings/comments; they do not encrypt it. Never upload it or share it in a screenshot. On Windows restrict folder access in **Properties → Security**. Rotate a leaked Discord token in Developer Portal and a leaked model key in its provider account.
+
+Keep Docker Desktop running. Panel health is separate from Discord connection health:
+a successful token test is not proof that privileged intents, channel permissions or gateway
+connection work.
+
+For a release binary, run it from its private data folder and open the printed browser link; it writes `.env` there. Keep the terminal open. An existing valid configuration starts the Discord runtime automatically alongside the panel. [Headless CLI setup](#headless-cli-setup) remains available if you do not want browser administration.
+
+### Migrating an existing Docker `.env`
+
+Stop the existing service with its **old** Compose file first: `docker compose stop bot`. Preserve its old volume as described under [Existing Compose installations](#existing-compose-installations). Create `config` and `photos`, then copy your existing configuration before removing any `env_file` injection:
+
+```sh
+mkdir -p config photos
+cp .env config/.env
+sudo chown 10001:10001 config config/.env
+sudo chmod 700 config
+sudo chmod 600 config/.env
+```
+
+On Linux, those ownership/mode commands let container UID `10001` read and update the private directory. On Docker Desktop, omit the Unix ownership commands; on Windows use `Copy-Item .env config/.env` and restrict folder access instead.
+
+Only after the copy, download/update Compose. It must mount **the directory** `./config:/data/config`, set `PANEL_CONFIG_PATH=/data/config/.env`, and no longer use `env_file: .env`; atomic saves require a writable directory, not a single-file mount. Complete any old-volume migration before starting it. The new Compose file uses the fixed volume name **`discord-bot-data`**; an old project-prefixed volume is not automatically reused. Keep the old `.env` private as a migration backup.
+
+If you deliberately retain `env_file` or externally injected environment settings,
+the panel shows those fields as externally managed and read-only. Environment values win
+over the file; a browser save cannot override Compose injection.
+
+### Panel safety and everyday settings
+
+Open `http://localhost:8080` after setup and log in. **Overview** distinguishes panel availability from Discord gateway connection and shows mood per active conversation, not a fabricated global mood. Its model-call/token counters cover only this process, not durable usage history or measured cost. **Settings** validates supported fields without revealing stored keys. A blank secret field keeps its saved value. **Logs** is a bounded recent, redacted in-memory buffer; entries are lost on restart and it is not a permanent audit trail. Redaction is not a guarantee that logs contain no member data.
+
+Memory/personality editors, action buttons, and the dedicated usage page are intentionally disabled pending core APIs. Use existing supported Discord commands for bot operations; do not assume the panel supplies member erasure, durable usage history, or provider cost accounting.
+
+Saving settings shows a restart-required banner. Apply them with
+`docker compose restart bot`; a standalone binary must be stopped and started in its
+original data folder. The saved `model.md` override has precedence over the configured default; changing **Model** in Settings does not erase that separate override.
+
+### Accessing a remote server
+
+Do not publish port 8080 to the internet. Compose publishes `127.0.0.1:8080:8080`, even though the container binds `0.0.0.0`. On your own computer, keep this SSH tunnel open:
+
+```sh
+ssh -N -L 8080:127.0.0.1:8080 your-user@your-server
+```
+
+Open `http://localhost:8080` on **your computer**. For first setup, open the server's printed claim link through that tunnel; both ports remain 8080 so the expected origin matches. Do not share the link or tunnel access.
+
+An HTTPS reverse proxy is an advanced alternative: explicitly set `PANEL_PUBLIC_URL` to its HTTPS origin, preserve the matching Host and browser Origin, and restart the service. Forwarded headers are never trusted as authority. Merely forwarding a public HTTP port is not a safe substitute.
+
+### Recovering the administrator account
+
+Forgot the password? Stop the running bot **before** recovery, so two processes do not open the same database:
+
+```sh
+docker compose stop bot
+docker compose run --rm bot panel reset-password
+docker compose up -d
+```
+
+Save the random replacement password printed **once**, then log in with it. Recovery retains the existing administrator account and conversation memory while invalidating old sessions. For a binary, stop it, run `./discord-bot panel reset-password` (Windows: `.\discord-bot.exe panel reset-password`) in the same data folder, then start it again.
+
+The administrator password is protected with Argon2id in a reserved table in the **same `durum/hafiza.redb` database** as memory, not a separate panel database. A database error fails closed: it does not open anonymous setup or silently replace memory with an empty database. Keys remain plaintext in the private config file because the bot needs them; the password hash does not protect those keys. Treat state-volume and configuration backups as sensitive. A state backup also includes the administrator account; never delete memory as a password-recovery shortcut.
 
 ## 6. Invite it to your server
 
-Open the invite link printed by the wizard in your browser. Choose your server and follow Discord's permission and approval prompts.
-
-If you missed the link, run `docker compose logs -f` in the `mybot` folder. When the bot is not in any server yet, it prints the invite link again during startup. Press Ctrl+C to leave the log view; this does not stop the bot.
+Use **Add to server** in the browser wizard before clicking Start. If you need the invite again, log in to the panel, return to **Setup**, and test the token again. Gateway/member progress appears on **Overview** after starting; a token test alone does not prove that the intents and channel permissions work.
 
 - [ ] The bot appears in my server's member list.
 - [ ] The bot can see and send messages in the channel where I want to talk.
@@ -202,25 +257,19 @@ On older Windows PowerShell, run the two update commands on separate lines: firs
 
 First, check **Bot → Privileged Gateway Intents** in the Developer Portal. Both **Message Content Intent** and **Server Members Intent** must be on. Save changes, then run `docker compose restart` from `mybot`.
 
-If an intent is off, Discord may reject the connection entirely. Check channel read/write permissions, `.env` scope filters, and that `STEALTH` is off; retry `/status`. If status works but chat does not, check logs for provider errors/exhausted limits and consider the sleep schedule. Ordinary chat is not a deterministic health check.
+If an intent is off, Discord may reject the connection entirely. Check channel read/write permissions, `config/.env` scope filters (or the binary's `.env`), and that `STEALTH` is off; retry `/status`. If status works but chat does not, check logs for provider errors/exhausted limits and consider the sleep schedule. Ordinary chat is not a deterministic health check.
 
-### It says “DISCORD_TOKEN is missing”. What does that mean?
+### Configuration is missing or invalid. What does that mean?
 
-The bot could not find its password. Check that `.env` exists in `mybot` and run from that folder. An existing-file refusal leaves your settings unchanged: edit `.env` directly, or back it up privately before rerunning `init --force` to replace it. Then run `docker compose up -d`.
+The panel remains available for missing or invalid bot credentials, so log in to finish setup or repair Settings. After saving changes to an existing configuration, restart the bot. Panel availability does not mean the Discord connection is healthy.
 
-For a downloaded binary or a source build, run `init` and start the bot from the same folder. Do not rename `.env` to `.env.txt`.
+For Compose, check `config/.env` and the writable directory mount's ownership. Process environment values (including retained `env_file` settings) take precedence and are read-only in the panel; a file save cannot override them. A panel bind/config-file/database failure can prevent the panel itself from opening—check the console rather than assuming every failure is recoverable in the browser.
 
-### Windows says `$(id -u)` does not work. What should I paste?
-
-That part of the Mac/Linux command finds your computer's user number. PowerShell does not use it. Run this instead, from `mybot`:
-
-```powershell
-docker run --rm -it -v "${PWD}:/data" ghcr.io/krxi/discord-bot:latest init
-```
+With `PANEL_ENABLED=off`, startup still requires valid bot/model credentials. For a binary, run `init` in its usual working folder to create `.env`; Compose loads `config/.env` through `PANEL_CONFIG_PATH`. Do not rename `.env` to `.env.txt`. `init` refuses an existing file unless you explicitly use `init --force`; back up your settings privately before replacing them.
 
 ### How do I see the logs?
 
-Run `docker compose logs -f` from `mybot`. **Logs** are the bot's running activity and error messages. Press Ctrl+C to stop watching. Do not share tokens, API keys, or private conversation text when asking for help.
+Run `docker compose logs -f` from `mybot`. **Logs** are the bot's running activity and error messages. Press Ctrl+C to stop watching. The authenticated panel's **Logs** page shows a bounded recent buffer, not historical container logs. Do not share claim links, passwords, tokens, API keys, or private conversation text when asking for help.
 
 ## Where your memories live
 
@@ -246,7 +295,7 @@ On Windows PowerShell, replace the tar command with:
 docker run --rm -v discord-bot-data:/data:ro -v "${PWD}:/backup" ubuntu tar czf /backup/durum-backup.tar.gz -C /data .
 ```
 
-This writes `durum-backup.tar.gz`. Protect it like member data; use a different filename to keep earlier backups. Save `.env` separately and privately. Restore procedures below have not been exercised in a live deployment.
+This writes `durum-backup.tar.gz`, including memory and the panel administrator account. Protect it like member data; use a different filename to keep earlier backups. Save `config/.env` separately and privately (or `.env` for a binary). Restore procedures below have not been exercised in a live deployment.
 
 ### Restore a backup
 
@@ -255,17 +304,20 @@ Stop the bot, inspect the destination volume, and save a separate copy of its cu
 ```sh
 docker compose down
 docker volume inspect discord-bot-data
-docker run --rm -v discord-bot-data:/data -v "$PWD:/backup:ro" ubuntu sh -c 'test -z "$(find /data -mindepth 1 -print -quit)" && tar xzf /backup/durum-backup.tar.gz -C /data'
+docker run --rm -v discord-bot-data:/data -v "$PWD:/backup:ro" ubuntu sh -c 'test -z "$(find /data -mindepth 1 -print -quit)" && tar xzf /backup/durum-backup.tar.gz -C /data && chown -R 10001:10001 /data'
 docker compose up -d
 ```
 
-For PowerShell, use `"${PWD}:/backup:ro"` instead of `"$PWD:/backup:ro"`. If the empty-volume check fails, nothing is extracted: do not bypass it without first preserving the current data. Use `/status` and `/mind` after startup to inspect the result.
+For PowerShell, use `"${PWD}:/backup:ro"` instead of `"$PWD:/backup:ro"`. The restore assigns the data to the container's UID/GID `10001`, including when the old installation ran as a different user. If the empty-volume check or extraction fails, stop; do not start the new service or bypass the guard. Preserve the current data before choosing a different empty destination. Use `/status` and `/mind` after startup to inspect the result.
 
 ### Existing Compose installations
 
-Changing the volume name does **not** migrate data. Before adopting the new Compose file, stop the old installation and identify its existing volume (often `mybot_durum`) with `docker volume ls`; do not guess. Keep the old volume until the migrated data is confirmed.
+Changing the volume name does **not** migrate data. Before adopting the new Compose file:
 
-For example, after verifying `mybot_durum` is your old nonempty volume:
+1. Stop the service using the **old** Compose file: `docker compose stop bot`.
+2. Identify the volume actually mounted at `/data/durum`: find the old container ID with `docker compose ps -a`, then run `docker inspect --format '{{range .Mounts}}{{println .Destination .Name}}{{end}}' CONTAINER_ID` using that ID and read the `/data/durum` line. It is often `mybot_durum`; do not guess from the folder name. If no container or volume name is found, locate the original storage before continuing. Avoid posting full `docker compose config` or `docker inspect` output: it can expose injected credentials. The examples below use `mybot_durum`—replace it with the name you actually found.
+3. Copy the existing `.env` into the private configuration directory using [Migrating an existing Docker `.env`](#migrating-an-existing-docker-env). Only then remove `env_file` injection when updating Compose.
+4. If the old volume already is `discord-bot-data`, keep using it: back it up, and while the bot is stopped run `docker run --rm -v discord-bot-data:/data ubuntu chown -R 10001:10001 /data` to make it accessible to the new container account. No copy/restore is needed; update Compose's config mounts and start with the same volume. Otherwise inspect and back up the **old** nonempty volume before creating the destination:
 
 ```sh
 docker volume inspect mybot_durum
@@ -274,7 +326,10 @@ docker run --rm -v mybot_durum:/data:ro -v "$PWD:/backup" ubuntu tar czf /backup
 docker volume create discord-bot-data
 ```
 
-Then use the empty-volume restore procedure above before starting the new Compose service. For PowerShell use `"${PWD}:/backup"` for the backup mount. These migration instructions are not a claim of a tested live migration.
+5. For a project-prefixed old volume, update Compose to the new directory mounts and fixed volume name. Restore the archive into `discord-bot-data` using the [empty-volume restore procedure](#restore-a-backup), then start the new service. If that name already contains data, stop: it may belong to another bot. Do not overwrite it or bypass the empty-volume check.
+6. Inspect `/status`, `/mind`, and the panel after startup. **Keep the old volume and backup** until the migrated data is confirmed; no step here deletes the original volume. Never use `docker compose down -v` or `docker volume prune` as part of the upgrade.
+
+For PowerShell use `"${PWD}:/backup"` for the backup mount. These instructions are explicit migration steps, not a claim of a tested live migration.
 
 For a binary or source build, memory lives in the local `durum/` folder. Stop the bot before copying that folder to your backup location.
 
@@ -284,7 +339,7 @@ Tell members before inviting it: accessible ordinary messages and up to 14 days 
 
 Saved data stays on your machine, but processing is **not** local. Channel histories are bounded; derived person/topic notes, summaries and archived raw text can remain after a conversation. **Selective member deletion is not supported.** `/reset` resets channel/chat state, not stored member records or archives. Do not promise members an erasure capability the bot does not have.
 
-For a complete local reset, stop the bot, delete its entire saved-data volume (or `durum/` folder for binary/source installs), and remove every backup and exported log/transcript containing the data. This is destructive and removes all members' data, not one member's. It does not delete copies already processed/retained by model services or Firecrawl; review their retention policies and deletion channels separately. Keep the bot stopped or remove its permissions to avoid recollection.
+For a complete local reset, stop the bot, delete its entire saved-data volume (or `durum/` folder for binary/source installs), and remove every backup and exported log/transcript containing the data. This is destructive and removes all members' data **and the panel administrator account**, not one member's. It does not delete copies already processed/retained by model services or Firecrawl; review their retention policies and deletion channels separately. Keep the bot stopped or remove its permissions to avoid recollection.
 
 ## Prefer not to use Docker?
 
@@ -295,18 +350,16 @@ These routes use the same token, key, and intent settings from steps 1–3.
 No Docker or Rust is needed, but a **terminal is required**. Download the matching archive from [GitHub Releases](https://github.com/krxi/discord-bot/releases): Linux x86_64 or arm64, macOS Apple Silicon, or Windows. Extract it into a private folder, open a terminal there, and run:
 
 ```sh
-./discord-bot init
 ./discord-bot
 ```
 
 On Mac or Linux, if the file is not executable, run `chmod +x discord-bot` first. On Windows PowerShell, use:
 
 ```powershell
-.\discord-bot.exe init
 .\discord-bot.exe
 ```
 
-Keep this terminal open while the bot runs. Continue with the printed invite link and step 7 above.
+Keep this terminal open while the bot runs. Open the printed one-use browser link, complete the five setup steps above, and verify `/status` as in step 7.
 
 ### Build from source
 
@@ -315,11 +368,18 @@ This route is for people who already have Git and Rust installed. From a termina
 ```sh
 git clone https://github.com/krxi/discord-bot.git
 cd discord-bot
-cargo run -- init
 cargo run --release
 ```
 
-The first build takes longer. Keep the terminal open, restrict scope in `.env`, invite it with the printed link, and verify `/status` as in step 7.
+The first build takes longer. Keep the terminal open, use the printed browser link, restrict access in setup before starting Discord, and verify `/status` as in step 7.
+
+### Headless CLI setup
+
+Browser setup is the default, but `discord-bot init` (or `cargo run -- init`) remains available for headless installations. It prompts for your Discord token, provider, API key, model, language, optional owner ID, and UTC offset. **Token and key input are hidden when run interactively in a terminal**; piped input is not a hidden terminal prompt. Do not place secrets in shell command arguments or share `.env`.
+
+The CLI writes `.env` in the current folder and refuses an existing file unless `--force` is explicit. Back up any existing file privately before replacing it. Before launching, add `PANEL_ENABLED=off`, set `GUILD_ID`/`CHANNELS` to limit access, and keep the file private (mode `600` on Unix). Blank scope means every accessible server/channel, and a blank model uses the provider's paid default. The CLI prints an invite link and intent reminders; unlike browser setup, it does not verify the token's application identity with Discord's API.
+
+For Docker, first create the private `config`/`photos` directories and complete any existing-volume migration above. Run `docker compose run --rm -it --workdir /data/config bot init` to write `config/.env` as container UID `10001`, then add `PANEL_ENABLED=off` and your access scope to that file before `docker compose up -d`. Do not reintroduce `env_file` if you want the file to remain browser-editable later. To re-enable the panel, remove or change `PANEL_ENABLED=off` and restart.
 
 ## Sources
 
