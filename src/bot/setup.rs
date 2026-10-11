@@ -2,7 +2,7 @@
 
 /// Reads and trims a required environment setting; errors name a missing/empty variable.
 fn setting(name: &str) -> Result<String, BotError> {
-    match std::env::var(name) {
+    match crate::config::runtime_value(name) {
         Ok(v) if !v.trim().is_empty() => Ok(v.trim().to_string()),
         _ => Err(format!("{name} is missing, check .env").into()),
     }
@@ -23,7 +23,7 @@ impl Bot {
         );
         // provider choice: PROVIDER=mistral forces it; otherwise whichever key is set,
         // openrouter if both are
-        let provider = std::env::var("PROVIDER").unwrap_or_default().to_lowercase();
+        let provider = crate::config::runtime_value("PROVIDER").unwrap_or_default().to_lowercase();
         let (api_url, key, default_model) = if provider == "mistral"
             || (setting("OPENROUTER_KEY").is_err() && setting("MISTRAL_KEY").is_ok())
         {
@@ -34,14 +34,14 @@ impl Bot {
         let model = setting("MODEL").unwrap_or_else(|_| default_model.to_string());
         // API_URL, if set, overrides the provider's default endpoint: for pointing an
         // OpenAI-compatible request at your own router (e.g. a local network one)
-        let api_url = match std::env::var("API_URL") {
+        let api_url = match crate::config::runtime_value("API_URL") {
             Ok(v) if !v.trim().is_empty() => v.trim().to_string(),
             _ => api_url.to_string(),
         };
         log::info!("provider: {api_url} · model: {model}");
         // read once at startup only; no command/button toggles it, and it stays fixed until the process restarts
         let image_analysis = !matches!(
-            std::env::var("IMAGE_ANALYSIS").unwrap_or_default().trim(),
+            crate::config::runtime_value("IMAGE_ANALYSIS").unwrap_or_default().trim(),
             "kapali" | "kapalı" | "off" | "hayir" | "hayır" | "0"
         );
         log::info!(
@@ -50,20 +50,20 @@ impl Bot {
         );
         // defaults to off, the opposite of IMAGE_ANALYSIS: only an explicit "on" enables it
         let stealth = matches!(
-            std::env::var("STEALTH").unwrap_or_default().trim(),
+            crate::config::runtime_value("STEALTH").unwrap_or_default().trim(),
             "acik" | "açık" | "on" | "evet" | "1"
         );
         log::info!("stealth: {}", if stealth { "on" } else { "off" });
-        let news_channel = match std::env::var("NEWS_CHANNEL") {
+        let news_channel = match crate::config::runtime_value("NEWS_CHANNEL") {
             Ok(v) if !v.trim().is_empty() => Some(RoomKey::discord(v.trim().parse()?)),
             _ => None,
         };
-        // both optional: if unset, the bot behaves as before and runs in every server/channel it can reach
-        let guild_id = match std::env::var("GUILD_ID") {
+        // Unset legacy scope retains all accessible Discord groups/channels.
+        let guild_id = match crate::config::runtime_value("GUILD_ID") {
             Ok(v) if !v.trim().is_empty() => Some(SpaceKey::discord(v.trim().parse()?)),
             _ => None,
         };
-        let allowed_channels = match std::env::var("CHANNELS") {
+        let allowed_channels = match crate::config::runtime_value("CHANNELS") {
             Ok(v) if !v.trim().is_empty() => {
                 let mut s = HashSet::new();
                 for part in v.split(',') {
@@ -81,7 +81,9 @@ impl Bot {
         // that used to be its own directory tree is now key prefixes inside hafiza.redb
         std::fs::create_dir_all(PathBuf::from(STATE_DIR).join("arsiv"))?;
         std::fs::create_dir_all(IMAGE_DIR)?;
-        memory::init_result(&PathBuf::from(STATE_DIR).join("hafiza.redb"))?;
+        if !memory::initialized() {
+            memory::init_result(&PathBuf::from(STATE_DIR).join("hafiza.redb"))?;
+        }
 
         let mut state = State::load();
         sleep::update(&mut state);
@@ -107,13 +109,13 @@ impl Bot {
             api_url,
             key,
             news_channel,
-            firecrawl: std::env::var("FIRECRAWL_KEY")
+            firecrawl: crate::config::runtime_value("FIRECRAWL_KEY")
                 .ok()
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
             guild_id,
             allowed_channels,
-            debug_channel: std::env::var("DEBUG_CHANNEL")
+            debug_channel: crate::config::runtime_value("DEBUG_CHANNEL")
                 .ok()
                 .and_then(|v| v.trim().parse::<u64>().ok())
                 .map(RoomKey::discord),

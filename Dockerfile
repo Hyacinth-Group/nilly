@@ -13,9 +13,10 @@ LABEL org.opencontainers.image.source="https://github.com/krxi/discord-bot" \
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 10001 --create-home bot \
-    && mkdir -p /data/durum /data/photos && chown -R bot:bot /data
+    && mkdir -p /data/durum /data/photos /data/config && chown -R bot:bot /data
 COPY --from=build /discord-bot /usr/local/bin/discord-bot
 USER bot
 WORKDIR /data
 VOLUME ["/data/durum"]
+EXPOSE 8787
 ENTRYPOINT ["discord-bot"]

@@ -2,6 +2,7 @@ mod agenda;
 mod agents;
 mod chat_cli;
 pub mod command;
+mod config;
 mod growth;
 mod init;
 mod lang;
@@ -9,6 +10,7 @@ mod logging;
 mod memory;
 mod memory_migration;
 mod migrate;
+mod panel;
 pub mod platform;
 mod prompts;
 mod sleep;
@@ -49,6 +51,9 @@ include!("bot/lifecycle.rs");
 /// Runs the Discord client or terminal chat bench until shutdown or failure.
 #[tokio::main]
 async fn main() -> Result<(), BotError> {
+    if panel::entry().await? {
+        return Ok(());
+    }
     dotenvy::dotenv().ok();
     logging::init();
     // panics should land in the log with a backtrace, so a background task that dies

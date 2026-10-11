@@ -1,0 +1,20 @@
+{
+  "version": "2.0.4",
+  "source": "https://github.com/bigskysoftware/htmx/tree/v2.0.4",
+  "commit": "b82cf843e47e575dd8c2ad8fee547d8e2c3bb87f",
+  "retrieval": "agent-reach GitHub CLI route; GitHub contents API pinned to tag commit",
+  "files": {
+    "htmx-2.0.4.min.js": {
+      "source_path": "dist/htmx.min.js",
+      "git_blob": "59937d712d905c314d0bbcd3c49cc8a15d0b6cdd",
+      "sha256": "e209dda5c8235479f3166defc7750e1dbcd5a5c1808b7792fc2e6733768fb447",
+      "bytes": 50917
+    },
+    "htmx-LICENSE": {
+      "source_path": "LICENSE",
+      "git_blob": "d3061a372fda562b5a1d0a85bc56c67fc0d7d3fb",
+      "sha256": "d3d2456f76414f2456104660ebd65aff1c04cd7966b942bdabd63f3cdb316a38",
+      "bytes": 642
+    }
+  }
+}

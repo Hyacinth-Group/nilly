@@ -16,12 +16,10 @@ pub fn run(args: &[String]) -> Result<(), BotError> {
 
     let stdin = io::stdin();
     let (content, app_id) = build_env(&mut stdin.lock(), stdin.is_terminal())?;
-    std::fs::write(path, content)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
+    let patch = config::Config::patch_from_dotenv(&content)?;
+    let mut settings = config::Config::load(path, &std::collections::HashMap::new())?;
+    let revision = settings.revision().to_owned();
+    settings.save_patch(&revision, &patch)?;
 
     println!("Wrote .env\n{}", next_steps(app_id));
     Ok(())
@@ -116,7 +114,7 @@ fn build_env<R: BufRead>(
             input,
             "Your Discord user ID (optional; e.g. 123456789012345678; enable Developer Mode, right-click your user and Copy User ID; owner can switch /model; Enter = skip): ",
         )?;
-        if answer.bytes().all(|byte| byte.is_ascii_digit()) {
+        if config::validate_value("OWNER_ID", &answer).is_ok() {
             break answer;
         }
     };
@@ -134,10 +132,11 @@ fn build_env<R: BufRead>(
         }
     };
 
-    let mut content = format!("DISCORD_TOKEN={token}\n{key_name}={key}\n");
-    if provider == "mistral" {
-        content.push_str("PROVIDER=mistral\n");
-    }
+    let token_value = config::encode_value("DISCORD_TOKEN", &token)?;
+    let key_value = config::encode_value(key_name, &key)?;
+    let model = config::encode_value("MODEL", &model)?;
+    let mut content = format!("DISCORD_TOKEN={token_value}\n{key_name}={key_value}\n");
+    content.push_str(&format!("PROVIDER={provider}\n"));
     content.push_str(&format!(
         "MODEL={model}\nBOT_LANG={language}\nOWNER_ID={owner}\nTZ_OFFSET={offset}\n# more options: see .env.example\n"
     ));
@@ -237,6 +236,29 @@ mod test {
     }
 
     #[test]
+    fn wizard_encodes_secrets_and_reasks_zero_owner() {
+        let mut input = io::Cursor::new(b"token # comment\n\nkey $HOME \"quoted\"\n\n\n0\n42\n\n");
+        let (content, _) = build_env(&mut input, false).unwrap();
+        let patch = config::Config::patch_from_dotenv(&content).unwrap();
+        assert!(
+            matches!(&patch["DISCORD_TOKEN"], config::PatchValue::Replace { value } if value == "token # comment")
+        );
+        assert!(
+            matches!(&patch["OPENROUTER_KEY"], config::PatchValue::Replace { value } if value == "key $HOME \"quoted\"")
+        );
+        assert!(
+            matches!(&patch["OWNER_ID"], config::PatchValue::Replace { value } if value == "42")
+        );
+        assert!(content.contains("PROVIDER=openrouter\n"));
+    }
+
+    #[test]
+    fn wizard_rejects_null_secret_before_serializing() {
+        let mut input = io::Cursor::new(b"token\0injected\n\nkey\n\n\n\n\n");
+        assert!(build_env(&mut input, false).is_err());
+    }
+
+    #[test]
     fn build_env_keeps_explicit_free_model_and_trims_piped_secrets() {
         let answers = format!(
             "  token  \r\nopenrouter\r\n  sk-test  \r\n{FREE_OPENROUTER_MODEL}\r\n\r\n\r\n\r\n"
@@ -244,7 +266,7 @@ mod test {
         let (content, app_id) = build_env(&mut io::Cursor::new(answers), false).unwrap();
         assert_eq!(
             content,
-            format!("DISCORD_TOKEN=token\nOPENROUTER_KEY=sk-test\nMODEL={FREE_OPENROUTER_MODEL}\nBOT_LANG=en\nOWNER_ID=\nTZ_OFFSET=0\n# more options: see .env.example\n")
+            format!("DISCORD_TOKEN=token\nOPENROUTER_KEY=sk-test\nPROVIDER=openrouter\nMODEL={FREE_OPENROUTER_MODEL}\nBOT_LANG=en\nOWNER_ID=\nTZ_OFFSET=0\n# more options: see .env.example\n")
         );
         assert_eq!(app_id, None);
     }

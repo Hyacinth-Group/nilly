@@ -29,8 +29,10 @@ use std::sync::{Mutex, OnceLock};
 const CONTENT: TableDefinition<&str, &str> = TableDefinition::new("content");
 // path -> unix seconds of last write; replaces filesystem mtime for "most recently changed" ordering
 const MODIFIED: TableDefinition<&str, u64> = TableDefinition::new("modified");
+const PANEL_ADMIN: TableDefinition<&str, &str> = TableDefinition::new("panel_admin");
 
 static DB: OnceLock<Database> = OnceLock::new();
+static INIT_LOCK: Mutex<()> = Mutex::new(());
 // arsiv/ is the one thing still written as real files (see module doc above); this guards
 // just that narrow path — redb serializes its own writers internally, no lock needed there
 static ARCHIVE_LOCK: Mutex<()> = Mutex::new(());
@@ -46,17 +48,39 @@ pub const FAVORITE_NOTE: &str = "canın ciğerin, ne yaparsa yapsın arkasındas
 
 // ---------- database open + primitives ----------
 
+/// Reports whether initialization, migration, and index regeneration completed successfully.
+pub fn initialized() -> bool {
+    DB.get().is_some()
+}
+
 /// Opens the database exclusively, completes identity migration, and regenerates the
 /// derived index before publishing the process-wide store. Access failures abort startup.
 pub fn init_result(path: &Path) -> Result<(), BotError> {
-    if DB.get().is_some() {
+    let _guard = INIT_LOCK
+        .lock()
+        .map_err(|_| "memory initialization lock poisoned")?;
+    if initialized() {
         return Err("memory database is already initialized".into());
     }
-    let database = Database::create(path)?;
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        builder.create(parent)?;
+    }
+    let database = open_private_database(path)?;
     let txn = database.begin_write()?;
     {
         txn.open_table(CONTENT)?;
         txn.open_table(MODIFIED)?;
+        txn.open_table(PANEL_ADMIN)?;
     }
     txn.commit()?;
     crate::memory_migration::migrate_database(&database, path)?;
@@ -65,8 +89,26 @@ pub fn init_result(path: &Path) -> Result<(), BotError> {
         .map_err(|_| -> BotError { "memory database is already initialized".into() })
 }
 
-/// Panics when internal runtime code is called before successful initialization.
-fn db() -> &'static Database {
+/// Creates or opens an active database or backup without exposing its authentication data.
+pub(crate) fn open_private_database(path: &Path) -> Result<Database, BotError> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(Database::builder().create_file(file)?)
+}
+
+/// The panel and bot always use this same process-wide handle.
+pub(crate) fn db() -> &'static Database {
     DB.get().expect("memory::init_result wasn't called")
 }
 

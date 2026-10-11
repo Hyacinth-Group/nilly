@@ -5,7 +5,7 @@ use crate::platform::{
     types::{RoomKey, SpaceKey, UserKey},
 };
 use crate::BotError;
-use redb::{Database, ReadableTable, TableDefinition, WriteTransaction};
+use redb::{Database, ReadableTable, TableDefinition, TableHandle, WriteTransaction};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
@@ -17,6 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const CONTENT: TableDefinition<&str, &str> = TableDefinition::new("content");
 const MODIFIED: TableDefinition<&str, u64> = TableDefinition::new("modified");
 const METADATA: TableDefinition<&str, u64> = TableDefinition::new("memory_metadata");
+const PANEL_ADMIN: TableDefinition<&str, &str> = TableDefinition::new("panel_admin");
 const VERSION_KEY: &str = "schema_version";
 const CURRENT_VERSION: u64 = 2;
 static BACKUP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -65,6 +66,7 @@ struct Snapshot {
     content: BTreeMap<String, String>,
     modified: BTreeMap<String, u64>,
     metadata: BTreeMap<String, u64>,
+    panel_admin: Option<BTreeMap<String, String>>,
 }
 
 struct Plan {
@@ -147,10 +149,24 @@ fn snapshot(txn: &WriteTransaction) -> Result<Snapshot, BotError> {
         let (key, value) = row?;
         metadata.insert(key.value().to_owned(), value.value());
     }
+    let panel_admin = if txn
+        .list_tables()?
+        .any(|table| table.name() == PANEL_ADMIN.name())
+    {
+        let mut rows = BTreeMap::new();
+        for row in txn.open_table(PANEL_ADMIN)?.iter()? {
+            let (key, value) = row?;
+            rows.insert(key.value().to_owned(), value.value().to_owned());
+        }
+        Some(rows)
+    } else {
+        None
+    };
     Ok(Snapshot {
         content,
         modified,
         metadata,
+        panel_admin,
     })
 }
 
@@ -226,7 +242,13 @@ fn backup_directory(path: &Path) -> Result<PathBuf, BotError> {
             filename.to_string_lossy(),
             std::process::id()
         ));
-        match fs::create_dir(&directory) {
+        let mut builder = fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        match builder.create(&directory) {
             Ok(()) => return Ok(directory),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => return Err(error.into()),
@@ -236,7 +258,7 @@ fn backup_directory(path: &Path) -> Result<PathBuf, BotError> {
 
 fn save_backup(snapshot: &Snapshot, plan: &Plan, directory: &Path) -> Result<(), BotError> {
     // Never copy the open original file: these exact table rows are read under its write lock.
-    let backup = Database::create(directory.join("original.redb"))?;
+    let backup = crate::memory::open_private_database(&directory.join("original.redb"))?;
     let txn = backup.begin_write()?;
     {
         let mut content = txn.open_table(CONTENT)?;
@@ -250,6 +272,12 @@ fn save_backup(snapshot: &Snapshot, plan: &Plan, directory: &Path) -> Result<(),
         let mut metadata = txn.open_table(METADATA)?;
         for (key, value) in &snapshot.metadata {
             metadata.insert(key.as_str(), *value)?;
+        }
+        if let Some(rows) = &snapshot.panel_admin {
+            let mut panel_admin = txn.open_table(PANEL_ADMIN)?;
+            for (key, value) in rows {
+                panel_admin.insert(key.as_str(), value.as_str())?;
+            }
         }
     }
     txn.commit()?;
@@ -272,10 +300,14 @@ fn save_backup(snapshot: &Snapshot, plan: &Plan, directory: &Path) -> Result<(),
         original_index: original("INDEX.md"),
         rollback: "Stop the process; restore original.redb as the active database and use the old binary. Leave the historical arsiv directory unchanged.",
     };
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(directory.join("manifest.json"))?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(directory.join("manifest.json"))?;
     serde_json::to_writer_pretty(&mut file, &manifest)?;
     file.write_all(b"\n")?;
     file.sync_all()?;
@@ -352,7 +384,7 @@ pub(crate) fn migrate_database(db: &Database, path: &Path) -> Result<MigrationOu
 #[cfg(test)]
 mod tests {
     use super::*;
-    use redb::ReadableDatabase;
+    use redb::{ReadableDatabase, ReadableTableMetadata};
 
     struct Fixture {
         root: PathBuf,
@@ -420,6 +452,138 @@ mod tests {
             .unwrap()
             .map(|v| v.value());
         version
+    }
+
+    #[test]
+    fn panel_v1_auth_survives_migration_and_usable_rollback_backup() {
+        use argon2::{
+            password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+            Argon2,
+        };
+
+        let fixture = Fixture::new("panel-auth-rollback");
+        let db = fixture.db();
+        seed(&db, &[("kisiler/1.md", "owned memory", Some(77))]);
+        let password = b"existing-panel-owner-password";
+        let salt = SaltString::encode_b64(b"panel-v1-test-salt").unwrap();
+        let hash = Argon2::default()
+            .hash_password(password, &salt)
+            .unwrap()
+            .to_string();
+        let txn = db.begin_write().unwrap();
+        {
+            let mut panel_admin = txn.open_table(PANEL_ADMIN).unwrap();
+            panel_admin.insert("password_hash", hash.as_str()).unwrap();
+            panel_admin
+                .insert("ownership_marker", "original owner")
+                .unwrap();
+            txn.open_table(METADATA)
+                .unwrap()
+                .insert(VERSION_KEY, 1)
+                .unwrap();
+        }
+        txn.commit().unwrap();
+        let before = rows(&db);
+        let assert_owner = |database: &Database| {
+            let txn = database.begin_read().unwrap();
+            let table = txn.open_table(PANEL_ADMIN).unwrap();
+            assert_eq!(table.len().unwrap(), 2);
+            assert_eq!(
+                table.get("ownership_marker").unwrap().unwrap().value(),
+                "original owner"
+            );
+            let stored_hash = table.get("password_hash").unwrap().unwrap();
+            assert_eq!(stored_hash.value(), hash);
+            Argon2::default()
+                .verify_password(password, &PasswordHash::new(stored_hash.value()).unwrap())
+                .unwrap();
+        };
+        let MigrationOutcome::Migrated { backup_dir } =
+            migrate_database(&db, &fixture.path()).unwrap()
+        else {
+            panic!("expected panel v1 migration backup");
+        };
+        assert_owner(&db);
+        assert_eq!(version(&db), Some(2));
+        assert_eq!(
+            migrate_database(&db, &fixture.path()).unwrap(),
+            MigrationOutcome::Unchanged
+        );
+        assert_owner(&db);
+        let backup_path = backup_dir.join("original.redb");
+        let backup = Database::open(&backup_path).unwrap();
+        assert_owner(&backup);
+        assert_eq!(rows(&backup), before);
+        assert_eq!(version(&backup), Some(1));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&backup_dir).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+            for path in [&backup_path, &backup_dir.join("manifest.json")] {
+                assert_eq!(
+                    fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+        }
+        // Restore only while both database handles are closed, as required by rollback.
+        drop(backup);
+        drop(db);
+        fs::copy(&backup_path, fixture.path()).unwrap();
+        let restored = Database::open(fixture.path()).unwrap();
+        assert_owner(&restored);
+        assert_eq!(rows(&restored), before);
+        assert_eq!(version(&restored), Some(1));
+    }
+
+    #[test]
+    fn malformed_panel_ownership_table_aborts_cutover() {
+        let fixture = Fixture::new("panel-auth-type-error");
+        let db = fixture.db();
+        seed(&db, &[("kisiler/1.md", "original body", Some(77))]);
+        let malformed: TableDefinition<&str, u64> = TableDefinition::new("panel_admin");
+        let txn = db.begin_write().unwrap();
+        txn.open_table(malformed)
+            .unwrap()
+            .insert("password_hash", 42)
+            .unwrap();
+        txn.open_table(METADATA)
+            .unwrap()
+            .insert(VERSION_KEY, 1)
+            .unwrap();
+        txn.commit().unwrap();
+
+        assert!(migrate_database(&db, &fixture.path()).is_err());
+        assert_eq!(version(&db), Some(1));
+        let txn = db.begin_read().unwrap();
+        let content = txn.open_table(CONTENT).unwrap();
+        assert_eq!(
+            content.get("kisiler/1.md").unwrap().unwrap().value(),
+            "original body"
+        );
+        assert!(content.get("kisiler/discord:user:1.md").unwrap().is_none());
+        assert_eq!(
+            txn.open_table(MODIFIED)
+                .unwrap()
+                .get("kisiler/1.md")
+                .unwrap()
+                .unwrap()
+                .value(),
+            77
+        );
+        assert_eq!(
+            txn.open_table(malformed)
+                .unwrap()
+                .get("password_hash")
+                .unwrap()
+                .unwrap()
+                .value(),
+            42
+        );
+        assert_eq!(fs::read_dir(&fixture.root).unwrap().count(), 1);
     }
 
     #[test]

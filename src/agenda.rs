@@ -8,7 +8,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 pub fn rss_url() -> String {
-    if let Ok(raw) = std::env::var("NEWS_RSS") {
+    if let Ok(raw) = crate::config::runtime_value("NEWS_RSS") {
         let raw = raw.trim();
         if !raw.is_empty() {
             return raw.to_string();

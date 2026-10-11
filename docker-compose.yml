@@ -3,9 +3,15 @@ services:
     image: ghcr.io/krxi/discord-bot:latest
     build: .
     restart: unless-stopped
-    env_file: .env
+    environment:
+      PANEL_BIND: 0.0.0.0
+      PANEL_PORT: "8787"
+      PANEL_CONFIG_PATH: /data/config/.env
+    ports:
+      - "127.0.0.1:8787:8787"
     volumes:
       - durum:/data/durum
+      - ./config:/data/config
       - ./photos:/data/photos:ro
 volumes:
   durum:

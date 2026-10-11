@@ -12,11 +12,11 @@ It is an AI bot, not a human server member. The default persona answers identity
 
 ## Data flow and privacy
 
-> **Before inviting it, tell members which channels it can read.** Set `CHANNELS` before first launch. Blank `GUILD_ID` / `CHANNELS` means every server / channel the bot can access, not just conversations addressed to it.
+> **Before inviting it, tell members which channels it can read.** Set `CHANNELS` in browser setup before starting the bot. Blank `GUILD_ID` / `CHANNELS` means every server / channel the bot can access, not just conversations addressed to it.
 
 | Destination | What it receives or keeps |
 |---|---|
-| Your machine | Person/topic notes, summaries and channel history in `durum/hafiza.redb`; overflow text in `durum/arsiv/` and any backups you make. |
+| Your machine | Person/topic notes, summaries, channel history and panel authentication in `durum/hafiza.redb`; overflow text in `durum/arsiv/` and any backups you make. Bot/model keys in a private `.env` (Docker: `config/.env`). |
 | Model service | Selected chat text and saved notes for replies and background analysis. With OpenRouter, the serving model provider also processes the request. Attached images can be included: image analysis defaults on (`IMAGE_ANALYSIS=off` disables it). |
 | Firecrawl, if configured | Page URLs and search queries for web reading/search. |
 
@@ -34,7 +34,7 @@ The baseline persona and growth thresholds are defined in the source. This is a 
 
 We have not published a measured running cost yet. Replies and background analysis both use your model key. Start with a provider spending limit and check the provider's usage dashboard.
 
-The wizard's default models are **paid**. An OpenRouter example verified in the live catalog on 11 October 2026 is `google/gemma-4-31b-it:free`; availability and limits can change, and it has not been tested end-to-end with this bot. Background calls can exhaust free limits too. Hosting may have a separate cost.
+The setup defaults are **paid** models. An OpenRouter example verified in the live catalog on 11 October 2026 is `google/gemma-4-31b-it:free`; availability and limits can change, and it has not been tested end-to-end with this bot. Background calls can exhaust free limits too. Hosting may have a separate cost.
 
 ## Quick start — Docker
 
@@ -47,20 +47,46 @@ For macOS/Linux:
 ```sh
 mkdir mybot && cd mybot
 curl -O https://raw.githubusercontent.com/krxi/discord-bot/main/docker-compose.yml
-docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/data" ghcr.io/krxi/discord-bot:latest init
+mkdir -p config photos
 ```
 
-Before starting, open the generated `.env` and restrict `GUILD_ID` and `CHANNELS` to the intended server/channels. Then:
+On Linux, make the configuration directory writable only by the container's UID 10001:
+
+```sh
+sudo chown 10001:10001 config
+sudo chmod 700 config
+```
+
+Docker Desktop handles ownership differently; see the [setup guide](docs/setup-guide.md). No initial `.env` or CLI wizard is needed. Start the panel:
 
 ```sh
 docker compose up -d
+docker compose logs bot
 ```
 
-Open the wizard's invite link, choose your server, and run **`/status`** (`/durum` in Turkish) in Discord to confirm it works. Then try mentioning it. Ordinary chat may be ignored, and the bot sleeps. Keep Docker running; use `docker compose logs -f` for errors.
+Open the one-use `http://localhost:8787/setup#token=…` link printed in the logs; it expires after **15 minutes**. Follow the five steps: set a panel password of at least **12 characters** → verify Discord token → verify provider key → configure language/timezone, owner, access restrictions and news → invite and start. Once saved, the panel password survives interrupted setup; log in to resume. Setup starts the bot without a process restart. Credential tests verify Discord application identity and provider authentication; they **do not make a paid completion** or prove privileged intents, model compatibility or gateway readiness.
 
-Saved data uses the stable Docker volume **`discord-bot-data`**. [Back it up before upgrading](docs/setup-guide.md#back-up-the-memory); update with `docker compose pull && docker compose up -d`. Existing installations with project-prefixed volumes need the [volume migration instructions](docs/setup-guide.md#existing-compose-installations).
+Run **`/status`** (`/durum` in Turkish) in Discord to confirm it works, then try mentioning it. Ordinary chat may be ignored, and the bot sleeps. Keep Docker running; use `docker compose logs -f` for errors.
 
-Prefer another route? [Release binary (terminal required)](docs/setup-guide.md#download-a-release) · [Build from source](docs/setup-guide.md#build-from-source).
+Compose publishes only host loopback port 8787, mounts the writable `./config` **directory** (required for atomic settings saves) and `./photos` read-only, and keeps memory and panel ownership in the stable **`discord-bot-data`** volume. [Back up before upgrading](docs/setup-guide.md#back-up-the-memory); update with `docker compose pull && docker compose up -d`. Existing installations must [migrate `.env` to private `config/.env` before removing `env_file`, and preserve the old memory volume](docs/setup-guide.md#existing-compose-installations)—never discard it to fix startup.
+
+Prefer another route? [Release binary (terminal required)](docs/setup-guide.md#download-a-release) · [Build from source](docs/setup-guide.md#build-from-source). Run the binary with no `.env` to open the same browser setup. `discord-bot init` remains available for headless setup; use `PANEL_ENABLED=off` to disable the panel.
+
+## Panel boundaries and recovery
+
+The embedded panel provides setup/repair, runtime and gateway status, per-conversation mood, validated settings with write-only secrets, live logs, account management and help. Memory/personality editors, action buttons and the dedicated usage page are **disabled** pending shared core APIs. Overview shows process-local call/token counters, not a measured running cost.
+
+Settings saves require a restart (`docker compose restart bot`); a stored `model.md` override still takes precedence. Environment values supplied at process startup override the config file and are read-only in the panel. Live logs are a bounded, redacted recent buffer, **not a durable audit trail**; they can still contain private conversation text.
+
+Use localhost or an SSH tunnel/VPN, not a public port. An HTTPS reverse proxy requires an explicit `PANEL_PUBLIC_URL` and preserved Host/Origin headers; forwarded headers are not trusted authority. See the [setup guide](docs/setup-guide.md).
+
+For password recovery, stop the bot and run `discord-bot panel reset-password` from its usual working directory, using the same `durum/hafiza.redb`. Save the replacement password printed once, then restart; existing owner identity is retained. For Docker:
+
+```sh
+docker compose stop bot
+docker compose run --rm bot panel reset-password
+docker compose up -d
+```
 
 ## Limits and reference
 

@@ -74,17 +74,28 @@ const REASONING_MANDATORY_BASE: u32 = 500;
 // budget, or this, whichever is larger
 const REASONING_BUDGET_BASE: u32 = 1500;
 /// An explicit qualified owner takes precedence; legacy numeric OWNER_ID is Discord.
-fn configured_owner(explicit: Option<&str>, legacy: Option<&str>) -> Result<Option<UserKey>, platform::types::KeyError> {
+fn configured_owner(
+    explicit: Option<&str>,
+    legacy: Option<&str>,
+) -> Result<Option<UserKey>, platform::types::KeyError> {
     if let Some(explicit) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
         return explicit.parse().map(Some);
     }
-    legacy.map(str::trim).filter(|value| !value.is_empty())
-        .map(|value| value.parse::<u64>().map(UserKey::discord).map_err(|_| platform::types::KeyError)).transpose()
+    legacy
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map(UserKey::discord)
+                .map_err(|_| platform::types::KeyError)
+        })
+        .transpose()
 }
 fn owner_id() -> Option<&'static UserKey> {
     static OWNER: std::sync::LazyLock<Option<UserKey>> = std::sync::LazyLock::new(|| {
-        let explicit = std::env::var("OWNER_KEY").ok();
-        let legacy = std::env::var("OWNER_ID").ok();
+        let explicit = crate::config::runtime_value("OWNER_KEY").ok();
+        let legacy = crate::config::runtime_value("OWNER_ID").ok();
         configured_owner(explicit.as_deref(), legacy.as_deref()).unwrap_or_else(|_| {
             log::warn!("invalid owner identity, running without an owner");
             None
@@ -139,5 +150,64 @@ mod owner_identity_tests {
         assert!(configured_owner(Some("invalid"), Some("42")).is_err());
         assert!(configured_owner(None, Some("invalid")).is_err());
         assert_eq!(configured_owner(None, None).unwrap(), None);
+        assert_eq!(configured_owner(Some(""), None).unwrap(), None);
+        assert_eq!(
+            configured_owner(Some(" discord:user:42 "), Some("invalid")).unwrap(),
+            Some(UserKey::discord(42))
+        );
+        assert_eq!(
+            configured_owner(Some("matrix:user:%40alice%3Aexample.org"), None)
+                .unwrap()
+                .unwrap()
+                .platform(),
+            PlatformKind::Matrix
+        );
+    }
+
+    #[test]
+    fn owner_reads_active_snapshot_not_later_process_environment() {
+        const CASE: &str = "DB_CORE_OWNER_SNAPSHOT_TEST";
+        if let Ok(case) = std::env::var(CASE) {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join(".env");
+            std::fs::write(
+                &path,
+                "DISCORD_TOKEN=token\nOPENROUTER_KEY=key\nOWNER_KEY=discord:user:7\nOWNER_ID=7\n",
+            )
+            .unwrap();
+            let explicit = if case == "qualified" {
+                "telegram:user:42"
+            } else {
+                ""
+            };
+            let startup_env = std::collections::HashMap::from([
+                ("OWNER_KEY".to_owned(), explicit.to_owned()),
+                ("OWNER_ID".to_owned(), "42".to_owned()),
+            ]);
+            let config = crate::config::Config::load(&path, &startup_env).unwrap();
+            crate::config::activate(config).unwrap();
+            assert_eq!(std::env::var("OWNER_KEY").unwrap(), "invalid");
+            assert_eq!(std::env::var("OWNER_ID").unwrap(), "99");
+            assert_eq!(crate::config::runtime_value("OWNER_KEY").unwrap(), explicit);
+            assert_eq!(crate::config::runtime_value("OWNER_ID").unwrap(), "42");
+            let expected = configured_owner(Some(explicit), Some("42")).unwrap().unwrap();
+            assert_eq!(owner_id(), Some(&expected));
+            assert!(is_owner(&expected));
+            assert!(!is_owner(&UserKey::discord(99)));
+            return;
+        }
+        // ACTIVE and the owner cache are process-global; isolate both owner cases.
+        let module = module_path!().split_once("::").unwrap().1;
+        let test = format!("{module}::owner_reads_active_snapshot_not_later_process_environment");
+        for case in ["qualified", "legacy"] {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &test])
+                .env(CASE, case)
+                .env("OWNER_KEY", "invalid")
+                .env("OWNER_ID", "99")
+                .status()
+                .unwrap();
+            assert!(status.success(), "owner snapshot case {case} failed");
+        }
     }
 }

@@ -81,6 +81,25 @@ impl SeenEvents {
 }
 /// Start all configured adapters once. Disconnecting one adapter leaves the rest alive.
 pub(crate) async fn run(bot: Arc<Bot>, configs: Vec<ConnectionConfig>) -> Result<(), BotError> {
+    let (sender, shutdown) = watch::channel(false);
+    let signal = tokio::spawn(async move {
+        wait_for_shutdown().await;
+        let _ = sender.send(true);
+    });
+    let result = run_with_shutdown(bot, configs, shutdown).await;
+    signal.abort();
+    let _ = signal.await;
+    result
+}
+/// The panel owns process shutdown; adapters receive this same cancellation signal.
+pub(crate) async fn run_with_shutdown(
+    bot: Arc<Bot>,
+    configs: Vec<ConnectionConfig>,
+    mut shutdown: ShutdownReceiver,
+) -> Result<(), BotError> {
+    if *shutdown.borrow() {
+        return Ok(());
+    }
     let (mut ingress, mut receiver) = EventSender::channel(256);
     let (control, mut lifecycle) = mpsc::channel(64);
     ingress.control = Some(control);
@@ -124,12 +143,11 @@ pub(crate) async fn run(bot: Arc<Bot>, configs: Vec<ConnectionConfig>) -> Result
             }
         }
     });
-    let signal = wait_for_shutdown();
-    tokio::pin!(signal);
+    // Lifecycle shutdown remains independent of slow model jobs and connection failure.
     let mut failure = None;
     while !runners.is_empty() {
         tokio::select! {
-            _=&mut signal=>{log::info!("shutting down");SHUTTING_DOWN.store(true,Ordering::SeqCst);let _=shutdown_tx.send(true);break;},
+            _=shutdown.changed()=>{log::info!("shutting down");SHUTTING_DOWN.store(true,Ordering::SeqCst);let _=shutdown_tx.send(true);break;},
             result=runners.join_next()=>match result {Some(Ok((connection,result)))=>{let _=bot.adapters.lock().unwrap_or_else(|e|e.into_inner()).set_status(&connection,super::outgoing::ConnectionStatus::Disconnected);if let Err(error)=result{log::error!("connection [{connection}]: {error}");failure=Some(error);}},Some(Err(error))=>{log::error!("adapter task: {error}");failure=Some(error.into());},None=>break}
         }
     }
