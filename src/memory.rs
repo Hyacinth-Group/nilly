@@ -500,12 +500,15 @@ where
 // ---------- topics and events ----------
 
 /// Uses the topic name as the header and its slug as the record key; appends a dated note.
+/// Preserves the latest body bytes, inserting only a missing newline before the new bullet.
 pub fn add_topic(bot: Option<&Bot>, name: &str, note: &str) -> Result<(), BotError> {
     let rel = format!("konular/{}.md", slug(name));
     update_record(bot, &rel, |existing| {
         let mut content = existing.to_owned();
         if content.is_empty() {
             content.push_str(&format!("# {name}\netiket: \n\n"));
+        } else if !content.ends_with('\n') {
+            content.push('\n');
         }
         content.push_str(&format!("- {}: {}\n", date_time(), note.trim()));
         Ok(content)
@@ -514,11 +517,17 @@ pub fn add_topic(bot: Option<&Bot>, name: &str, note: &str) -> Result<(), BotErr
 }
 
 /// Appends a timestamped channel/event entry to the current month's record.
+/// Preserves the latest body bytes, inserting only a missing newline before the new bullet.
 pub fn add_event(bot: Option<&Bot>, channel: &str, event: &str) -> Result<(), BotError> {
     update_record(bot, &format!("olaylar/{}.md", month()), |existing| {
         Ok(format!(
-            "{}- {} #{}: {}\n",
+            "{}{}- {} #{}: {}\n",
             existing,
+            if !existing.is_empty() && !existing.ends_with('\n') {
+                "\n"
+            } else {
+                ""
+            },
             date_time(),
             channel,
             event.trim()

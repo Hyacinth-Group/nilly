@@ -204,6 +204,126 @@ fn archive_failure_retains_full_displaced_body_transactionally() {
 }
 
 #[test]
+fn topic_appends_preserve_latest_edited_and_summarized_bodies_and_history() {
+    crate::memory::test::ensure_test_db();
+    let bot = bot_fixture();
+    for generated in [false, true] {
+        for (index, body) in [
+            "",
+            "# custom header",
+            "# custom header\n\nedited İstanbul 🧠  ",
+            "# custom header\n\n- summarized note",
+            "# custom header\n\n- terminated note\n",
+            "# custom header\n\n- trailing blank line\n\n",
+            "\n",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let name = format!("append-boundary-topic-{generated}-{index}");
+            let key = format!("konular/{}.md", slug(&name));
+            write_result(&key, "# obsolete topic\n- old note\n").unwrap();
+            let stale = read_versioned(&key).unwrap().unwrap();
+            let latest = if generated {
+                replace_generated(&bot, &key, stale.revision, body).unwrap()
+            } else {
+                replace_versioned(None, &key, stale.revision, body).unwrap()
+            };
+
+            add_topic(None, &name, "  new note 🧠  ").unwrap();
+            let appended = read_versioned(&key).unwrap().unwrap();
+            let prefix = if body.is_empty() {
+                format!("# {name}\netiket: \n\n")
+            } else if body.ends_with('\n') {
+                body.to_owned()
+            } else {
+                format!("{body}\n")
+            };
+            let bullet = appended.content.strip_prefix(&prefix).unwrap();
+            let (timestamp, note) = bullet.strip_prefix("- ").unwrap().split_once(": ").unwrap();
+            assert_eq!(timestamp.len(), 19);
+            assert_eq!(note, "new note 🧠\n");
+            assert_eq!(bullet.lines().count(), 1);
+            assert_eq!(appended.revision, latest.revision + 1);
+            let displaced = historical_snapshot(&key, latest.revision);
+            assert_eq!(displaced.content, body);
+            assert_eq!(displaced.modified, latest.modified);
+            assert_eq!(
+                historical_snapshot(&key, stale.revision).content,
+                stale.content
+            );
+            assert!(matches!(
+                replace_versioned(None, &key, stale.revision, "stale topic"),
+                Err(MutationError::Conflict(current))
+                    if current.revision == appended.revision
+                        && current.content == appended.content
+            ));
+        }
+    }
+}
+
+#[test]
+fn monthly_event_appends_preserve_latest_edited_and_summarized_bodies_and_history() {
+    crate::memory::test::ensure_test_db();
+    let bot = bot_fixture();
+    let month = month();
+    let key = format!("olaylar/{month}.md");
+    for generated in [false, true] {
+        for body in [
+            "",
+            "# custom month header",
+            "# custom month header\n\nedited İstanbul 🧠  ",
+            "# custom month header\n\n- summarized event",
+            "# custom month header\n\n- terminated event\n",
+            "# custom month header\n\n- trailing blank line\n\n",
+            "\n",
+        ] {
+            write_result(&key, "# obsolete month\n- old event\n").unwrap();
+            let stale = read_versioned(&key).unwrap().unwrap();
+            let latest = if generated {
+                replace_generated(&bot, &key, stale.revision, body).unwrap()
+            } else {
+                replace_versioned(None, &key, stale.revision, body).unwrap()
+            };
+
+            add_event(None, "boundary-channel", "  new event 🧠  ").unwrap();
+            let appended = read_versioned(&key).unwrap().unwrap();
+            let prefix = if body.is_empty() || body.ends_with('\n') {
+                body.to_owned()
+            } else {
+                format!("{body}\n")
+            };
+            let bullet = appended.content.strip_prefix(&prefix).unwrap();
+            let (timestamp, event) = bullet.strip_prefix("- ").unwrap().split_once(" #").unwrap();
+            assert_eq!(timestamp.len(), 19);
+            assert_eq!(event, "boundary-channel: new event 🧠\n");
+            assert_eq!(bullet.lines().count(), 1);
+            assert_eq!(appended.revision, latest.revision + 1);
+            let displaced = historical_snapshot(&key, latest.revision);
+            assert_eq!(displaced.content, body);
+            assert_eq!(displaced.modified, latest.modified);
+            assert_eq!(
+                historical_snapshot(&key, stale.revision).content,
+                stale.content
+            );
+            let months = event_months_result(usize::MAX).unwrap();
+            let (_, events) = months.iter().find(|(name, _)| name == &month).unwrap();
+            assert_eq!(
+                events.len(),
+                body.lines().filter(|line| line.starts_with("- ")).count() + 1
+            );
+            assert_eq!(events.last().unwrap(), bullet.trim_end_matches('\n'));
+            assert!(matches!(
+                replace_versioned(None, &key, stale.revision, "stale events"),
+                Err(MutationError::Conflict(current))
+                    if current.revision == appended.revision
+                        && current.content == appended.content
+            ));
+        }
+    }
+}
+
+#[test]
 fn derived_index_and_publication_happen_only_after_durable_commit() {
     let (_directory, database) = store();
     let key = "konular/commit.md";
