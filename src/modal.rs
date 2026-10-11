@@ -827,4 +827,229 @@ mod test {
         // the larger category comes first
         assert!(result.find("many").unwrap() < result.find("few").unwrap());
     }
+
+    fn private_card(response: CreateInteractionResponseMessage) -> serde_json::Value {
+        let body = serde_json::to_value(response).unwrap();
+        assert_eq!(body["flags"], 64);
+        assert_eq!(body["attachments"], serde_json::json!([]));
+        assert_eq!(body["embeds"].as_array().unwrap().len(), 1);
+        assert_eq!(body["embeds"][0]["type"], "rich");
+        // These builders deliberately have no plain-text body or explicit mention
+        // policy; transport HTTP defaults are outside this builder fixture.
+        assert!(body.get("content").is_none());
+        assert!(body.get("allowed_mentions").is_none());
+        assert!(body.get("tts").is_none());
+        body
+    }
+
+    #[test]
+    fn help_card_is_an_ephemeral_embed_only_response() {
+        use serde_json::json;
+
+        assert_eq!(
+            private_card(help_message()),
+            json!({
+                "flags": 64,
+                "attachments": [],
+                "embeds": [{
+                    "type": "rich",
+                    "title": strings::t("help.title"),
+                    "color": 0xEB459E,
+                    "description": strings::t("help.text"),
+                    "fields": [{
+                        "name": strings::t("help.interface_label"),
+                        "value": strings::t("help.interface_text"),
+                        "inline": false,
+                    }],
+                }],
+            }),
+        );
+    }
+
+    #[test]
+    fn status_card_keeps_private_fields_and_optional_token_breakdown() {
+        use serde_json::json;
+
+        let mut state = State {
+            model: "fixture/model".into(),
+            ..Default::default()
+        };
+        let body = private_card(status_message(&state));
+        assert!(body.get("components").is_none());
+        let embed = &body["embeds"][0];
+        assert_eq!(embed["title"], strings::t("status.title"));
+        assert_eq!(embed["color"], 0x57F287);
+        let fields = embed["fields"].as_array().unwrap();
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0]["name"], strings::t("status.general_label"));
+        assert_eq!(fields[0]["inline"], true);
+        assert!(fields[0]["value"]
+            .as_str()
+            .unwrap()
+            .contains("fixture/model"));
+        assert_eq!(fields[1]["name"], strings::t("status.state_label"));
+        assert_eq!(fields[1]["inline"], true);
+        assert_eq!(fields[2]["name"], strings::t("common.token_label"));
+        assert_eq!(fields[2]["inline"], false);
+        state.metrics.categories.insert(
+            "fixture",
+            Usage {
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                ..Default::default()
+            },
+        );
+        let body = private_card(status_message(&state));
+        assert_eq!(body["embeds"][0]["fields"].as_array().unwrap().len(), 4);
+        assert_eq!(
+            body["embeds"][0]["fields"][3],
+            json!({
+                "name": strings::t("status.kirilim_label"),
+                "value": token_breakdown(&state.metrics),
+                "inline": false,
+            }),
+        );
+    }
+
+    #[test]
+    fn mind_card_keeps_private_memory_and_detail_button_ids() {
+        use serde_json::json;
+
+        memory::test::ensure_test_db();
+        let state = State {
+            bot_name: "fixture-bot".into(),
+            model: "fixture/model".into(),
+            ..Default::default()
+        };
+        let body = private_card(mind_message(&state));
+        assert_eq!(body["embeds"][0]["title"], strings::t("mind.title"));
+        assert_eq!(body["embeds"][0]["color"], 0x5865F2);
+        let fields = body["embeds"][0]["fields"].as_array().unwrap();
+        assert_eq!(fields.len(), 3);
+        for field in fields {
+            assert_eq!(field["inline"], true);
+        }
+        let rows = body["components"].as_array().unwrap();
+        // The shared test store may contain people; the detail-button row is
+        // always last, after the optional person menu.
+        assert_eq!(
+            rows.last().unwrap(),
+            &json!({
+                "type": 1,
+                "components": [
+                    {"type": 2, "style": 2, "custom_id": "mind_topics",
+                     "label": strings::t("mind.button_topics"), "disabled": false},
+                    {"type": 2, "style": 2, "custom_id": "mind_events",
+                     "label": strings::t("mind.button_events"), "disabled": false},
+                    {"type": 2, "style": 2, "custom_id": "mind_summary",
+                     "label": strings::t("mind.button_summary"), "disabled": false},
+                ],
+            }),
+        );
+    }
+
+    #[test]
+    fn settings_card_and_in_place_update_keep_the_same_body() {
+        use serde_json::json;
+
+        for (active, wire) in [
+            (ThinkingMode::Show, "goster"),
+            (ThinkingMode::Hide, "gizle"),
+            (ThinkingMode::Silent, "sessiz"),
+            (ThinkingMode::Off, "kapali"),
+        ] {
+            for debug in [false, true] {
+                for awake in [false, true] {
+                    let mut state = State {
+                        thinking_mode: active,
+                        debug,
+                        ..Default::default()
+                    };
+                    if !awake {
+                        state.plans.push(sleep::Plan {
+                            day: 0,
+                            insomnia_start: None,
+                            start: 0,
+                            end: i64::MAX,
+                        });
+                    }
+                    let private = private_card(settings_message(&state, true));
+                    let mut update = serde_json::to_value(
+                        CreateInteractionResponse::UpdateMessage(settings_message(&state, false)),
+                    )
+                    .unwrap();
+                    assert_eq!(update["type"], 7);
+                    assert_eq!(update["data"]["flags"], 0);
+                    update["data"]["flags"] = json!(64);
+                    assert_eq!(update["data"], private);
+                    assert_eq!(private["embeds"][0]["title"], strings::t("settings.title"));
+                    assert_eq!(private["embeds"][0]["color"], 0xFEE75C);
+                    let rows = private["components"].as_array().unwrap();
+                    assert_eq!(rows.len(), 2);
+                    let modes = [
+                        ("goster", "cmd.dusunme.choice.goster"),
+                        ("gizle", "cmd.dusunme.choice.gizle"),
+                        ("sessiz", "cmd.dusunme.choice.sessiz"),
+                        ("kapali", "cmd.dusunme.choice.kapat"),
+                    ];
+                    for (index, (value, key)) in modes.iter().enumerate() {
+                        assert_eq!(
+                            rows[0]["components"][index],
+                            json!({
+                                "type": 2,
+                                "custom_id": format!("setting_thinking:{value}"),
+                                "style": if *value == wire { 1 } else { 2 },
+                                "label": strings::t("settings.mode_button")
+                                    .replace("{mode}", strings::t(key)),
+                                "disabled": false,
+                            }),
+                        );
+                    }
+                    assert_eq!(rows[0]["type"], 1);
+                    assert_eq!(rows[0]["components"].as_array().unwrap().len(), 4);
+                    assert_eq!(
+                        rows[1],
+                        json!({
+                            "type": 1,
+                            "components": [
+                                {"type": 2, "custom_id": "setting_debug",
+                                 "style": if debug { 3 } else { 2 },
+                                 "label": strings::t(if debug {
+                                     "settings.debug_on_button"
+                                 } else {
+                                     "settings.debug_off_button"
+                                 }), "disabled": false},
+                                {"type": 2, "custom_id": "setting_wake", "style": 2,
+                                 "label": strings::t("settings.wake_button"), "disabled": awake},
+                                {"type": 2, "custom_id": "setting_sleep", "style": 2,
+                                 "label": strings::t("settings.sleep_button"), "disabled": !awake},
+                            ],
+                        }),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn info_embed_keeps_unicode_fitting_and_turkish_trim_marker() {
+        use serde_json::json;
+
+        assert_eq!(
+            serde_json::to_value(info_embed("fixture", "short")).unwrap(),
+            json!({
+                "type": "rich", "title": "fixture",
+                "description": "short", "color": 0x99AAB5,
+            }),
+        );
+        // Even in English, the current truncation marker is Turkish. Fitting
+        // counts Unicode scalar values, not UTF-8 bytes.
+        let text = "ğ".repeat(1100);
+        let body = serde_json::to_value(info_embed("fixture", &text)).unwrap();
+        assert_eq!(
+            body["description"],
+            format!("{}\n… (sığmadı, kırpıldı)", "ğ".repeat(1002)),
+        );
+        assert_eq!(body["description"].as_str().unwrap().chars().count(), 1024);
+    }
 }

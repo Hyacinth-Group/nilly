@@ -142,18 +142,8 @@ async fn write_stream(
             }
             Some(_) => {}
             None => {
-                let mut mentions = CreateAllowedMentions::new();
-                let mut msg = CreateMessage::new().content(content);
-                if i == 0 {
-                    if let Some(id) = reply_to {
-                        mentions = mentions.replied_user(true);
-                        msg = msg.reference_message((channel, id));
-                    }
-                }
-                match channel
-                    .send_message(&ctx.http, msg.allowed_mentions(mentions))
-                    .await
-                {
+                let msg = stream_message(channel, content, i, reply_to);
+                match channel.send_message(&ctx.http, msg).await {
                     Ok(m) => sent.push(m),
                     Err(e) => {
                         log::error!("send failed ({channel}): {e}");
@@ -168,6 +158,15 @@ async fn write_stream(
             let _ = m.delete(&ctx.http).await;
         }
     }
+}
+
+fn stream_message(
+    channel: ChannelId,
+    content: &str,
+    index: usize,
+    reply_to: Option<MessageId>,
+) -> CreateMessage {
+    discord_message(channel, content, None, reply_to.filter(|_| index == 0))
 }
 
 /// Input: `ctx: &Context`; `messages: Vec<Message>` — Discord messages to delete (consumed).
@@ -187,3 +186,131 @@ async fn delete_messages(ctx: &Context, messages: Vec<Message>) {
 // native API, or a custom router given via API_URL, offer no such guarantee: an unknown
 // field could get the whole request rejected, so it's only added when the target is the
 // openrouter URL.
+
+#[cfg(test)]
+mod discord_stream_view_fixtures {
+    use super::*;
+
+    #[test]
+    fn only_first_stream_message_references_and_pings_reply_author() {
+        let channel = ChannelId::new(7);
+        let target = MessageId::new(81);
+        let layout = stream_layout(ThinkingMode::Show, "hmm", &["selam <@42>".into()]);
+        assert_eq!(layout, vec!["||hmm||", "```\nhmm\n```", "selam <@42>"]);
+        for (index, content) in layout.iter().enumerate() {
+            let actual =
+                serde_json::to_value(stream_message(channel, content, index, Some(target))).unwrap();
+            assert_eq!(actual["content"].as_str().unwrap().as_bytes(), content.as_bytes());
+            if index == 0 {
+                // The reference goes on the thought spoiler, not the first reply line.
+                assert_eq!(
+                    actual["allowed_mentions"],
+                    serde_json::json!({
+                        "parse": [], "users": [], "roles": [], "replied_user": true
+                    })
+                );
+                assert_eq!(
+                    actual["message_reference"],
+                    serde_json::json!({
+                        "type": 0, "message_id": "81", "channel_id": "7",
+                        "guild_id": null, "fail_if_not_exists": null
+                    })
+                );
+            } else {
+                assert_eq!(
+                    actual["allowed_mentions"],
+                    serde_json::json!({"parse": [], "users": [], "roles": []})
+                );
+                assert!(actual.get("message_reference").is_none());
+            }
+        }
+        let untargeted =
+            serde_json::to_value(stream_message(channel, "@everyone", 0, None)).unwrap();
+        assert_eq!(
+            untargeted["allowed_mentions"],
+            serde_json::json!({"parse": [], "users": [], "roles": []})
+        );
+        assert!(untargeted.get("message_reference").is_none());
+    }
+
+    #[test]
+    fn thought_modes_render_exact_whitespace_and_markdown_bytes() {
+        let thought = " \tbir |iki|\n``` üç  ";
+        let lines = vec!["selam 💀".to_string(), "<@42> @everyone".to_string()];
+        assert_eq!(
+            stream_layout(ThinkingMode::Show, thought, &lines),
+            vec![
+                "||bir \\|iki\\| ``` üç||",
+                "```\nbir |iki| ``` üç\n```",
+                "selam 💀",
+                "<@42> @everyone",
+            ]
+        );
+        for mode in [ThinkingMode::Hide, ThinkingMode::Silent, ThinkingMode::Off] {
+            assert_eq!(stream_layout(mode, thought, &lines), lines);
+        }
+        for done in [false, true] {
+            assert_eq!(
+                stream_view(ThinkingMode::Show, thought, "", done),
+                vec!["Düşünüyorum..."]
+            );
+            assert_eq!(
+                stream_view(ThinkingMode::Hide, thought, "", done),
+                vec!["Düşünüyorum... Şu ana kadar 4 kelime düşündüm."]
+            );
+            for mode in [ThinkingMode::Silent, ThinkingMode::Off] {
+                assert!(stream_view(mode, thought, "", done).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn thought_split_budgets_and_spoiler_escape_expansion_are_unchanged() {
+        let thought = "ğ".repeat(MESSAGE_LIMIT - 3);
+        assert_eq!(
+            stream_layout(ThinkingMode::Show, &thought, &["he".into()]),
+            vec![
+                format!("||{}||", "ğ".repeat(MESSAGE_LIMIT - 4)),
+                "||ğ||".to_string(),
+                format!("```\n{}\n```", "ğ".repeat(MESSAGE_LIMIT - 10)),
+                format!("```\n{}\n```", "ğ".repeat(7)),
+                "he".to_string(),
+            ]
+        );
+        // Escaping happens after splitting: pipes can expand beyond MESSAGE_LIMIT.
+        let pipes = "|".repeat(MESSAGE_LIMIT - 4);
+        let layout = stream_layout(ThinkingMode::Show, &pipes, &[]);
+        assert_eq!(layout[0], format!("||{}||", "\\|".repeat(MESSAGE_LIMIT - 4)));
+        assert_eq!(layout[0].chars().count(), 2 * (MESSAGE_LIMIT - 4) + 4);
+    }
+
+    #[test]
+    fn half_line_threshold_counts_trimmed_unicode_characters() {
+        let below = format!("bir\n  {}  ", "ğ".repeat(HALF_LINE_THRESHOLD - 1));
+        let threshold = format!("bir\n  {}  ", "ğ".repeat(HALF_LINE_THRESHOLD));
+        assert_eq!(stream_slice(&below, false), "bir");
+        assert_eq!(stream_slice(&threshold, false), threshold);
+        assert_eq!(stream_slice(&below, true), below);
+        assert_eq!(
+            stream_view(ThinkingMode::Show, "hmm", "kısa", false),
+            vec!["Düşünüyorum..."]
+        );
+        assert_eq!(
+            stream_view(ThinkingMode::Show, "hmm", "kısa", true),
+            vec!["||hmm||", "```\nhmm\n```", "kısa"]
+        );
+    }
+
+    #[test]
+    fn thought_button_display_keeps_exact_truncation_and_note() {
+        assert_eq!(thought_display("bir\niki"), "```\nbir\niki\n```");
+        let note = "\n_(düşünce uzun, kısaltıldı)_";
+        let limit = MESSAGE_LIMIT - 12 - note.chars().count();
+        let exact = "ğ".repeat(limit);
+        assert_eq!(thought_display(&exact), format!("```\n{exact}\n```"));
+        assert_eq!(
+            thought_display(&format!("{exact}💀")),
+            format!("```\n{exact}\n```{note}")
+        );
+    }
+}

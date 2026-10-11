@@ -78,6 +78,37 @@ stayed folderless, directly under `src/bot/`, since it's a single file. `src/com
 `cards.rs`/`actions.rs`/`settings.rs` (command bodies), `remaining.rs`
 (`wake`/`put_to_sleep`/`set_debug`/`model_exists`).
 
+### Discord boundary characterization (step 0)
+The runtime is still Discord-only, with Serenity types and `include!` shared scope. Step 0
+adds characterization fixtures around the existing ingress and UI builders; it does not
+introduce domain IDs, a transport trait, a memory-key migration, or another platform.
+
+- **Ingress (`src/bot/tests/tests_4.rs`):** bot/webhook/DM exclusions and configured
+  guild/channel scope, Serenity's safe-content decoding, option-based global-name fallback,
+  custom-reaction labels, and first-image selection. Image eligibility is the case-sensitive
+  `image/` MIME prefix, not filename extension or dimensions; analysis-off leaves the
+  original safe text without image markers. Image-only messages retain the existing Turkish
+  marker even when the UI language is English.
+- **Slash registration (`src/command.rs`):** the ordered 16-command table and serialized
+  `CreateCommand`/option shape. All six arguments are optional; sleep has minimum 1 and no
+  maximum. Thinking choices keep `goster/gizle/sessiz/kapat` and debug keeps `ac/kapat`
+  on the wire while their labels and argument names follow `BOT_LANG`. The registration
+  itself supplies no owner permission restriction; `/model` ownership is enforced by its
+  existing executor.
+- **Private UI (`src/modal.rs`):** status, help, mind, and the initial settings card serialize
+  with ephemeral flag 64, one rich embed, empty attachments, and no plain-text content or
+  explicit allowed-mentions field. The settings refresh uses `UpdateMessage` (type 7) with
+  explicit flags 0, otherwise the same card/components. Its two button rows retain the
+  Turkish thinking-mode suffixes, active-mode/debug styles, and awake/asleep disabled states.
+  The mind detail buttons retain their existing IDs; the person-menu row is optional.
+  Status adds the token breakdown only when categories exist. Info-embed descriptions fit
+  1024 Unicode scalar values, including the existing Turkish truncation marker.
+
+These fixtures are offline builder/decoder characterizations, not live Discord API probes.
+The existing 93-test baseline is retained as an acceptance requirement; integration checks
+are recorded separately in the progress log.
+
+
 ## Shared state
 A single `Mutex<State>` (`Bot::state()` is poison-resilient). Inside it: bot name, favorite's
 name, agent outputs (profile, temperament, corrections, myself, index, agenda), raw memory

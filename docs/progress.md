@@ -4,6 +4,27 @@ Chronological. Newest at the top. Each line: date · commit (if any) · what+why
 
 ---
 
+## 2026-10-11 · Step 0 Discord boundary characterization
+Added offline fixtures around the current Discord boundary without introducing another
+platform or changing the existing command/UI contract:
+- Ingress fixtures in `src/bot/tests/tests_4.rs` capture bot/webhook/DM and guild/channel
+  filters, exact Serenity safe content, display-name fallback, case-sensitive first-image
+  MIME selection and analysis-off behavior, image markers, and custom-reaction labels.
+- `src/command.rs` now captures all 16 registrations in order, their serialized option
+  defaults/bounds, language-dependent names/labels, and unchanged Turkish choice values.
+- `src/modal.rs` now captures the private status/help/mind/settings builders, the explicit
+  flags-0 in-place settings refresh, button IDs/styles/disabled states, optional status
+  token breakdown, and the 1024-character info-embed fitting/Turkish trim marker. The mind
+  fixture reuses the existing shared one-shot test database initializer rather than creating
+  a second database convention.
+- `docs/architecture.md` records these current boundaries and quirks. Existing tests and
+  assertions are left intact; the requested 93-test baseline remains the acceptance floor.
+
+Verification: no cargo checks, tests, formatting, or live Discord calls were run by the
+fixture workers. Final integration checks and commit are left to the owner; no new-platform,
+memory migration, or transport-extraction completion is claimed.
+
+
 ## 2026-10-06 · serenity vendored
 serenity 0.12.5's crates.io source copied to `vendor/serenity/` and wired in via
 `[patch.crates-io]` in Cargo.toml, so it can be modified in-tree (user plans performance work).

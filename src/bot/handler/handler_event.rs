@@ -182,49 +182,14 @@ impl EventHandler for Handler {
     /// `self.bot.willingness`, `growth::stage`, `travel::now`, `start_chat`, `channel_note`,
     /// `self.bot.debug_note`, `self.bot.reply` (`chat_reply.rs`).
     async fn message(&self, ctx: Context, msg: Message) {
-        // bots, webhooks, and DMs are excluded, so there's no bot-to-bot loop
-        if msg.author.bot || msg.webhook_id.is_some() || msg.guild_id.is_none() {
+        let Some((text, image)) = discord_message_input(
+            &msg,
+            &ctx.cache,
+            self.bot.guild_id,
+            self.bot.allowed_channels.as_ref(),
+            self.bot.image_analysis,
+        ) else {
             return;
-        }
-        // if GUILD_ID/CHANNELS are set, only the allowed guild/channel is handled (.env, optional)
-        if self.bot.guild_id.is_some_and(|g| msg.guild_id != Some(g)) {
-            return;
-        }
-        if self
-            .bot
-            .allowed_channels
-            .as_ref()
-            .is_some_and(|k| !k.contains(&msg.channel_id))
-        {
-            return;
-        }
-        let raw_text = msg.content_safe(&ctx.cache);
-        // the first attached image goes to the model; a message that's just an image (no
-        // text) is still processed. When IMAGE_ANALYSIS is off, it's never looked at at all
-        // (Bot::image_analysis is read only at startup, no command can change it) — the
-        // message is handled as if it had no attachment at all.
-        let image = self
-            .bot
-            .image_analysis
-            .then(|| {
-                msg.attachments
-                    .iter()
-                    .find(|att| {
-                        att.content_type
-                            .as_deref()
-                            .is_some_and(|t| t.starts_with("image/"))
-                    })
-                    .map(|att| att.url.clone())
-            })
-            .flatten();
-        if raw_text.trim().is_empty() && image.is_none() {
-            return;
-        }
-        // memory, the channel note, and the chat line all carry the same text: the image marker lives inside the text
-        let text = match &image {
-            None => raw_text,
-            Some(_) if raw_text.trim().is_empty() => "[resim attı]".to_string(),
-            Some(_) => format!("[resim] {raw_text}"),
         };
         let channel = msg.channel_id;
         let name = display_name(&msg.author);
@@ -576,6 +541,55 @@ impl EventHandler for Handler {
             _ => {}
         }
     }
+}
+
+/// Decodes the existing Discord message boundary without HTTP or core-state changes.
+/// Returns the memory/chat text and first MIME image URL, or excludes the message.
+fn discord_message_input(
+    msg: &Message,
+    cache: &Arc<serenity::cache::Cache>,
+    guild_id: Option<GuildId>,
+    allowed_channels: Option<&HashSet<ChannelId>>,
+    image_analysis: bool,
+) -> Option<(String, Option<String>)> {
+    // bots, webhooks, and DMs are excluded, so there's no bot-to-bot loop
+    if msg.author.bot || msg.webhook_id.is_some() || msg.guild_id.is_none() {
+        return None;
+    }
+    // if GUILD_ID/CHANNELS are set, only the allowed guild/channel is handled (.env, optional)
+    if guild_id.is_some_and(|g| msg.guild_id != Some(g)) {
+        return None;
+    }
+    if allowed_channels.is_some_and(|k| !k.contains(&msg.channel_id)) {
+        return None;
+    }
+    let raw_text = msg.content_safe(cache);
+    // the first attached image goes to the model; a message that's just an image (no
+    // text) is still processed. When IMAGE_ANALYSIS is off, it's never looked at at all
+    // (Bot::image_analysis is read only at startup, no command can change it) — the
+    // message is handled as if it had no attachment at all.
+    let image = image_analysis
+        .then(|| {
+            msg.attachments
+                .iter()
+                .find(|att| {
+                    att.content_type
+                        .as_deref()
+                        .is_some_and(|t| t.starts_with("image/"))
+                })
+                .map(|att| att.url.clone())
+        })
+        .flatten();
+    if raw_text.trim().is_empty() && image.is_none() {
+        return None;
+    }
+    // memory, the channel note, and the chat line all carry the same text: the image marker lives inside the text
+    let text = match &image {
+        None => raw_text,
+        Some(_) if raw_text.trim().is_empty() => "[resim attı]".to_string(),
+        Some(_) => format!("[resim] {raw_text}"),
+    };
+    Some((text, image))
 }
 
 // ReactionType's own Display gives Discord's raw mention form for a custom emoji

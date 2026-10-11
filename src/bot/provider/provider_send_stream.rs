@@ -27,10 +27,7 @@ impl Bot {
         // takes effect on the next reply
         // stealth: a visible thought (spoiler, counter, button) is a bot tell, so show/hide
         // fall back to silent — the model still reasons, nothing of it reaches the channel
-        let mode = match self.state().thinking_mode {
-            ThinkingMode::Show | ThinkingMode::Hide if self.stealth => ThinkingMode::Silent,
-            m => m,
-        };
+        let (mode, live_edits) = stream_presentation(self.state().thinking_mode, self.stealth);
         let start = Instant::now();
         let mut chunk_count: u32 = 0;
         let mut first_chunk_ms: Option<u128> = None;
@@ -48,7 +45,7 @@ impl Bot {
                     }
                     // stealth: people don't type by live-editing a message, so nothing goes
                     // out until the stream is done (the final layout below sends it whole)
-                    if !self.stealth && (first || last_write.elapsed() >= STREAM_EDIT_INTERVAL) {
+                    if live_edits && (first || last_write.elapsed() >= STREAM_EDIT_INTERVAL) {
                         // strip_name returns a slice: the whole text isn't cloned on every edit
                         let layout =
                             stream_view(mode, &thought, strip_name(&text, context.bot_name), false);
@@ -89,19 +86,14 @@ impl Bot {
         // the model chose to stay silent: any messages already sent get deleted, and
         // nothing is added to history. If "tepki: 💀" and "-" arrive together, that's not
         // silence — the emoji still has to land
-        if reply.silent && reply.lines.is_empty() && reply.reaction.is_none() {
-            log::debug!("stream [{channel}]: silent");
+        if let Some(outcome) = stream_early_result(&reply) {
+            if matches!(outcome, StreamResult::Silent) {
+                log::debug!("stream [{channel}]: silent");
+            }
             delete_messages(ctx, sent).await;
             return match stream_error {
                 Some(e) => Err(e),
-                None => Ok(StreamResult::Silent),
-            };
-        }
-        if reply.is_empty() {
-            delete_messages(ctx, sent).await;
-            return match stream_error {
-                Some(e) => Err(e),
-                None => Ok(StreamResult::Empty),
+                None => Ok(outcome),
             };
         }
         // don't say the same thing twice: repeated lines are dropped; if nothing is left
@@ -163,17 +155,8 @@ impl Bot {
             if !collapsed_thought.is_empty() {
                 if let Some(last) = sent.last_mut() {
                     self.state().link_thought(last.id, collapsed_thought);
-                    let button = CreateButton::new(THOUGHT_BUTTON)
-                        .label("Düşünce Sürecini Göster")
-                        .style(ButtonStyle::Secondary);
-                    if let Err(e) = last
-                        .edit(
-                            &ctx.http,
-                            EditMessage::new()
-                                .components(vec![CreateActionRow::Buttons(vec![button])]),
-                        )
-                        .await
-                    {
+                    let button_edit = thought_button_edit();
+                    if let Err(e) = last.edit(&ctx.http, button_edit).await {
                         log::warn!("couldn't add thought button ({channel}): {e}");
                     }
                 }
@@ -212,4 +195,119 @@ impl Bot {
     // between them so they don't all land at once). On silence or an empty reply, nothing
     // is sent and it returns None. The ping only attaches to the first line (the welcome
     // message tags the new member).
+}
+
+fn stream_presentation(mode: ThinkingMode, stealth: bool) -> (ThinkingMode, bool) {
+    let mode = match mode {
+        ThinkingMode::Show | ThinkingMode::Hide if stealth => ThinkingMode::Silent,
+        mode => mode,
+    };
+    (mode, !stealth)
+}
+
+// The sender deletes provisional messages before returning either of these outcomes.
+fn stream_early_result(reply: &Reply) -> Option<StreamResult> {
+    if reply.silent && reply.lines.is_empty() && reply.reaction.is_none() {
+        Some(StreamResult::Silent)
+    } else if reply.is_empty() {
+        Some(StreamResult::Empty)
+    } else {
+        None
+    }
+}
+
+fn thought_button_edit() -> EditMessage {
+    let button = CreateButton::new(THOUGHT_BUTTON)
+        .label("Düşünce Sürecini Göster")
+        .style(ButtonStyle::Secondary);
+    EditMessage::new().components(vec![CreateActionRow::Buttons(vec![button])])
+}
+
+#[cfg(test)]
+mod discord_stream_sender_fixtures {
+    use super::*;
+
+    #[test]
+    fn stealth_suppresses_thought_modes_and_every_live_write() {
+        for mode in [
+            ThinkingMode::Show,
+            ThinkingMode::Hide,
+            ThinkingMode::Silent,
+            ThinkingMode::Off,
+        ] {
+            assert_eq!(stream_presentation(mode, false), (mode, true));
+            let (stealth_mode, live_edits) = stream_presentation(mode, true);
+            let expected = if mode == ThinkingMode::Off {
+                ThinkingMode::Off
+            } else {
+                ThinkingMode::Silent
+            };
+            assert_eq!(stealth_mode, expected);
+            assert!(!live_edits);
+            assert!(stream_view(stealth_mode, "gizli düşünce", "", false).is_empty());
+            assert_eq!(
+                stream_layout(stealth_mode, "gizli düşünce", &["selam".into()]),
+                vec!["selam"]
+            );
+        }
+    }
+
+    #[test]
+    fn provisional_thinking_and_silence_are_distinct_from_final_layout() {
+        for mode in [ThinkingMode::Show, ThinkingMode::Hide] {
+            assert!(!stream_view(mode, "bir iki", "", false).is_empty());
+            let silent = parse_reply("-");
+            assert!(matches!(
+                stream_early_result(&silent),
+                Some(StreamResult::Silent)
+            ));
+            // send_stream exits and deletes the placeholder before this Show layout
+            // could expose the thought. stream_layout itself does not decide silence.
+            if mode == ThinkingMode::Show {
+                assert_eq!(
+                    stream_layout(mode, "bir iki", &silent.lines),
+                    vec!["||bir iki||", "```\nbir iki\n```"]
+                );
+                assert_eq!(
+                    stream_view(mode, "bir iki", "-", true),
+                    vec!["||bir iki||", "```\nbir iki\n```"]
+                );
+            } else {
+                assert!(stream_layout(mode, "bir iki", &silent.lines).is_empty());
+            }
+        }
+        assert!(matches!(
+            stream_early_result(&parse_reply(" \n ")),
+            Some(StreamResult::Empty)
+        ));
+        assert!(matches!(
+            stream_early_result(&parse_reply("tepki: geçersiz")),
+            Some(StreamResult::Empty)
+        ));
+        for text in ["tepki: 💀", "tepki: 💀\n-", "selam\n-", "selam\ntepki: 💀"] {
+            assert!(stream_early_result(&parse_reply(text)).is_none());
+        }
+        let reaction = parse_reply("tepki: 💀\n-");
+        assert_eq!(reaction.protocol_text(), "tepki: 💀");
+        assert!(stream_layout(ThinkingMode::Hide, "bir iki", &reaction.lines).is_empty());
+        assert_eq!(
+            stream_layout(ThinkingMode::Show, "bir iki", &reaction.lines),
+            vec!["||bir iki||", "```\nbir iki\n```"]
+        );
+    }
+
+    #[test]
+    fn hidden_thought_button_is_components_only_with_native_secondary_style() {
+        let actual = serde_json::to_value(thought_button_edit()).unwrap();
+        assert_eq!(actual["components"][0]["type"], serde_json::json!(1));
+        let button = &actual["components"][0]["components"][0];
+        assert_eq!(button["type"], 2);
+        assert_eq!(button["style"], 2);
+        assert_eq!(button["custom_id"], "show_thought");
+        assert_eq!(button["label"], "Düşünce Sürecini Göster");
+        assert_eq!(button["disabled"], false);
+        assert!(actual.get("content").is_none());
+        assert!(actual.get("allowed_mentions").is_none());
+        assert!(actual.get("message_reference").is_none());
+    }
 }

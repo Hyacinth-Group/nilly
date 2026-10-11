@@ -214,17 +214,7 @@ impl Bot {
         file: Option<&PathBuf>,
         reply_to: Option<MessageId>, // when set, becomes a Discord reply and mentions that person
     ) {
-        let mut mentions = CreateAllowedMentions::new();
-        if let Some(u) = ping {
-            mentions = mentions.users([u]);
-        }
-        if reply_to.is_some() {
-            mentions = mentions.replied_user(true);
-        }
-        let mut msg = CreateMessage::new().content(text).allowed_mentions(mentions);
-        if let Some(id) = reply_to {
-            msg = msg.reference_message((channel, id));
-        }
+        let mut msg = discord_message(channel, text, ping, reply_to);
         if let Some(path) = file {
             match CreateAttachment::path(path).await {
                 Ok(attachment) => msg = msg.add_file(attachment),
@@ -247,4 +237,80 @@ impl Bot {
     // sends a chat reply as a stream: the message appears early and is edited at intervals.
     // thinking stays in unclipped spoiler blocks; a reply over 1900 chars is split into a
     // new message. The reply-to link and the mention only go on the first message.
+}
+
+// Keep the native mention/reference shape shared by plain sends and stream openings.
+fn discord_message(
+    channel: ChannelId,
+    text: &str,
+    ping: Option<UserId>,
+    reply_to: Option<MessageId>,
+) -> CreateMessage {
+    let mut mentions = CreateAllowedMentions::new();
+    if let Some(user) = ping {
+        mentions = mentions.users([user]);
+    }
+    if reply_to.is_some() {
+        mentions = mentions.replied_user(true);
+    }
+    let mut message = CreateMessage::new().content(text).allowed_mentions(mentions);
+    if let Some(id) = reply_to {
+        message = message.reference_message((channel, id));
+    }
+    message
+}
+
+#[cfg(test)]
+mod discord_send_fixtures {
+    use super::*;
+
+    #[test]
+    fn plain_welcome_and_reply_mention_shapes() {
+        let text = "selam <@42> <@&99> @everyone @here 💀";
+        let channel = ChannelId::new(7);
+        for (ping, reply_to, mentions, reference) in [
+            (
+                None,
+                None,
+                serde_json::json!({"parse": [], "users": [], "roles": []}),
+                None,
+            ),
+            (
+                Some(UserId::new(42)),
+                None,
+                serde_json::json!({"parse": [], "users": ["42"], "roles": []}),
+                None,
+            ),
+            (
+                None,
+                Some(MessageId::new(81)),
+                serde_json::json!({
+                    "parse": [], "users": [], "roles": [], "replied_user": true
+                }),
+                Some(serde_json::json!({
+                    "type": 0, "message_id": "81", "channel_id": "7",
+                    "guild_id": null, "fail_if_not_exists": null
+                })),
+            ),
+            (
+                Some(UserId::new(42)),
+                Some(MessageId::new(81)),
+                serde_json::json!({
+                    "parse": [], "users": ["42"], "roles": [], "replied_user": true
+                }),
+                Some(serde_json::json!({
+                    "type": 0, "message_id": "81", "channel_id": "7",
+                    "guild_id": null, "fail_if_not_exists": null
+                })),
+            ),
+        ] {
+            let actual =
+                serde_json::to_value(discord_message(channel, text, ping, reply_to)).unwrap();
+            assert_eq!(actual["content"].as_str().unwrap().as_bytes(), text.as_bytes());
+            assert_eq!(actual["allowed_mentions"], mentions);
+            assert_eq!(actual.get("message_reference"), reference.as_ref());
+            assert!(actual.get("components").is_none());
+            assert_eq!(actual["embeds"], serde_json::json!([]));
+        }
+    }
 }

@@ -856,7 +856,7 @@ pub fn over_limit() -> Vec<(&'static str, String)> {
 }
 
 #[cfg(test)]
-mod test {
+pub(crate) mod test {
     use super::*;
 
     // every test in this module shares the process-wide `DB` static, so they all open the
@@ -868,7 +868,7 @@ mod test {
     // path at once, which redb's file locking turned into a spurious "memory::init wasn't
     // called" failure for whichever thread lost the race.
     static INIT: std::sync::Once = std::sync::Once::new();
-    fn ensure_test_db() {
+    pub(crate) fn ensure_test_db() {
         INIT.call_once(|| {
             let path =
                 std::env::temp_dir().join(format!("discord-bot-test-{}.redb", std::process::id()));
