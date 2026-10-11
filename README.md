@@ -1,104 +1,109 @@
 # discord-bot
 
-A self-hosted Discord bot with conversation memory and an evolving persona.
+An AI character you add to your Discord, Telegram, Slack or Matrix group chat that remembers people, has moods and a sleep schedule, joins in on its own, and runs on your computer.
 
-[Türkçe](README.tr.md) · [Setup guide](docs/setup-guide.md) · [Releases](https://github.com/krxi/discord-bot/releases) · [Changelog](CHANGELOG.md)
+- Set it up and control it in your browser.
+- See and correct what it remembers about people.
+- Connect several chat apps to the same memory and personality.
 
-## How it works
+[Türkçe](README.tr.md) · [Step-by-step setup](docs/setup-guide.md) · [Changelog](CHANGELOG.md)
 
-discord-bot runs in a Discord server and can join conversations without a slash command. Background model calls write notes about people, topics, and the bot's previous replies; later replies use those notes alongside a fixed personality prompt. A sleep schedule and growth stages control some of its behavior. The bot is written in Rust, stores its memory locally, and uses your OpenRouter or Mistral key for model calls. Chat context leaves your machine, and background work counts toward your API usage.
+## What the controls look like
 
-It is an AI bot, not a human server member. The default persona answers identity questions honestly. There is no published Discord recording or long-term case study yet; a recording recipe is not evidence of personality improvement.
+![Browser setup with Discord, Telegram, Slack and Matrix choices](docs/images/setup-platforms.png)
 
-## Data flow and privacy
+*Actual local admin panel: choosing a chat platform during setup. No live chat or credentials are shown.*
 
-> **Before inviting it, tell members which channels it can read.** Set `CHANNELS` in browser setup before starting the bot. Blank `GUILD_ID` / `CHANNELS` means every server / channel the bot can access, not just conversations addressed to it.
+<details>
+<summary>See the overview, memory editor and personality page</summary>
 
-| Destination | What it receives or keeps |
-|---|---|
-| Your machine | Person/topic notes, summaries, channel history and panel authentication in `durum/hafiza.redb`; overflow text in `durum/arsiv/` and any backups you make. Bot/model keys in a private `.env` (Docker: `config/.env`). |
-| Model service | Selected chat text and saved notes for replies and background analysis. With OpenRouter, the serving model provider also processes the request. Attached images can be included: image analysis defaults on (`IMAGE_ANALYSIS=off` disables it). |
-| Firecrawl, if configured | Page URLs and search queries for web reading/search. |
+![Admin overview before the bot is connected](docs/images/overview.png)
 
-On its first scan it reads up to **14 days** of accessible text-channel history, subject to channel restrictions and Discord permissions. It observes messages while asleep. Local storage can retain summaries and archived material after a conversation ends. **Selective member deletion is not supported; `/reset` is not a data-erasure command.** See [storage and privacy](docs/setup-guide.md#privacy), including backups. Self-hosted does not mean local processing.
+*Actual admin panel: the Overview before a chat connection is configured. This is not a running-chat demo.*
 
-## What changes over time
+![Person memory editor with fictional Alex record](docs/images/memory-person.png)
 
-- **The notes behind its replies.** Background analysis updates a group profile, temperament notes, and corrections after conversations. Those notes become context for later replies; model weights are unchanged.
-- **What it remembers.** Person and topic records survive restarts in a local redb database. Retrieval is bounded, and old material is summarized. Archived text is kept for human inspection, not searched by the bot.
-- **When it joins in.** Ordinary messages go through a willingness check. Mentions and an ongoing conversation can bypass that check while it is awake. It can reply, react, or stay silent.
+*Actual admin panel: editing a person record. “Alex” and the saved notes are fictional demo data, not a member's conversation.*
 
-The baseline persona and growth thresholds are defined in the source. This is a prompt-and-memory experiment; useful personality change needs to be shown with real conversations over time.
+![Personality page with editable temperament and read-only context](docs/images/personality.png)
+
+*Actual admin panel: temperament editing and read-only personality context, with fictional demo notes. These screenshots show the interface, not measured personality improvement.*
+
+</details>
+
+## Start in 3 steps
+
+Install and open [Docker](https://docs.docker.com/get-started/get-docker/) first. You need permission to add a bot to your group and an AI service account/key. You will copy three commands into Terminal on Mac/Linux; [Windows PowerShell commands and platform instructions](docs/setup-guide.md#start-with-docker) are in the guide.
+
+**1. Create a folder and download the launch file.**
+
+```sh
+mkdir mybot && cd mybot && curl -O https://raw.githubusercontent.com/krxi/discord-bot/main/docker-compose.yml
+```
+
+On Linux, [prepare the writable settings folder](docs/setup-guide.md#download-the-launch-settings) before the next step. Docker Desktop users do not need the Linux ownership commands.
+
+**2. Start it.**
+
+```sh
+docker compose up -d
+```
+
+**3. Open the setup link.**
+
+```sh
+docker compose logs bot
+```
+
+Find the `http://localhost:8787/setup#token=...` link and open it in your browser on the same computer. It is private, usable once, and expires after 15 minutes. The browser wizard asks you to set an admin password, choose a chat app, enter its bot credentials and your AI key, choose which rooms it may read, then start the bot. Platform accounts still need their own setup; the wizard gives instructions. [Expired link or remote server?](docs/setup-guide.md#browser-setup)
+
+After setup, return to **http://localhost:8787** to view connections, edit memory/temperament, run actions, check usage/logs, or change settings. The panel is available only on this computer by default; do not publish port 8787 to the internet. Keep your computer and Docker running. [Verify your chat connection](docs/setup-guide.md#verify-the-connection) before relying on ordinary replies.
+
+Terminal alternative: `discord-bot init` still provides [CLI setup](docs/setup-guide.md#headless-cli-setup).
+
+Without Docker: download a [release binary](docs/setup-guide.md#download-a-release), start it from a terminal, and open its setup link; Rust is not needed.
+
+**Already running v1?** [Read the upgrade instructions first](docs/setup-guide.md#upgrading-from-v1-to-v2). Memory migrates automatically with a backup, but Compose settings now live in `config/.env`.
+
+## Choose your chat app
+
+All four use the same AI and memory. What the chat app permits is different:
+
+| App | What works | What to know before adding it |
+|---|---|---|
+| **Discord** | Chat, replies, reactions, images, slash commands and private control cards; up to 14 days of accessible history on first scan. | Enable **Message Content Intent** and **Server Members Intent**, not Presence Intent. Restrict channels before starting; blank Discord filters mean all accessible channels. |
+| **Telegram** | Group chat, replies/forum topics, allowed emoji reactions, images and private owner controls. | Disable BotFather **privacy mode** and re-add the bot, or make it a group administrator, to read ordinary messages. Approve rooms explicitly. It cannot fetch old group history. |
+| **Slack** | Channel/thread chat, reactions, images/files, bounded history and private owner controls. | Uses **Socket Mode**, an app token and a bot token. Invite it to approved channels. No Slack slash commands; use owner-only `!status` or `@bot status`. |
+| **Matrix** | Approved plaintext-room chat, replies, reactions, images, bounded history and owner controls. | **Plaintext only:** encrypted rooms and attachments are unsupported. Replies are supported, Matrix threads are not. Set an owner and approve rooms; no Discord-style buttons/menus. |
+
+Permissions can limit these features. A successful credential test is not proof that the bot can read or reply in a room. See [platform setup](docs/setup-guide.md) and [capability details](docs/architecture.md#platform-boundary).
+
+## What “remembering” means
+
+After conversations, background AI calls write notes about people, topics and the bot's replies. Later replies use selected notes alongside a fixed character prompt. You can inspect and correct notes in **Memory**, and edit its temperament in **Personality**; later background work can change those edits again.
+
+This changes context, not model weights. Recall is limited, moods belong to individual conversations, and ordinary messages may get a reply, a reaction or silence. The character is an AI bot and answers sincere identity questions honestly. [How it works](docs/architecture.md).
 
 ## Cost
 
 We have not published a measured running cost yet. Replies and background analysis both use your model key. Start with a provider spending limit and check the provider's usage dashboard.
 
-The setup defaults are **paid** models. An OpenRouter example verified in the live catalog on 11 October 2026 is `google/gemma-4-31b-it:free`; availability and limits can change, and it has not been tested end-to-end with this bot. Background calls can exhaust free limits too. Hosting may have a separate cost.
+The default models are **paid**. Free options have changing availability and limits; background calls consume those limits too. The panel reports observed usage, not a complete bill or spending cap. [Choosing a model](docs/setup-guide.md#model-keys-and-cost).
 
-## Quick start — Docker
+## Privacy and data flow
 
-You need credentials for the chat platform you choose in setup, a model API key, and running [Docker](https://docs.docker.com/get-started/get-docker/). This setup requires copying commands into Terminal or PowerShell. The [step-by-step guide](docs/setup-guide.md) explains each platform and includes Windows commands. If choosing Discord, enable **Message Content Intent** and **Server Members Intent** under Developer Portal → **Bot → Privileged Gateway Intents**; do not enable Presence Intent. Keep keys private.
+Tell members what the bot can read **before** adding it. Choose only trusted rooms: **all connected apps share one memory**, so something learned in one room may affect a reply elsewhere. Use separate installations for unrelated groups.
 
-For macOS/Linux:
+| Where | What goes there |
+|---|---|
+| Your computer | Saved notes, summaries, recent room history, retained edit history and archives; plus any backups you make. |
+| Your model service | Selected messages and saved notes for replies/analysis. Images may be sent because image analysis defaults on; turn it off in Settings if needed. OpenRouter also sends requests to the serving model provider. |
+| Firecrawl, if enabled | Page URLs and search queries for web reading/search. |
 
-```sh
-mkdir mybot && cd mybot
-curl -O https://raw.githubusercontent.com/krxi/discord-bot/main/docker-compose.yml
-mkdir -p config photos
-```
-
-On Linux, make the configuration directory writable only by the container's UID 10001:
-
-```sh
-sudo chown 10001:10001 config
-sudo chmod 700 config
-```
-
-Docker Desktop handles ownership differently; see the [setup guide](docs/setup-guide.md). No initial `.env` or CLI wizard is needed. Start the panel:
-
-```sh
-docker compose up -d
-docker compose logs bot
-```
-
-Open the one-use `http://localhost:8787/setup#token=…` link printed in the logs; it expires after **15 minutes**. Step 2 lets you choose **Discord, Telegram, Slack, or Matrix**. Telegram is a recommended beginner route: the wizard tests your BotFather-issued token with Telegram `getMe`, reports the verified bot identity, and warns when privacy may prevent ordinary group visibility; disable privacy with `/setprivacy` if needed. Slack tests the `xoxb-` bot token with `auth.test` and checks the `xapp-` app-level token with `apps.connections.open` (`connections:write`), validating credentials/WebSocket URL but not opening a persistent Socket Mode connection. Download the local [`slack-app-manifest.yml`](docs/slack-app-manifest.yml) to create the app. Matrix checks `whoami` against the bearer token and configured user ID, and supports plaintext rooms only—encrypted content is not decrypted. Telegram, Slack and Matrix room access is default-deny: explicitly approve rooms whose members have consented to shared-memory/model processing. First setup starts the runtime without restarting; adding another platform later in Settings requires saving and restarting. Credential tests do not prove live gateway/room health, permissions, provider credit or successful replies; they do not make a paid completion. Keep all platform tokens and model keys private.
-
-Run **`/status`** (`/durum` in Turkish) in Discord to confirm it works, then try mentioning it. Ordinary chat may be ignored, and the bot sleeps. Keep Docker running; use `docker compose logs -f` for errors.
-
-Compose publishes only host loopback port 8787, mounts the writable `./config` **directory** (required for atomic settings saves) and `./photos` read-only, and keeps memory and panel ownership in the stable **`discord-bot-data`** volume. [Back up before upgrading](docs/setup-guide.md#back-up-the-memory); update with `docker compose pull && docker compose up -d`. Existing installations must [migrate `.env` to private `config/.env` before removing `env_file`, and preserve the old memory volume](docs/setup-guide.md#existing-compose-installations)—never discard it to fix startup.
-
-Prefer another route? [Release binary (terminal required)](docs/setup-guide.md#download-a-release) · [Build from source](docs/setup-guide.md#build-from-source). Run the binary with no `.env` to open the same browser setup. `discord-bot init` remains available for headless setup; use `PANEL_ENABLED=off` to disable the panel.
-
-## Panel boundaries and recovery
-
-The panel provides setup/repair, runtime and connection status, per-conversation mood, validated settings with write-only secrets, live logs, account management, help, memory/personality editors, administration actions, and usage reporting. Overview counters are process-local; monetary cost is shown only if reported by the provider.
-
-First setup starts the selected platform runtime without a process restart. Saving an additional platform later in Settings requires a restart (`docker compose restart bot`); the stored `model.md` override still takes precedence. Environment values supplied at process startup override the config file and are read-only in the panel. Live logs are a bounded, redacted recent buffer, **not a durable audit trail**; they can still contain private conversation text.
-
-Settings has separate collapsed credential-test cards for Discord, Telegram, Slack and Matrix, followed by the provider test. Test supplied credentials before saving a later platform addition, or leave fields blank to test the saved effective configuration. Tests do not save settings, change wizard drafts or prove live connection/room health. Matrix browser tests require an access token; saved password login remains available in Settings and the CLI.
-
-Use localhost or an SSH tunnel/VPN, not a public port. An HTTPS reverse proxy requires an explicit `PANEL_PUBLIC_URL` and preserved Host/Origin headers; forwarded headers are not trusted authority. See the [setup guide](docs/setup-guide.md).
-
-For password recovery, stop the bot and run `discord-bot panel reset-password` from its usual working directory, using the same `durum/hafiza.redb`. Save the replacement password printed once, then restart; existing owner identity is retained. For Docker:
-
-```sh
-docker compose stop bot
-docker compose run --rm bot panel reset-password
-docker compose up -d
-```
-
-## Limits and reference
-
-- Memory retrieval has a character budget; saved material does not imply perfect recall.
-- Some persisted keys and remaining weekday/mood logic use Turkish. Travel uses a Turkish calendar and is disabled in English mode.
-- `STEALTH` means **reduced bot UI**, not passing as a human: it disables slash interactions/UI embeds and sends completed replies instead of live edits. Leave it off for `/status` verification.
-- Prompts are not a security boundary. Use channel permissions and provider spending controls.
-
-[Architecture and agents](docs/architecture.md) · [Memory formats](docs/state-files.md) · [Configuration](docs/configuration.md) · [Commands](docs/commands.md) · [Documentation index](docs/README.md)
+The bot observes approved messages even while asleep. **Selective member deletion is not supported**, and resetting a chat does not erase person records, previous versions, archives or backups. Running it yourself does not make AI processing local. [Collection, retention and removal details](docs/setup-guide.md#privacy).
 
 ## Contributing and license
 
-Fork, make a branch, and open a pull request. Docs, translations, and reproducible bug reports are welcome without Rust experience. See [CONTRIBUTING.md](CONTRIBUTING.md).
+Docs, translations and reproducible bug reports are welcome; you do not need to know Rust. For code changes, fork the project, make a branch and open a pull request. [Contribution guide](CONTRIBUTING.md) · [Technical docs](docs/README.md).
 
 MIT — see [LICENSE](LICENSE).

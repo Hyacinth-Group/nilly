@@ -1,6 +1,8 @@
 # Configuration
 
-Start the package and open its printed `http://localhost:8787/setup#token=...` link for normal browser setup. The panel starts before bot credentials are required; its administrator password is separate from platform tokens. See [setup and storage migration](setup-guide.md#5-download-and-start-the-bot). `discord-bot init` remains the [headless CLI path](setup-guide.md#headless-cli-setup), with interactive secrets hidden. [`.env.example`](../.env.example) is the advanced reference. Restart after saving Settings or editing environment settings. Treat `.env` (Compose: `config/.env`) as a password file; typed saves use mode `600` on Unix. On Windows keep the folder private and restrict access in Properties → Security.
+For normal browser setup, [start with Docker](setup-guide.md#start-with-docker), open the printed `http://localhost:8787/setup#token=...` link and follow [the five browser steps](setup-guide.md#browser-setup). The panel starts before chat credentials are required. The setup token expires after **15 minutes** and is consumed on claim, before password creation. Set a private panel administrator password of at least **12 characters**, separate from platform tokens and bot-owner identity. If the token/session is lost before saving that password, restart for a new link; once saved, log in to resume. `discord-bot init` remains the [headless CLI path](setup-guide.md#headless-cli-setup), with interactive secrets hidden and no live credential test. [`.env.example`](../.env.example) is the advanced field reference.
+
+Restart after saving Settings or editing environment settings; first browser setup starts the runtime without restarting. Treat `.env` (Compose: **`config/.env`**) as a plaintext password file. Typed saves use mode `600` on Unix, not encryption. On Windows keep the folder private with Properties → Security. [Verify the actual connection](setup-guide.md#verify-the-connection) after starting: authenticated credentials are not evidence of live room health or successful model replies.
 
 | Variable | Required | Purpose |
 |---|---|---|
@@ -32,7 +34,7 @@ Start the package and open its printed `http://localhost:8787/setup#token=...` l
 | `PANEL_CONFIG_PATH` | no | editable dotenv path, default `.env`; Compose sets `/data/config/.env` |
 | `PANEL_PUBLIC_URL` | no | explicit public HTTPS origin when using a correctly configured reverse proxy |
 
-Settings uses typed validation and atomic file replacement, preserving unrelated settings/comments. Token/key fields are write-only: blank keeps the saved value; use the explicit clear control to remove it. External process environment values take precedence over file values and appear read-only. Compose must mount the writable `config` **directory**, not a single dotenv file, and should not keep `env_file` injection for browser-editable fields. First setup starts the runtime without a process restart; saving a later platform addition in Settings requires a restart (`docker compose restart bot`). Do not expose port 8787 publicly; use an [SSH tunnel](setup-guide.md#accessing-a-remote-server). The fixed `discord-bot-data` volume requires explicit [migration](setup-guide.md#existing-compose-installations) from older project-prefixed volumes.
+Settings uses typed validation and atomic file replacement, preserving unrelated settings/comments. Token/key fields are write-only: blank keeps the saved value; use the explicit clear control to remove it. External process environment values take precedence over file values and appear read-only. Compose must mount the writable **directory** `./config:/data/config`, set `PANEL_CONFIG_PATH=/data/config/.env`, and remove `env_file: .env` injection for browser-editable fields. A single-file mount cannot support atomic replacement. Follow [old configuration migration](setup-guide.md#migrating-an-existing-docker-env) before changing an existing installation. First setup starts the runtime without a process restart; saving later Settings/platform additions requires a restart (`docker compose restart bot`). Do not expose port 8787 publicly; use an [SSH tunnel](setup-guide.md#accessing-a-remote-server). The fixed `discord-bot-data` volume requires explicit [old-volume migration](setup-guide.md#existing-compose-installations), not just a Compose name change. [Database identity conversion](setup-guide.md#upgrading-from-v1-to-v2) is a separate automatic migration.
 
 Separate collapsed Settings test cards select Discord, Telegram, Slack or Matrix explicitly, followed by the provider test. They test only the selected platform's required credentials; supplied nonblank fields are used without saving, while blank fields use saved effective values. Environment-managed fields cannot be replaced by a probe. You can test a later platform addition before saving/restarting without changing wizard drafts.
 
@@ -70,9 +72,9 @@ messages, disable privacy with BotFather `/setprivacy` → **Disable**, then
 remove and re-add the bot to existing groups; alternatively make it a group
 administrator. Configure approved rooms explicitly: blank `TELEGRAM_ROOMS`
 denies every room. First setup starts the runtime without a restart; adding
-Telegram later in Settings requires a restart. Both tokens may be set to connect
-both networks to the same brain. Approve only rooms whose members trust this
-shared memory boundary.
+Telegram later in Settings requires a restart. Configure other platforms'
+credentials alongside Telegram to connect them to the same brain. Approve only
+rooms whose members trust this shared memory boundary.
 
 ```dotenv
 TELEGRAM_TOKEN=<private token from BotFather>
@@ -158,10 +160,12 @@ and [privacy mode](https://core.telegram.org/bots/features#privacy-mode).
 ## Slack and simultaneous platforms
 
 Run `discord-bot init` and choose `slack` for terminal setup; the browser wizard
-also supports Slack. Slack prompts hide both tokens in an interactive terminal.
-Piped input is not hidden. The wizard checks `auth.test` and the app-level
-Socket Mode token; this is credential authentication, not proof of a live
-workspace connection, channel visibility or successful replies. See the
+also supports Slack. CLI prompts hide both tokens in an interactive terminal;
+piped input is not hidden, and CLI init performs no live authentication. The
+browser wizard checks `auth.test` with the bot token and `apps.connections.open`
+with the app-level token, validating the returned WebSocket URL without opening
+a persistent connection. This does not prove live workspace health, channel
+visibility or successful replies. See the
 [manifest and installation steps](setup-guide.md#slack-socket-mode); download the
 local [`slack-app-manifest.yml`](slack-app-manifest.yml) to create the app.
 
@@ -177,6 +181,46 @@ Configure `DISCORD_TOKEN`, `TELEGRAM_TOKEN` and/or the Matrix settings alongside
 The brain is shared across enabled platforms; source-qualified person and room keys prevent ID collisions, not information isolation. Only trusted, explicitly approved Slack channels should enter shared memory. Configure Discord permissions/restrictions just as carefully. Private Slack channels also require a bot invitation. The configured owner can administer using text such as `!status` or `@bot status`, with private `chat.postEphemeral` results; no Slack slash commands are registered. `OWNER_KEY` must use the workspace and user IDs, not a display name. Leaving it blank denies Slack administration, including `status`, but does not disable ordinary chat.
 
 `IMAGE_ANALYSIS=off` prevents analysis of attached images, including authenticated Slack private-file downloads. When enabled, private files are resolved through `files.info` and downloaded with the bot token only when needed; credentials and authenticated download URLs are not durable attachment identities. Slack provides no typing indicator or per-channel nickname mutation.
+
+### Slack history and capability limits
+
+Only approved channels the bot has joined are eligible for history. Retrieval
+is bounded and rate-limited, not a complete workspace export or thread archive.
+Internal customer-built and Marketplace-approved apps retain Slack's Tier 3
+history policy (50+ requests/minute). Commercially distributed non-Marketplace
+apps have a 1 request/minute, 15 messages/request policy for
+`conversations.history` and `conversations.replies`. Self-hosting alone does not
+establish the distribution classification.
+
+`SLACK_HISTORY_TIER=internal` (default) reserves at least 1 second between history
+calls with at most 100 messages/page. `restricted` reserves at least 60 seconds
+with at most 15 messages/page. Both honor HTTP 429 `Retry-After` without automatic
+request retry. Set the correct tier before launch.
+
+The adapter supports thread-aware text, uploads within Slack's limits,
+edits/deletes of its own messages and native emoji-name reactions, including
+custom names. Known Unicode reactions can map to names; unknown Unicode is
+explicitly unsupported. Raw text chunks are at most 3,900 Unicode scalars;
+escaping expansion is split to a 4,000-scalar rendered target. No typing
+indicator, per-channel nickname/profile fallback, slash commands or
+Discord-style interactive menus/modals are provided. Ephemeral results are
+recipient-only and transient, not durable private storage. See
+[capability implementation](architecture.md#slack-socket-mode-boundary).
+
+### Optional Slack integration tests
+
+Normal tests are offline. Ignored live tests require real `SLACK_APP_TOKEN` and
+`SLACK_BOT_TOKEN` supplied privately to the test process. Optional
+`SLACK_TEST_CHANNEL` permits channel-scoped probes that may create, edit, react
+to and delete bot messages:
+
+```sh
+cargo test --locked slack:: -- --ignored
+```
+
+This is an opt-in test recipe, not evidence that a live workspace was tested.
+Keep tokens out of command history/logs. Fake-token startup checks test failure
+handling, not successful Slack connection or delivery.
 
 
 ## Matrix (plaintext only)
@@ -224,8 +268,9 @@ BOT_LANG=en
 
 For password login, replace the `MATRIX_ACCESS_TOKEN` line with
 `MATRIX_PASSWORD=...`. Do not use your personal Matrix account as the bot.
-The wizard accepts a raw owner ID and writes its canonical key for you. Native
-`@`, `:`, and other reserved characters in an `OWNER_KEY` component must be
+The **CLI** asks for a raw full owner ID and encodes its canonical key. The
+browser wizard and Settings instead require the already-qualified `OWNER_KEY`.
+Native `@`, `:`, and other reserved characters in a key component must be
 percent-encoded using uppercase hex; raw `matrix:user:@owner:matrix.org` is invalid.
 An invalid nonblank `OWNER_KEY` never falls back to `OWNER_ID`.
 
@@ -299,6 +344,30 @@ cargo run -- migrate-durum [--from <dir>] [--to <redb-path>] [--dry-run] [--forc
 
 Imports the legacy Markdown tree into redb without moving or deleting the source. See [state files](state-files.md).
 
+## Upgrading from v1 to v2
+
+Back up the entire stopped state directory/volume and private configuration
+before replacing the executable/image. Docker's old project-prefixed volume
+and `env_file` configuration require [manual Compose migration](setup-guide.md#existing-compose-installations).
+The config path is now `config/.env` inside a writable directory mount, not
+`env_file` injection; external environment values would remain read-only and
+override browser saves.
+
+Database identity conversion is **automatic at startup and atomic**. Before
+cutover, the bot saves a consistent `original.redb` snapshot and `manifest.json`
+in a `hafiza.redb.migration-v2-…` directory beside the database. Successful
+conversion qualifies person/room identities by platform while preserving body
+text and timestamps. Unknown/malformed records remain and are reported;
+conflicts or backup/database errors leave the active database unchanged and
+stop cutover. Completed migration is a no-op on later starts.
+
+Keep the snapshot/manifest and full operator backup; the database snapshot does
+not include external archives/platform session files. For rollback, stop v2,
+restore a **v1** snapshot/backup and run the old version. Never run the old binary
+against v2's converted database. See the [upgrade walkthrough](setup-guide.md#upgrading-from-v1-to-v2),
+[backup/restore](setup-guide.md#back-up-the-memory) and
+[schema/rollback contract](state-files.md#identity-schema-migration-and-rollback).
+
 ## Upgrading from 1.0
 
 To preserve the previous Turkish language, UTC+3 schedule, and owner model control, add:
@@ -309,6 +378,6 @@ TZ_OFFSET=3
 OWNER_ID=<your Discord user ID>
 ```
 
-Back up saved data before upgrades. For the new Compose volume name, follow [existing-installation migration](setup-guide.md#existing-compose-installations).
+These preserve old preferences, not the database format. Follow [v1-to-v2 migration](#upgrading-from-v1-to-v2), including the stopped-instance backup and rollback requirements. `OWNER_KEY` takes precedence over legacy Discord `OWNER_ID`; invalid nonblank keys are rejected rather than falling back. For browser setup use `discord:user:<your user ID>`.
 
 Code constants and limits: [constants.md](constants.md). Commands: [commands.md](commands.md).
