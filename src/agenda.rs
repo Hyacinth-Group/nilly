@@ -1,13 +1,26 @@
-// Turkey's news agenda: reads the Sözcü RSS feed, fetches the page via firecrawl (or a
-// plain download if there's no key), and the bot writes its own take on what it read into
-// its journal (durum/gundem.md). The coach and every reply read this; it feeds the
+// News agenda: BBC World in English, Sozcu in Turkish, or a NEWS_RSS override.
+// Fetches pages via firecrawl (or a plain download if there's no key), and the bot writes
+// its own take into its journal (durum/gundem.md). The coach and every reply read this; it feeds the
 // personality too. The news agent uses the same RSS feed as its news source.
 
 use super::*;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-pub const RSS_URL: &str = "https://www.sozcu.com.tr/rss/news.xml";
+pub fn rss_url() -> String {
+    if let Ok(raw) = std::env::var("NEWS_RSS") {
+        let raw = raw.trim();
+        if !raw.is_empty() {
+            return raw.to_string();
+        }
+    }
+    match lang::Lang::current() {
+        lang::Lang::Tr => "https://www.sozcu.com.tr/rss/news.xml",
+        lang::Lang::En => "https://feeds.bbci.co.uk/news/world/rss.xml",
+    }
+    .to_string()
+}
+
 pub const AGENDA_ENTRIES: usize = 12; // how many entries stay in gundem.md, older ones go to the archive
 pub const PAGE_LIMIT: usize = 3500; // characters of a page sent to the model
 
@@ -67,14 +80,14 @@ fn tag_content(chunk: &str, tag: &str) -> Option<String> {
     Some(clean_html(&chunk[start..end]))
 }
 
-/// Fetches and parses the Sözcü RSS feed.
+/// Fetches and parses the configured RSS feed.
 /// Input: `http: &reqwest::Client`. Output: `Result<Vec<RssNews>, BotError>` — items with a
 /// non-empty title and an `http(s)` link; `Err` if the request/parse fails or nothing
 /// qualified. Uses: `tag_content`. Used by: `Bot::wander` below, `Bot::news_agent`
 /// (`agents.rs`), `Bot::research` (`chat_lookup.rs`).
 pub async fn rss(http: &reqwest::Client) -> Result<Vec<RssNews>, BotError> {
     let xml = http
-        .get(RSS_URL)
+        .get(rss_url())
         .send()
         .await?
         .error_for_status()?

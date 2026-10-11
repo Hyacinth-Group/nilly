@@ -71,7 +71,7 @@ async fn read_history(bot: &Bot, ctx: &Context, guild: &Guild) {
     let skip = collected.len().saturating_sub(MEMORY_SIZE);
     let mut state = bot.state();
     for (_, name, id, _) in collected.iter().skip(skip) {
-        if *id == FAVORITE {
+        if is_owner(*id) {
             state.favorite_name = Some(name.clone());
         }
         // live mappings take priority: the scan shouldn't overwrite them with stale info
@@ -100,7 +100,11 @@ fn default_channel(bot: &Bot, ctx: &Context) -> Option<ChannelId> {
     if let Some(k) = bot.news_channel {
         return Some(k);
     }
-    let allowed = |id: ChannelId| bot.allowed_channels.as_ref().is_none_or(|s| s.contains(&id));
+    let allowed = |id: ChannelId| {
+        bot.allowed_channels
+            .as_ref()
+            .is_none_or(|s| s.contains(&id))
+    };
     for guild_id in ctx.cache.guilds() {
         if bot.guild_id.is_some_and(|g| g != guild_id) {
             continue;

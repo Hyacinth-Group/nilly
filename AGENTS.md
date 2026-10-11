@@ -15,7 +15,7 @@ custom `API_URL` router). Personality isn't code — it comes from background ag
 file-based memory (`durum/`). Prompts live in `prompts/<lang>/*.md`, embedded at compile time
 via `include_str!` (this directory and its filenames are deliberately kept Turkish — part of
 the bot's Turkish way of operating; the code side is English, see item 8). The bot runs in a
-single language, chosen via `.env`'s `BOT_LANG` (default `tr`, item 12).
+single language, chosen via `.env`'s `BOT_LANG` (default `en`, item 12).
 
 ## Quick commands
 ```

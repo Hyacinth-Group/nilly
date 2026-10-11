@@ -3,6 +3,7 @@ mod agents;
 mod chat_cli;
 mod command;
 mod growth;
+mod init;
 mod lang;
 mod logging;
 mod memory;
@@ -54,6 +55,14 @@ async fn main() -> Result<(), BotError> {
         let trace = std::backtrace::Backtrace::force_capture();
         log::error!("PANIC: {panic_info}\n{trace}");
     }));
+    if std::env::args().nth(1).as_deref() == Some("init") {
+        let args: Vec<String> = std::env::args().skip(2).collect();
+        if let Err(e) = init::run(&args) {
+            eprintln!("init failed: {e}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     // `cargo run -- migrate-durum`: one-time import of a pre-redb durum/ markdown tree
     // into hafiza.redb (see migrate.rs). Never touches Discord.
     if std::env::args().nth(1).as_deref() == Some("migrate-durum") {
@@ -77,7 +86,13 @@ async fn main() -> Result<(), BotError> {
         bot.chat_cli().await;
         return Ok(());
     }
-    let token = setting("DISCORD_TOKEN")?;
+    let token = match setting("DISCORD_TOKEN") {
+        Ok(token) => token,
+        Err(_) => {
+            eprintln!("DISCORD_TOKEN is missing. Run `discord-bot init` (or `cargo run -- init`) to create .env.");
+            std::process::exit(1);
+        }
+    };
     let bot = Bot::setup()?;
 
     let intents = GatewayIntents::GUILDS

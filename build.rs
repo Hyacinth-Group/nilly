@@ -23,19 +23,29 @@ fn command(program: &str, args: &[&str]) -> Option<String> {
 /// `src/bot/types_settings.rs`'s `VERSION_COMMIT`/`VERSION_DATE` constants) and rebuild
 /// triggers. Uses: `command`.
 fn main() {
-    let mut commit =
-        command("git", &["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "?".into());
-    // "+" suffix when the working tree has uncommitted changes, so it's obvious exactly
-    // which code is running (git status --porcelain prints nothing when the tree is clean)
-    if command("git", &["status", "--porcelain"]).is_some() {
-        commit.push('+');
-    }
+    println!("cargo:rerun-if-env-changed=BUILD_COMMIT");
+    let supplied_commit = std::env::var("BUILD_COMMIT")
+        .ok()
+        .filter(|value| !value.is_empty());
+    let commit = if let Some(value) = supplied_commit.as_ref() {
+        value.chars().take(7).collect::<String>()
+    } else {
+        let mut commit =
+            command("git", &["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "?".into());
+        // "+" marks uncommitted changes in builds using the working tree.
+        if command("git", &["status", "--porcelain"]).is_some() {
+            commit.push('+');
+        }
+        commit
+    };
     let date = command("date", &["+%Y-%m-%d"]).unwrap_or_else(|| "?".into());
     println!("cargo:rustc-env=VERSION_COMMIT={commit}");
     println!("cargo:rustc-env=VERSION_DATE={date}");
     // rebuild when the commit changes (HEAD itself and whichever branch is currently checked out)
     println!("cargo:rerun-if-changed=.git/HEAD");
-    if let Some(branch) = command("git", &["symbolic-ref", "-q", "HEAD"]) {
-        println!("cargo:rerun-if-changed=.git/{branch}");
+    if supplied_commit.is_none() {
+        if let Some(branch) = command("git", &["symbolic-ref", "-q", "HEAD"]) {
+            println!("cargo:rerun-if-changed=.git/{branch}");
+        }
     }
 }

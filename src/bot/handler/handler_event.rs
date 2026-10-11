@@ -25,6 +25,12 @@ impl EventHandler for Handler {
                 .unwrap_or_else(|| data.user.name.clone());
         }
         log::info!("logged in: {}", data.user.name);
+        if data.guilds.is_empty() {
+            log::warn!(
+                "not in any server yet, invite me: {}",
+                init::invite_url(data.application.id.get())
+            );
+        }
 
         // slash commands (/durum /yardim /zihin): registered per guild, idempotent. In
         // stealth the command API isn't touched at all
@@ -128,7 +134,7 @@ impl EventHandler for Handler {
         let name = display_name(&member.user);
         {
             let mut state = self.bot.state();
-            if member.user.id.get() == FAVORITE {
+            if is_owner(member.user.id.get()) {
                 state.favorite_name = Some(name.clone());
             }
             if state.chats.contains_key(&channel) {
@@ -197,16 +203,20 @@ impl EventHandler for Handler {
         // text) is still processed. When IMAGE_ANALYSIS is off, it's never looked at at all
         // (Bot::image_analysis is read only at startup, no command can change it) — the
         // message is handled as if it had no attachment at all.
-        let image = self.bot.image_analysis.then(|| {
-            msg.attachments
-                .iter()
-                .find(|att| {
-                    att.content_type
-                        .as_deref()
-                        .is_some_and(|t| t.starts_with("image/"))
-                })
-                .map(|att| att.url.clone())
-        }).flatten();
+        let image = self
+            .bot
+            .image_analysis
+            .then(|| {
+                msg.attachments
+                    .iter()
+                    .find(|att| {
+                        att.content_type
+                            .as_deref()
+                            .is_some_and(|t| t.starts_with("image/"))
+                    })
+                    .map(|att| att.url.clone())
+            })
+            .flatten();
         if raw_text.trim().is_empty() && image.is_none() {
             return;
         }
@@ -234,12 +244,14 @@ impl EventHandler for Handler {
                     .any(|a| !a.is_empty() && text.to_lowercase().contains(&a.to_lowercase()));
             state.growth.messages += 1;
             remember(&mut state, &name, &text);
-            state.name_to_id.insert(name.to_lowercase(), msg.author.id.get());
+            state
+                .name_to_id
+                .insert(name.to_lowercase(), msg.author.id.get());
             state
                 .usernames
                 .insert(msg.author.id.get(), msg.author.name.clone());
             state.last_channel = Some(channel);
-            if msg.author.id.get() == FAVORITE {
+            if is_owner(msg.author.id.get()) {
                 state.favorite_name = Some(name.clone());
             }
 
@@ -418,7 +430,11 @@ impl EventHandler for Handler {
         if add_reaction.guild_id.is_none() || add_reaction.message_author_id != Some(bot_id) {
             return;
         }
-        if self.bot.guild_id.is_some_and(|g| add_reaction.guild_id != Some(g)) {
+        if self
+            .bot
+            .guild_id
+            .is_some_and(|g| add_reaction.guild_id != Some(g))
+        {
             return;
         }
         if self
@@ -462,7 +478,9 @@ impl EventHandler for Handler {
             state
                 .name_to_id
                 .insert(name.to_lowercase(), reactor.id.get());
-            state.usernames.insert(reactor.id.get(), reactor.name.clone());
+            state
+                .usernames
+                .insert(reactor.id.get(), reactor.name.clone());
             remember(&mut state, &name, &text);
             if let Some(chat) = state.chats.get_mut(&channel) {
                 chat.history.push(user(format!("{name}: {text}")));
@@ -496,7 +514,10 @@ impl EventHandler for Handler {
         }
         match interaction {
             Interaction::Command(cmd) => {
-                match command::definitions().iter().find(|k| k.name == cmd.data.name) {
+                match command::definitions()
+                    .iter()
+                    .find(|k| k.name == cmd.data.name)
+                {
                     Some(k) => (k.run)(&self.bot, &ctx, &cmd).await,
                     None => log::warn!("unknown slash command: {}", cmd.data.name),
                 }
@@ -531,7 +552,8 @@ impl EventHandler for Handler {
                         Some(modal::summary_modal(&state))
                     }
                     modal::MIND_PERSON_PICK => {
-                        let ComponentInteractionDataKind::StringSelect { values } = &component.data.kind
+                        let ComponentInteractionDataKind::StringSelect { values } =
+                            &component.data.kind
                         else {
                             return;
                         };

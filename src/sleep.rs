@@ -1,11 +1,43 @@
-// Sleep schedule: same as ours. Normally asleep at 01:00, up at 09:00 (±45 min jitter).
+// Sleep schedule: local time from TZ_OFFSET. Normally asleep at 01:00, up at 09:00 (±45 min jitter).
 // Rarely, a sleepless night: up from 01-06, then asleep 06-13 instead. The odds of
 // insomnia scale with the bot's mood: more likely when it's hurt, on edge, or fixated.
 // No writing, no joining in, no news while asleep; a mention gets a reply once it wakes up.
 
 use super::*;
 
-pub const TIMEZONE_OFFSET: i64 = 3 * 3600; // turkey, utc+3
+/// Parses hours from UTC into seconds, including fractional offsets.
+pub fn parse_offset(raw: &str) -> Option<i64> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Some(0);
+    }
+    let hours: f64 = raw.parse().ok()?;
+    (-12.0..=14.0)
+        .contains(&hours)
+        .then(|| (hours * 3600.0).round() as i64)
+}
+
+/// The process-wide local offset from TZ_OFFSET, defaulting to UTC.
+pub fn timezone_offset() -> i64 {
+    static OFFSET: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+    let mut invalid = None;
+    let offset = *OFFSET.get_or_init(|| {
+        let raw = std::env::var("TZ_OFFSET").unwrap_or_default();
+        match parse_offset(&raw) {
+            Some(offset) => offset,
+            None => {
+                invalid = Some(raw);
+                0
+            }
+        }
+    });
+    // Logging reads local time, so initialize the offset before warning.
+    if let Some(raw) = invalid {
+        log::warn!("invalid TZ_OFFSET '{raw}', using 0 (UTC)");
+    }
+    offset
+}
+
 pub const INSOMNIA_CHANCE: f64 = 0.07; // an ordinary night
 pub const INSOMNIA_TENSE: f64 = 0.20; // when its mood is off
 
@@ -21,10 +53,10 @@ pub struct Plan {
 }
 
 /// Input: `unix: i64`. Output: `(i64, i64)` — (local day number, seconds since local
-/// midnight), applying `TIMEZONE_OFFSET`. Used by: `time`/`time_of_day`/`time_text`/
+/// midnight), applying `timezone_offset()`. Used by: `time`/`time_of_day`/`time_text`/
 /// `update` below.
 pub fn local_time(unix: i64) -> (i64, i64) {
-    let local = unix + TIMEZONE_OFFSET;
+    let local = unix + timezone_offset();
     (local.div_euclid(86400), local.rem_euclid(86400))
 }
 
@@ -62,7 +94,7 @@ pub fn time_text() -> String {
     ];
     format!(
         "{} {} {}",
-        memory::date_from_unix(now_unix() + TIMEZONE_OFFSET),
+        memory::date_from_unix(now_unix() + timezone_offset()),
         names[day.rem_euclid(7) as usize],
         time()
     )
@@ -97,7 +129,7 @@ fn is_tense(state: &State) -> bool {
 /// `INSOMNIA_CHANCE` odds, a sleepless one (up 01:00-06:00, asleep 06:00±45→13:00±45).
 /// Uses: `jitter`. Used by: `update` below, the only caller.
 fn build_plan(day: i64, tense: bool) -> Plan {
-    let night = (day + 1) * 86400 - TIMEZONE_OFFSET; // next day's 00:00, unix
+    let night = (day + 1) * 86400 - timezone_offset(); // next day's 00:00, unix
     let chance = if tense {
         INSOMNIA_TENSE
     } else {
@@ -164,4 +196,19 @@ pub fn is_awake(state: &State) -> bool {
 pub fn status_text(state: &State) -> String {
     let _ = state;
     time_text()
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn parse_offset_bounds() {
+        assert_eq!(parse_offset(""), Some(0));
+        assert_eq!(parse_offset("3"), Some(10800));
+        assert_eq!(parse_offset("-5"), Some(-18000));
+        assert_eq!(parse_offset("5.5"), Some(19800));
+        assert_eq!(parse_offset("15"), None);
+        assert_eq!(parse_offset("abc"), None);
+    }
 }

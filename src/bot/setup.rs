@@ -22,6 +22,10 @@ impl Bot {
         // BOT_LANG: resolved once here (first touch), fixed for the rest of the process —
         // every prompts::current()/strings::t() call downstream reads this same choice.
         log::info!("language: {:?}", lang::Lang::current());
+        log::info!(
+            "owner: {}",
+            owner_id().map_or("none".into(), |i| i.to_string())
+        );
         // provider choice: PROVIDER=mistral forces it; otherwise whichever key is set,
         // openrouter if both are
         let provider = std::env::var("PROVIDER").unwrap_or_default().to_lowercase();
@@ -150,7 +154,13 @@ impl Bot {
     /// Input: `&self`; `ctx: &Context`; `channel: ChannelId`; `enabled: bool`; `trace:
     /// &[String]` — this turn's decision notes. Output: none. Uses: `debug_note` above.
     /// Used by: `Bot::reply` (`chat_reply.rs`), `Handler::message` (`handler_event.rs`).
-    async fn debug_trace(&self, ctx: &Context, channel: ChannelId, enabled: bool, trace: &[String]) {
+    async fn debug_trace(
+        &self,
+        ctx: &Context,
+        channel: ChannelId,
+        enabled: bool,
+        trace: &[String],
+    ) {
         if enabled && !trace.is_empty() {
             self.debug_note(ctx, channel, trace.join(" · ")).await;
         }

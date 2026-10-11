@@ -3,7 +3,8 @@
 /// `bot.state()`, `memory::write`, `reply_info`. Registered as `run` for `"dusunme"` in
 /// `registration_table.rs`.
 async fn cmd_thinking(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
-    match option_text(cmd, strings::t("cmd.dusunme.opt.kip.name")).and_then(ThinkingMode::from_arg) {
+    match option_text(cmd, strings::t("cmd.dusunme.opt.kip.name")).and_then(ThinkingMode::from_arg)
+    {
         Some(new_mode) => {
             bot.state().thinking_mode = new_mode;
             memory::write("dusunme.md", new_mode.file_value());
@@ -19,7 +20,7 @@ async fn cmd_thinking(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
 }
 
 /// `/model [id]`. Input: `bot: &Bot`; `ctx: &Context`; `cmd: &CommandInteraction`. Output:
-/// none. Uses: `option_text`, `bot.state()`, `FAVORITE`, `defer`, `bot.model_exists`
+/// none. Uses: `option_text`, `bot.state()`, `is_owner`, `defer`, `bot.model_exists`
 /// (`command/remaining.rs`), `memory::write`, `reply_info`/`report_result`. Registered as
 /// `run` for `"model"` in `registration_table.rs`.
 async fn cmd_model(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
@@ -29,7 +30,7 @@ async fn cmd_model(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
             let description = strings::t("model_cmd.current").replace("{model}", &m);
             reply_info(ctx, cmd, strings::t("model_cmd.title"), &description).await;
         }
-        Some(id) if cmd.user.id.get() != FAVORITE => {
+        Some(id) if !is_owner(cmd.user.id.get()) => {
             let _ = id;
             reply_info(
                 ctx,

@@ -54,7 +54,7 @@ pub fn t(key: &'static str) -> &'static str {
 mod test {
     use super::*;
 
-    /// Verifies a handful of keys from every corner of `langs/tr.json` (command table, embed
+    /// Verifies a handful of keys from every corner of the active table (command table, embed
     /// chrome, HELP text) actually resolve — a broad canary against a bad key rename.
     #[test]
     fn known_keys_resolve() {

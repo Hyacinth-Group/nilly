@@ -191,6 +191,9 @@ pub fn today() -> i64 {
 /// `today`. Used throughout `src/bot/cycle/cycle_*.rs`/`handler_event.rs` wherever
 /// travel/no-travel behavior branches.
 pub fn now() -> Option<Trip> {
+    if lang::Lang::current() == lang::Lang::En {
+        return None;
+    }
     on_day(today())
 }
 
@@ -199,6 +202,9 @@ pub fn now() -> Option<Trip> {
 /// trip already underway today (avoids re-announcing an ongoing one). Uses: `today`,
 /// `on_day`. Used by: `poke_cycle` (`cycle_background.rs`), the only caller.
 pub fn tomorrow() -> Option<Trip> {
+    if lang::Lang::current() == lang::Lang::En {
+        return None;
+    }
     let today = today();
     match (on_day(today), on_day(today + 1)) {
         (None, Some(trip)) => Some(trip),

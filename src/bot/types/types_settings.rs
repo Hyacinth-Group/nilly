@@ -28,9 +28,9 @@ const MESSAGE_LIMIT: usize = 1900; // discord allows 2000; this leaves headroom
 const STREAM_EDIT_INTERVAL: Duration = Duration::from_millis(1200); // stream edits never come faster than this (discord's edit rate limit)
 const BURST_LIMIT: usize = 4; // max lines (= separate messages) sent per turn; the rest are dropped
 const HALF_LINE_THRESHOLD: usize = 12; // while streaming, a trailing half-line shorter than this is held back
-                                        // line-to-line delay on the non-streaming path: lines shouldn't all land at
-                                        // once, so this staggers them to look like typing. Never measured, picked by
-                                        // feel against human typing speed.
+                                       // line-to-line delay on the non-streaming path: lines shouldn't all land at
+                                       // once, so this staggers them to look like typing. Never measured, picked by
+                                       // feel against human typing speed.
 const LINE_DELAY_BASE: u64 = 300; // ms
 const LINE_DELAY_PER_CHAR: u64 = 15; // ms, per character in the line
 const LINE_DELAY_CAP: u64 = 1500; // ms, delay never exceeds this
@@ -78,13 +78,31 @@ const REASONING_MANDATORY_BASE: u32 = 500;
 // budget floor for the reasoning-on retry on stream-less agent calls: 2x the current
 // budget, or this, whichever is larger
 const REASONING_BUDGET_BASE: u32 = 1500;
-const FAVORITE: u64 = 259669117248864257; // this person is always liked, no matter what
+/// OWNER_ID from .env: always liked and the only user who can switch /model.
+/// Unset or invalid means no owner.
+fn owner_id() -> Option<u64> {
+    static OWNER: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
+    *OWNER.get_or_init(|| match std::env::var("OWNER_ID") {
+        Ok(v) if !v.trim().is_empty() => match v.trim().parse() {
+            Ok(id) => Some(id),
+            Err(_) => {
+                log::warn!("invalid OWNER_ID '{}', running without an owner", v.trim());
+                None
+            }
+        },
+        _ => None,
+    })
+}
+
+fn is_owner(id: u64) -> bool {
+    owner_id() == Some(id)
+}
 const WANDERER_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60); // how often it browses the news
 const IMAGE_DIR: &str = "photos"; // images available for pranks (on-disk folder name)
 const STATE_DIR: &str = "durum"; // where the agents write what they've learned (on-disk folder name, kept as-is)
-                                  // version string: Cargo.toml plus the commit/date build.rs pulled from git at
-                                  // build time. Shown in !status and announced in-channel on restart, so it's
-                                  // obvious which build is actually running.
+                                 // version string: Cargo.toml plus the commit/date build.rs pulled from git at
+                                 // build time. Shown in !status and announced in-channel on restart, so it's
+                                 // obvious which build is actually running.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const VERSION_COMMIT: &str = env!("VERSION_COMMIT");
 const VERSION_DATE: &str = env!("VERSION_DATE");

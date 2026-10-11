@@ -775,8 +775,14 @@ mod test {
     /// Verifies `month_name` converts a `YYYY-MM` key to a month name, and passes through unparseable input as-is.
     #[test]
     fn month_name_converts() {
-        assert_eq!(month_name("2026-09"), "Eylül 2026");
-        assert_eq!(month_name("2026-01"), "Ocak 2026");
+        assert_eq!(
+            month_name("2026-09"),
+            format!("{} 2026", strings::t("month.9"))
+        );
+        assert_eq!(
+            month_name("2026-01"),
+            format!("{} 2026", strings::t("month.1"))
+        );
         assert_eq!(month_name("bozuk"), "bozuk");
         assert_eq!(month_name("2026-13"), "2026-13");
     }

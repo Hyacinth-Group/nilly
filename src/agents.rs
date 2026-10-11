@@ -219,7 +219,7 @@ impl Bot {
                     .events
                     .push(format!("{}: {}", memory::date_time(), record.olay));
             }
-            if id == FAVORITE || favorite.as_deref() == Some(person.name.as_str()) {
+            if is_owner(id) || favorite.as_deref() == Some(person.name.as_str()) {
                 person.score = 10;
                 person.note = memory::FAVORITE_NOTE.to_string();
             }
