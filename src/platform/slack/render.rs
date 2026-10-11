@@ -1,5 +1,5 @@
 //! Slack mrkdwn presentation. Input stays raw until the transport escapes it once.
-use crate::platform::{outgoing::*, PlatformError, PlatformResult};
+use crate::platform::{capabilities::*, outgoing::*, PlatformError, PlatformResult};
 
 pub(super) const RAW_LIMIT: usize = 3900;
 pub(super) const ENCODED_LIMIT: usize = 4000;
@@ -43,18 +43,14 @@ pub(super) fn stream(
     text: &str,
     done: bool,
 ) -> Vec<String> {
-    let visible = if done {
-        text
-    } else {
-        text.rfind('\n').map_or("", |end| &text[..=end])
-    };
-    let mut result = if mode == ThoughtPresentation::Show && !thought.trim().is_empty() {
-        split(thought)
-    } else {
-        Vec::new()
-    };
-    result.extend(split(visible));
-    result
+    let reply = crate::parse_reply(
+        crate::stream_slice(text, done),
+        OutputLimits {
+            text: RAW_LIMIT,
+            count_unit: CountUnit::UnicodeScalars,
+        },
+    );
+    layout(mode, thought, &reply.lines)
 }
 
 pub(super) fn layout(mode: ThoughtPresentation, thought: &str, lines: &[String]) -> Vec<String> {
@@ -260,5 +256,102 @@ mod tests {
             layout(ThoughtPresentation::Show, "thought", &["reply".into()]),
             vec!["thought", "reply"]
         );
+    }
+
+    #[test]
+    fn stream_never_publishes_reply_controls_or_their_partial_chunks() {
+        for mode in [
+            ThoughtPresentation::Show,
+            ThoughtPresentation::Hide,
+            ThoughtPresentation::Silent,
+            ThoughtPresentation::Off,
+        ] {
+            for protocol in ["-\n", "tepki: 👍\n", "tepki: 👍\n-\n", "-\ntepki: 👍\n"] {
+                for (end, _) in protocol.char_indices() {
+                    assert!(
+                        stream(mode, "", &protocol[..end], false).is_empty(),
+                        "published a partial control: {:?}",
+                        &protocol[..end],
+                    );
+                    assert_eq!(
+                        stream(mode, "", &format!("hello\n{}", &protocol[..end]), false),
+                        vec!["hello"],
+                    );
+                }
+                for done in [false, true] {
+                    assert!(stream(mode, "", protocol, done).is_empty());
+                }
+            }
+            for done in [false, true] {
+                assert_eq!(
+                    stream(mode, "", "hello\ntepki: 👍\n-\n", done),
+                    vec!["hello"]
+                );
+            }
+            let reaction = format!("tepki: {}", "👍".repeat(crate::HALF_LINE_THRESHOLD));
+            assert!(stream(mode, "", &reaction, false).is_empty());
+        }
+    }
+
+    #[test]
+    fn stream_uses_shared_half_line_rules_and_final_native_layout() {
+        let mode = ThoughtPresentation::Silent;
+        let below = format!("hello\n{}", "ğ".repeat(crate::HALF_LINE_THRESHOLD - 1));
+        let threshold = "ğ".repeat(crate::HALF_LINE_THRESHOLD);
+        assert!(stream(mode, "", "short", false).is_empty());
+        assert_eq!(stream(mode, "", &below, false), vec!["hello"]);
+        assert_eq!(
+            stream(mode, "", &format!("hello\n{threshold}"), false),
+            vec!["hello".to_owned(), threshold],
+        );
+        assert_eq!(stream(mode, "", "short", true), vec!["short"]);
+        let lines = vec!["hello".into(), "short".into()];
+        for mode in [
+            ThoughtPresentation::Show,
+            ThoughtPresentation::Hide,
+            ThoughtPresentation::Silent,
+            ThoughtPresentation::Off,
+        ] {
+            assert_eq!(
+                stream(mode, "thought", "hello\nshort", true),
+                layout(mode, "thought", &lines),
+            );
+        }
+    }
+
+    #[test]
+    fn stream_thought_presentation_is_separate_from_reply_control() {
+        let thought = "tepki: reflection\n-";
+        for done in [false, true] {
+            for mode in [
+                ThoughtPresentation::Hide,
+                ThoughtPresentation::Silent,
+                ThoughtPresentation::Off,
+            ] {
+                assert!(stream(mode, thought, "tepki: 👍\n-\n", done).is_empty());
+            }
+            assert_eq!(
+                stream(ThoughtPresentation::Show, thought, "tepki: 👍\n-\n", done),
+                vec![thought],
+            );
+        }
+    }
+
+    #[test]
+    fn stream_native_chunks_preserve_unicode_and_escaped_prefix_budget() {
+        let text = "&<>🦀".repeat(2000);
+        let user = UserKey::new(PlatformKind::Slack, &["T123", "U123"]).unwrap();
+        for done in [false, true] {
+            let chunks = stream(ThoughtPresentation::Silent, "", &text, done);
+            assert_eq!(chunks.concat(), text);
+            for chunk in chunks {
+                assert!(chunk.chars().count() <= RAW_LIMIT);
+                let mut body = OutgoingMessage::text(&chunk);
+                body.mentions.prefix_user = Some(&user);
+                let encoded = outgoing_text("T123", &body).unwrap();
+                assert_eq!(encoded, format!("<@U123> {}", escape(&chunk)));
+                assert!(encoded.chars().count() <= ENCODED_LIMIT);
+            }
+        }
     }
 }

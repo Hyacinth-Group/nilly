@@ -294,14 +294,18 @@ impl Platform for TelegramAdapter {
         mode: ThoughtPresentation,
         thought: &str,
         text: &str,
-        _done: bool,
+        done: bool,
     ) -> Vec<String> {
-        let view = if mode == ThoughtPresentation::Show && !thought.is_empty() {
-            format!("{thought}\n{text}")
-        } else {
-            text.to_string()
-        };
-        crate::reply_chunks(&safe_text(&view), OUTPUT)
+        let reply = crate::parse_reply(crate::stream_slice(text, done), OUTPUT);
+        let mut output = Vec::new();
+        // Thought text is explicit presentation, not part of the reply protocol.
+        if mode == ThoughtPresentation::Show && !thought.is_empty() {
+            output.extend(crate::reply_chunks(&safe_text(thought), OUTPUT));
+        }
+        for line in &reply.lines {
+            output.extend(crate::reply_chunks(&safe_text(line), OUTPUT));
+        }
+        output
     }
     fn render_final(
         &self,
@@ -673,5 +677,158 @@ mod tests {
         assert_eq!(parts.len(), 2);
         assert!(parts.iter().all(|part| part.chars().count() <= 4096));
         assert_eq!(parts.concat(), text);
+    }
+
+    fn stream_adapter() -> TelegramAdapter {
+        TelegramAdapter::new(
+            ConnectionId::new("telegram-stream-test"),
+            User {
+                id: 1,
+                is_bot: true,
+                first_name: "Bot".into(),
+                last_name: None,
+                username: None,
+                can_read_all_group_messages: None,
+            },
+            Arc::new(TelegramClient::new("unused-test-token".into()).unwrap()),
+        )
+    }
+
+    #[test]
+    fn stream_never_publishes_reply_controls_or_their_partial_chunks() {
+        let adapter = stream_adapter();
+        let room = RoomRef::from_key(room_key(-1001));
+        for mode in [
+            ThoughtPresentation::Show,
+            ThoughtPresentation::Hide,
+            ThoughtPresentation::Silent,
+            ThoughtPresentation::Off,
+        ] {
+            for protocol in ["-\n", "tepki: 👍\n", "tepki: 👍\n-\n", "-\ntepki: 👍\n"] {
+                for (end, _) in protocol.char_indices() {
+                    assert!(
+                        adapter
+                            .render_stream(&room, mode, "", &protocol[..end], false)
+                            .is_empty(),
+                        "published a partial control: {:?}",
+                        &protocol[..end],
+                    );
+                    assert_eq!(
+                        adapter.render_stream(
+                            &room,
+                            mode,
+                            "",
+                            &format!("hello\n{}", &protocol[..end]),
+                            false,
+                        ),
+                        vec!["hello"],
+                    );
+                }
+                for done in [false, true] {
+                    assert!(adapter
+                        .render_stream(&room, mode, "", protocol, done)
+                        .is_empty());
+                }
+            }
+            for done in [false, true] {
+                assert_eq!(
+                    adapter.render_stream(&room, mode, "", "hello\ntepki: 👍\n-\n", done,),
+                    vec!["hello"],
+                );
+            }
+            // A long reaction body crosses the half-line threshold but is still control.
+            let reaction = format!("tepki: {}", "👍".repeat(crate::HALF_LINE_THRESHOLD));
+            assert!(adapter
+                .render_stream(&room, mode, "", &reaction, false)
+                .is_empty());
+        }
+    }
+
+    #[test]
+    fn stream_uses_shared_half_line_rules_and_final_native_layout() {
+        let adapter = stream_adapter();
+        let room = RoomRef::from_key(room_key(-1001));
+        let mode = ThoughtPresentation::Silent;
+        let below = format!("hello\n{}", "ğ".repeat(crate::HALF_LINE_THRESHOLD - 1));
+        let threshold = "ğ".repeat(crate::HALF_LINE_THRESHOLD);
+        assert!(adapter
+            .render_stream(&room, mode, "", "short", false)
+            .is_empty());
+        assert_eq!(
+            adapter.render_stream(&room, mode, "", &below, false),
+            vec!["hello"]
+        );
+        assert_eq!(
+            adapter.render_stream(&room, mode, "", &format!("hello\n{threshold}"), false),
+            vec!["hello".to_owned(), threshold],
+        );
+        assert_eq!(
+            adapter.render_stream(&room, mode, "", "short", true),
+            vec!["short"]
+        );
+        let lines = vec!["hello".into(), "short".into()];
+        for mode in [
+            ThoughtPresentation::Show,
+            ThoughtPresentation::Hide,
+            ThoughtPresentation::Silent,
+            ThoughtPresentation::Off,
+        ] {
+            assert_eq!(
+                adapter.render_stream(&room, mode, "thought", "hello\nshort", true),
+                adapter.render_final(&room, mode, "thought", &lines),
+            );
+        }
+    }
+
+    #[test]
+    fn stream_thought_presentation_is_separate_from_reply_control() {
+        let adapter = stream_adapter();
+        let room = RoomRef::from_key(room_key(-1001));
+        let thought = "tepki: reflection\n-";
+        for done in [false, true] {
+            for mode in [
+                ThoughtPresentation::Hide,
+                ThoughtPresentation::Silent,
+                ThoughtPresentation::Off,
+            ] {
+                assert!(adapter
+                    .render_stream(&room, mode, thought, "tepki: 👍\n-\n", done)
+                    .is_empty());
+            }
+            assert_eq!(
+                adapter.render_stream(
+                    &room,
+                    ThoughtPresentation::Show,
+                    thought,
+                    "tepki: 👍\n-\n",
+                    done
+                ),
+                vec![thought],
+            );
+        }
+    }
+
+    #[test]
+    fn stream_native_chunks_preserve_unicode_and_safe_mentions() {
+        let adapter = stream_adapter();
+        let room = RoomRef::from_key(room_key(-1001));
+        let text = "🦀".repeat(4097);
+        for done in [false, true] {
+            let chunks = adapter.render_stream(&room, ThoughtPresentation::Silent, "", &text, done);
+            assert_eq!(chunks.concat(), safe_text(&text));
+            assert!(chunks
+                .iter()
+                .all(|chunk| OUTPUT.count(chunk) <= OUTPUT.text));
+            assert_eq!(
+                adapter.render_stream(&room, ThoughtPresentation::Silent, "", "@someone", true),
+                vec!["@\u{200b}someone"],
+            );
+            for chunk in chunks {
+                assert_eq!(
+                    payload(&room, &OutgoingMessage::text(&chunk)).unwrap()["text"],
+                    chunk
+                );
+            }
+        }
     }
 }
