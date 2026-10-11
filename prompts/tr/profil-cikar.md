@@ -1,8 +1,6 @@
 # Profil çıkarma
 
-Yukarıdaki döküm bir discord grubunun son iki haftası. Bu grubu, içine yeni
-girecek birinin onlar gibi konuşabilmesi için tarif et. Şu başlıklar altında, her başlıkta
-kısa maddelerle:
+{platform_tr_history_profile}
 
 KİMLER VAR: her aktif kişi için bir satır. Nasıl yazıyor, neyle ilgileniyor, grupta rolü ne
 (şakacı mı, teknik olan mı, sessiz mi). Sadece dökümde geçenleri yaz, uydurma.

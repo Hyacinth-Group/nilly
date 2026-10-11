@@ -45,7 +45,7 @@ struct Record {
     #[serde(default)]
     kendim: String,
 }
-/// One `Record.kisiler` entry: `isim` (name, resolved to an id via `State.name_to_id`),
+/// One `Record.kisiler` entry: `isim` (speaker handle resolved from captured observations),
 /// `puan_degisimi` (score delta, clamped to ±3 by `Bot::diarist`), `not` (updated note),
 /// `bilgiler`/`etiketler` (new facts/tags to merge in). Field names Turkish for the same
 /// reason as `Record` above.
@@ -82,7 +82,9 @@ impl Bot {
         match self
             .analyze(
                 &sample,
-                prompts::current().profile_extract,
+                &self
+                    .default_prompt_context()
+                    .render(prompts::current().profile_extract),
                 1200,
                 "profilci",
             )
@@ -105,24 +107,36 @@ impl Bot {
         transcript: String,
         source: &str,
         channel: &str,
+        observed: &HashMap<String, UserRef>,
     ) -> Result<DiaristSummary, BotError> {
         if transcript.trim().is_empty() {
             return Err("transcript is empty".into());
         }
-        let (instruction, favorite, bot_name) = {
+        let mut platforms = observed.values().map(|person| person.id.platform());
+        let first = platforms.next();
+        let kind = first
+            .filter(|kind| platforms.all(|other| other == *kind))
+            .unwrap_or(platform::types::PlatformKind::Terminal);
+        let context = platform::prompt_context::PromptContext::for_platform(kind);
+        let (instruction, bot_name) = {
             let state = self.state();
-            let text = prompts::current()
-                .diarist
-                .replace("{ad}", &state.bot_name)
-                .replace("{kaynak}", source)
-                .replace(
-                    "{favori}",
-                    state.favorite_name.as_deref().unwrap_or("kimse"),
-                );
-            (text, state.favorite_name.clone(), state.bot_name.clone())
+            let text = context
+                .render_with(
+                    prompts::current().diarist,
+                    &[
+                        ("{ad}", &state.bot_name),
+                        ("{kaynak}", source),
+                        (
+                            "{favori}",
+                            state.favorite_name.as_deref().unwrap_or("kimse"),
+                        ),
+                    ],
+                )
+                .into_owned();
+            (text, state.bot_name.clone())
         };
         let reply = match self
-            .analyze(&transcript, &instruction, 1200, "gunlukcu")
+            .analyze_with(&transcript, &instruction, 1200, "gunlukcu", &context)
             .await
         {
             Ok(c) => c,
@@ -153,23 +167,20 @@ impl Bot {
             memory::add_event(channel, &record.olay);
             summary.events = 1;
         }
-        let (name_to_id, usernames) = {
-            let state = self.state();
-            (state.name_to_id.clone(), state.usernames.clone())
-        };
         for pr in record.kisiler {
             if pr.isim.is_empty() || pr.isim.eq_ignore_ascii_case(&bot_name) {
                 continue;
             }
             // the mind is id-based: if the name can't be resolved, this record is skipped this round
-            let Some(id) = name_to_id.get(&pr.isim.to_lowercase()) else {
+            let Some(observation) = observed.get(&pr.isim.to_lowercase()) else {
                 log::warn!("diarist: couldn't resolve '{}' to an id, skipped", pr.isim);
                 continue;
             };
+            let id = &observation.id;
             let mut person: Person = memory::read_person(id);
             if person.name.is_empty() {
-                person.name = pr.isim.clone(); // a new person
-            } else if !person.name.eq_ignore_ascii_case(&pr.isim) {
+                person.name = observation.display_name.clone();
+            } else if !person.name.eq_ignore_ascii_case(&observation.display_name) {
                 // display name changed: don't lose the old one
                 if !person
                     .previous_names
@@ -179,10 +190,10 @@ impl Bot {
                     person.previous_names.push(person.name.clone());
                     person.previous_names.truncate(5);
                 }
-                person.name = pr.isim.clone();
+                person.name = observation.display_name.clone();
             }
             if person.username.is_empty() {
-                if let Some(username) = usernames.get(id) {
+                if let Some(username) = &observation.username {
                     person.username = username.clone();
                 }
             }
@@ -209,7 +220,7 @@ impl Bot {
                     .events
                     .push(format!("{}: {}", memory::date_time(), record.olay));
             }
-            if is_owner(id) || favorite.as_deref() == Some(person.name.as_str()) {
+            if is_owner(id) {
                 person.score = 10;
                 person.note = memory::FAVORITE_NOTE.to_string();
             }
@@ -240,6 +251,7 @@ impl Bot {
 
     // shrinks files that are over their limit; the raw chunk that comes out goes to the archive
     pub async fn summarizer(&self) {
+        let context = self.default_prompt_context();
         for (kind, rel) in memory::over_limit() {
             let old = memory::read(&rel);
 
@@ -247,9 +259,10 @@ impl Bot {
                 "kisi" => {
                     self.analyze(
                         &old,
-                        &prompts::current()
-                            .summarizer_person
-                            .replace("{sinir}", &memory::PERSON_TARGET.to_string()),
+                        &context.render_with(
+                            prompts::current().summarizer_person,
+                            &[("{sinir}", &memory::PERSON_TARGET.to_string())],
+                        ),
                         700,
                         "ozetleyici_kisi",
                     )
@@ -258,9 +271,10 @@ impl Bot {
                 "konu" => {
                     self.analyze(
                         &old,
-                        &prompts::current()
-                            .summarizer_topic
-                            .replace("{sinir}", &memory::TOPIC_TARGET.to_string()),
+                        &context.render_with(
+                            prompts::current().summarizer_topic,
+                            &[("{sinir}", &memory::TOPIC_TARGET.to_string())],
+                        ),
                         600,
                         "ozetleyici_konu",
                     )
@@ -276,7 +290,7 @@ impl Bot {
                     match self
                         .analyze(
                             &older.join("\n"),
-                            prompts::current().summarizer_events,
+                            &context.render(prompts::current().summarizer_events),
                             400,
                             "ozetleyici_olaylar",
                         )
@@ -319,6 +333,7 @@ impl Bot {
 
     /// Updates temperament notes; does nothing until message history exists.
     pub async fn coach(&self) {
+        let context = self.default_prompt_context();
         let (text, instruction) = {
             let state = self.state();
             if state.recent_messages.is_empty() {
@@ -342,7 +357,9 @@ impl Bot {
             );
             (
                 text,
-                prompts::current().coach.replace("{ad}", &state.bot_name),
+                context
+                    .render_with(prompts::current().coach, &[("{ad}", &state.bot_name)])
+                    .into_owned(),
             )
         };
         match self.analyze(&text, &instruction, 800, "hoca").await {
@@ -360,12 +377,15 @@ impl Bot {
         if transcript.trim().is_empty() {
             return;
         }
+        let context = self.default_prompt_context();
         let instruction = {
             let state = self.state();
-            prompts::current()
-                .critic
-                .replace("{ad}", &state.bot_name)
-                .replace("{mevcut}", &state.corrections)
+            context
+                .render_with(
+                    prompts::current().critic,
+                    &[("{ad}", &state.bot_name), ("{mevcut}", &state.corrections)],
+                )
+                .into_owned()
         };
         match self
             .analyze(&transcript, &instruction, 400, "elestirmen")
@@ -439,7 +459,9 @@ impl Bot {
         let pick = self
             .analyze(
                 &list,
-                &prompts::current().news_pick.replace("{profil}", &profile),
+                &self
+                    .default_prompt_context()
+                    .render_with(prompts::current().news_pick, &[("{profil}", &profile)]),
                 10,
                 "haber_sec",
             )
@@ -456,10 +478,20 @@ impl Bot {
 
     // shows the model the image and gets a one-line personality comment; if the model
     // doesn't support vision, it writes blind
-    pub async fn image_commenter(&self, path: &PathBuf) -> Result<String, BotError> {
+    pub async fn image_commenter(
+        &self,
+        channel: &ConversationKey,
+        path: &PathBuf,
+    ) -> Result<String, BotError> {
+        let context = self.prompt_context(channel);
         let (system, bot_name) = {
             let state = self.state();
-            let (fixed, variable) = system_text(&state, prompts::current().image_post, "");
+            let (fixed, variable) = system_text_with(
+                &state,
+                &context.render(prompts::current().image_post),
+                "",
+                &context,
+            );
             (format!("{fixed}\n\n{variable}"), state.bot_name.clone())
         };
         let data = tokio::fs::read(path).await?;
@@ -490,9 +522,10 @@ impl Bot {
         let reply = match self.ask_raw(body, "resimci").await {
             Ok(c) => c,
             Err(_) => {
-                self.generate(
+                self.generate_for(
+                    channel,
                     &[user("bir görsel atıyorsun ama ne olduğunu hatırlamıyorsun")],
-                    prompts::current().image_post,
+                    &context.render(prompts::current().image_post),
                     Some(120),
                     "resimci",
                 )

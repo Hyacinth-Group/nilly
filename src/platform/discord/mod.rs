@@ -1,9 +1,22 @@
 //! Discord-native decoding, rendering, and private outbound SDK operations.
 pub(crate) mod commands;
 pub(crate) mod events;
+mod handler;
+pub(crate) mod modal;
+#[cfg(test)]
+mod native_fixtures;
 pub(crate) mod render;
+pub(crate) mod runner;
 mod transport;
 pub use transport::DiscordAdapter;
+
+#[cfg(test)]
+pub(crate) fn test_adapter(
+    connection: super::types::ConnectionId,
+    account: super::types::UserRef,
+) -> super::Adapter {
+    DiscordAdapter::test_adapter(connection, account)
+}
 
 use super::types::{KeyError, MessageKey, RoomKey, SpaceKey, UserKey};
 use serenity::all::{ChannelId, GuildId, MessageId, UserId};

@@ -1,8 +1,6 @@
 # Extracting a profile
 
-The transcript above covers a Discord group's last two weeks. Describe this group so that
-someone new joining could talk like they've always been here. Under these headings, short
-bullet points each:
+{platform_en_history_profile}
 
 WHO'S HERE: one line per active person. How they write, what they're into, their role in the
 group (the joker, the technical one, the quiet one). Only write what's actually in the

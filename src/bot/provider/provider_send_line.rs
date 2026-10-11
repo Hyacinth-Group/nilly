@@ -3,18 +3,18 @@ impl Bot {
     /// Returns protocol text if anything was sent, or `None` for silence/empty output.
     async fn send_lines(
         &self,
-        channel: &RoomKey,
+        channel: &ConversationKey,
         raw: &str,
         reply_to: Option<&MessageKey>,
         reaction_target: Option<&MessageKey>,
         ping: Option<&UserKey>,
     ) -> Option<String> {
         let bot_name = self.state().bot_name.clone();
-        let transport = match self.transport(channel) {
+        let (transport, room) = match self.transport(channel) {
             Ok(transport) => transport,
             Err(e) => { log::error!("send_lines [{channel}]: {e}"); return None; }
         };
-        let room = platform::types::RoomRef::from_key(channel.clone());
+
         let reply = parse_reply(strip_name(raw, &bot_name), transport.capabilities(&room).output);
         self.send_reply(channel, reply, reply_to, reaction_target, ping)
             .await
@@ -27,7 +27,7 @@ impl Bot {
     /// Returns protocol text if anything was sent, or `None` otherwise.
     async fn send_reply(
         &self,
-        channel: &RoomKey,
+        channel: &ConversationKey,
         mut reply: Reply,
         reply_to: Option<&MessageKey>,
         reaction_target: Option<&MessageKey>,
@@ -47,11 +47,11 @@ impl Bot {
             );
             return None;
         }
-        let transport = match self.transport(channel) {
+        let (transport, room) = match self.transport(channel) {
             Ok(transport) => transport,
             Err(e) => { log::error!("send_lines [{channel}]: {e}"); return None; }
         };
-        let room = platform::types::RoomRef::from_key(channel.clone());
+
         let capabilities = transport.capabilities(&room);
         for (i, line) in reply.lines.iter().enumerate() {
             if i > 0 {
@@ -69,7 +69,7 @@ impl Bot {
         if let (Some(emoji), Some(target)) = (&reply.reaction, reaction_target) {
             if capabilities.react {
                 let target = platform::types::MessageRef {
-                    id: target.clone(), room: channel.clone(), author: None,
+                    id: target.clone(), room: channel.room.clone(), author: None,
                 };
                 if let Err(e) = transport.react(&target, &platform::types::Emoji::Unicode(emoji.clone())).await {
                     log::warn!("couldn't add reaction ({channel}): {e}");

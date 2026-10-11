@@ -9,7 +9,7 @@ use std::io::Write;
 
 // appends to channel history in MEMORY ONLY; channel_note does the same thing but also
 // writes to disk — the bench shouldn't pollute the real durum/kanallar files
-fn append_history(state: &mut State, channel: &RoomKey, line: String) {
+fn append_history(state: &mut State, channel: &ConversationKey, line: String) {
     let hist = state.channel_history.entry(channel.clone()).or_default();
     hist.push_back(line);
     while hist.len() > CHANNEL_HISTORY {
@@ -30,7 +30,10 @@ fn parse_line(line: &str) -> (String, String) {
 impl Bot {
     /// Runs the interactive terminal chat loop until `!quit`/EOF.
     pub async fn chat_cli(&self) {
-        let channel = RoomKey::terminal();
+        let channel = ConversationKey {
+            room: RoomKey::terminal(),
+            thread: None,
+        };
         {
             let mut state = self.state();
             // the ready event never fires, so the name stays empty: use the chosen name if
@@ -99,7 +102,7 @@ impl Bot {
 
             // no streaming: the bench isn't about stream pacing, it's measuring the resulting protocol
             let generated = match self
-                .generate(&history, instruction, chat_budget(), "sohbet")
+                .generate_for(&channel, &history, instruction, chat_budget(), "sohbet")
                 .await
             {
                 Ok(c) => c,
@@ -160,9 +163,12 @@ mod test {
     /// Verifies `append_history` caps a channel's in-memory history at `CHANNEL_HISTORY`, dropping the oldest lines first.
     #[test]
     fn history_limited_in_memory() {
-        let channel = RoomKey::terminal();
+        let channel = ConversationKey {
+            room: RoomKey::terminal(),
+            thread: None,
+        };
         let mut state = State::default();
-        assert_eq!(channel.as_str(), "terminal:room:local:bench");
+        assert_eq!(channel.room.as_str(), "terminal:room:local:bench");
         for i in 0..CHANNEL_HISTORY + 5 {
             append_history(&mut state, &channel, format!("emin: {i}"));
         }

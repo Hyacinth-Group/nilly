@@ -95,6 +95,8 @@ impl Bot {
         Ok(Arc::new(Bot {
             state: Mutex::new(state),
             adapters: Mutex::new(platform::ConnectionRegistry::default()),
+            cycles_started: AtomicBool::new(false),
+            announcement_sent: AtomicBool::new(false),
             // let a failed connection attempt fail fast (CONNECT_TIMEOUT); no overall
             // time limit, only a per-chunk cap of READ_TIMEOUT (P0: a single 60s timeout
             // used to be able to cut off a long thinking stream mid-way)
@@ -125,7 +127,7 @@ impl Bot {
     // caller only builds the format! while debug is on). Not written to memory or the
     // channel note — the bot shouldn't mistake it for its own words — and since it's a
     // bot message, it doesn't reach the message handler either
-    async fn debug_note(&self, channel: &RoomKey, text: String) {
+    async fn debug_note(&self, channel: &ConversationKey, text: String) {
         if !self.state().debug {
             return;
         }
@@ -134,7 +136,8 @@ impl Bot {
         if self.stealth {
             return;
         }
-        let target = self.debug_channel.as_ref().unwrap_or(channel);
+        let override_route = self.debug_channel.as_ref().map(|room| ConversationKey { room: room.clone(), thread: None });
+        let target = override_route.as_ref().unwrap_or(channel);
         let body: String = text.chars().take(300).collect();
         self.send_card(target, strings::t("debug.trace_title"), &body).await;
     }
@@ -143,7 +146,7 @@ impl Bot {
 
     async fn debug_trace(
         &self,
-        channel: &RoomKey,
+        channel: &ConversationKey,
         enabled: bool,
         trace: &[String],
     ) {
@@ -153,12 +156,12 @@ impl Bot {
     }
 
     /// Sends presentation-only diagnostics without adding them to conversational memory.
-    async fn send_card(&self, channel: &RoomKey, title: &str, description: &str) {
-        let transport = match self.transport(channel) {
+    async fn send_card(&self, channel: &ConversationKey, title: &str, description: &str) {
+        let (transport, room) = match self.transport(channel) {
             Ok(transport) => transport,
             Err(e) => { log::warn!("card [{channel}]: {e}"); return; }
         };
-        let room = platform::types::RoomRef::from_key(channel.clone());
+
         let mut body = platform::outgoing::OutgoingMessage::text("");
         body.presentation = Some(platform::outgoing::PresentationPayload::Card { title, description });
         if let Err(e) = transport.send(&room, &body).await {

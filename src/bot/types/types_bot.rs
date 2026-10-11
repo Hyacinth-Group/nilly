@@ -5,7 +5,7 @@
 /// actually does the work.
 struct BusyGuard<'a> {
     state: &'a Mutex<State>,
-    channel: RoomKey,
+    channel: ConversationKey,
 }
 
 impl Drop for BusyGuard<'_> {
@@ -38,6 +38,8 @@ impl Drop for BusyGuard<'_> {
 struct Bot {
     state: Mutex<State>,
     adapters: Mutex<platform::ConnectionRegistry>,
+    cycles_started: AtomicBool,
+    announcement_sent: AtomicBool,
     http: reqwest::Client,
     api_url: String, // chat/completions endpoint (openrouter or mistral)
     key: String,
@@ -71,12 +73,11 @@ impl Bot {
     }
 
     /// Snapshots the room's transport; the registry guard never crosses an await.
-    fn transport(&self, room: &RoomKey) -> Result<Arc<platform::Adapter>, platform::PlatformError> {
-        self.adapters
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .for_room(room)
-            .ok_or(platform::PlatformError::Disconnected)
+    fn transport(&self, conversation: &ConversationKey) -> Result<(Arc<platform::Adapter>, RoomRef), platform::PlatformError> {
+        let registry = self.adapters.lock().unwrap_or_else(|e| e.into_inner());
+        let adapter = registry.for_conversation(conversation).ok_or(platform::PlatformError::Disconnected)?;
+        let room = registry.room(conversation).ok_or(platform::PlatformError::Disconnected)?;
+        Ok((adapter, room))
     }
 
     // adds model usage to the session metrics, broken down by category too (!status dumps this)

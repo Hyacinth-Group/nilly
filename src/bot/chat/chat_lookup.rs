@@ -1,7 +1,7 @@
 impl Bot {
     // is this the same as one of the bot's last 5 messages?
     /// Comparison is case-insensitive.
-    fn is_repeat(&self, channel: &RoomKey, reply: &str) -> bool {
+    fn is_repeat(&self, channel: &ConversationKey, reply: &str) -> bool {
         let state = self.state();
         let prefix = format!("{}: ", state.bot_name);
         let target = reply.trim().to_lowercase();

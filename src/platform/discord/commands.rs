@@ -1,11 +1,14 @@
 //! Discord owns registration, interaction tokens, deadlines and native private UI.
+use super::modal;
 use crate::command::parser::BorrowedActionValue;
 use crate::command::schema::{ActionDefinition, OptionKind};
 use crate::command::{
     self, ActionArgs, ActionError, ActionId, ActionResult, ActionTarget, Actor, AdminService,
 };
-use crate::platform::types::{MessageKey, RoomKey, RoomKind, RoomRef, SpaceKey, UserKey};
-use crate::{modal, strings, Bot, ThinkingMode, THOUGHT_BUTTON};
+use crate::platform::types::{
+    ConnectionId, MessageKey, RoomKey, RoomKind, RoomRef, SpaceKey, UserKey,
+};
+use crate::{strings, Bot, ThinkingMode, THOUGHT_BUTTON};
 use serenity::all::*;
 use std::sync::LazyLock;
 
@@ -73,9 +76,9 @@ pub(crate) fn registrations() -> Vec<CreateCommand> {
         .collect()
 }
 
-fn target(channel: ChannelId, guild: Option<GuildId>) -> ActionTarget {
+fn target(connection: &ConnectionId, channel: ChannelId, guild: Option<GuildId>) -> ActionTarget {
     ActionTarget {
-        connection: Some(super::events::connection_id().clone()),
+        connection: Some(connection.clone()),
         room: Some(RoomRef {
             id: RoomKey::discord(channel.get()),
             space: guild.map(|id| SpaceKey::discord(id.get())),
@@ -151,7 +154,7 @@ async fn send_response(
         );
     }
 }
-async fn slash(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
+async fn slash(bot: &Bot, connection: &ConnectionId, ctx: &Context, cmd: &CommandInteraction) {
     let Some(definition) = definitions()
         .iter()
         .find(|definition| definition.name == cmd.data.name)
@@ -167,7 +170,7 @@ async fn slash(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
         }
     };
     let actor = Actor::User(UserKey::discord(cmd.user.id.get()));
-    let mut target = target(cmd.channel_id, cmd.guild_id);
+    let mut target = target(connection, cmd.channel_id, cmd.guild_id);
     // Model queries and forbidden setters never show a deferred response.
     let deferred = definition.action.should_defer(&args)
         && (!matches!(&args, ActionArgs::Model { id: Some(_) })
@@ -249,7 +252,12 @@ async fn slash(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
     }
 }
 
-async fn setting_button(bot: &Bot, ctx: &Context, component: ComponentInteraction) {
+async fn setting_button(
+    bot: &Bot,
+    connection: &ConnectionId,
+    ctx: &Context,
+    component: ComponentInteraction,
+) {
     let id = &component.data.custom_id;
     let args = if let Some(mode) = id.strip_prefix(modal::SETTING_THINKING) {
         ThinkingMode::from_arg(mode).map(|mode| ActionArgs::Thinking {
@@ -267,7 +275,7 @@ async fn setting_button(bot: &Bot, ctx: &Context, component: ComponentInteractio
         return;
     };
     let actor = Actor::User(UserKey::discord(component.user.id.get()));
-    let target = target(component.channel_id, component.guild_id);
+    let target = target(connection, component.channel_id, component.guild_id);
     let deferred = args.as_ref().is_some_and(|args| {
         command::schema::definitions()
             .iter()
@@ -363,13 +371,18 @@ async fn thought_button(bot: &Bot, ctx: &Context, component: ComponentInteractio
     }
 }
 
-pub(crate) async fn interaction_create(bot: &Bot, ctx: &Context, interaction: Interaction) {
+pub(crate) async fn interaction_create(
+    bot: &Bot,
+    connection: &ConnectionId,
+    ctx: &Context,
+    interaction: Interaction,
+) {
     // No registered controls in stealth: stale interactions remain unanswered.
     if bot.stealth {
         return;
     }
     match interaction {
-        Interaction::Command(cmd) => slash(bot, ctx, &cmd).await,
+        Interaction::Command(cmd) => slash(bot, connection, ctx, &cmd).await,
         Interaction::Modal(interaction) => {
             let _ = interaction
                 .create_response(
@@ -388,7 +401,7 @@ pub(crate) async fn interaction_create(bot: &Bot, ctx: &Context, interaction: In
                 return;
             }
             if component.data.custom_id.starts_with("setting_") {
-                setting_button(bot, ctx, component).await;
+                setting_button(bot, connection, ctx, component).await;
                 return;
             }
             let service = AdminService::new(bot);
@@ -406,7 +419,7 @@ pub(crate) async fn interaction_create(bot: &Bot, ctx: &Context, interaction: In
                     match service
                         .execute(
                             &actor,
-                            &target(component.channel_id, component.guild_id),
+                            &target(connection, component.channel_id, component.guild_id),
                             ActionArgs::Status {},
                         )
                         .await
@@ -450,6 +463,18 @@ pub(crate) async fn interaction_create(bot: &Bot, ctx: &Context, interaction: In
 #[cfg(test)]
 mod test {
     use super::*;
+
+    #[test]
+    fn native_command_target_uses_its_actual_connection_and_room_scope() {
+        let connection = ConnectionId::new("second-discord");
+        let target = target(&connection, ChannelId::new(7), Some(GuildId::new(9)));
+        assert_eq!(target.connection, Some(connection));
+        let room = target.room.unwrap();
+        assert_eq!(room.id, RoomKey::discord(7));
+        assert_eq!(room.space, Some(SpaceKey::discord(9)));
+        assert_eq!(room.kind, RoomKind::Channel);
+        assert!(room.thread.is_none());
+    }
 
     /// Verifies `definitions()` has no duplicate command names (Discord would reject a duplicate registration).
     #[test]

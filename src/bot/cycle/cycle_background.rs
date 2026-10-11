@@ -1,6 +1,6 @@
 /// Returns the last active channel's last 40 lines only when no chat is open
 /// and a profile is available.
-fn idle_channel(bot: &Bot) -> Option<(RoomKey, String)> {
+fn idle_channel(bot: &Bot) -> Option<(ConversationKey, String)> {
     let state = bot.state();
     let channel = state.last_channel.as_ref()?;
     if state.chats.contains_key(channel) || state.profile.is_empty() {
@@ -10,7 +10,7 @@ fn idle_channel(bot: &Bot) -> Option<(RoomKey, String)> {
 }
 
 // every so often, speaks up unprompted like a familiar face would
-async fn poke_cycle(bot: Arc<Bot>, ctx: Context) {
+async fn poke_cycle(bot: Arc<Bot>) {
     loop {
         sleep(POKE_INTERVAL).await;
         if SHUTTING_DOWN.load(Ordering::SeqCst) {
@@ -39,7 +39,7 @@ async fn poke_cycle(bot: Arc<Bot>, ctx: Context) {
             }
             if rand::random::<f64>() < PROBLEM_SHARE {
                 // post a small code gripe to the dev channel
-                if let Some(channel) = default_channel(&bot, &ctx) {
+                if let Some(channel) = default_channel(&bot) {
                     if !bot.state().chats.contains_key(&channel) {
                         bot.post_problem(&channel).await;
                     }
@@ -51,8 +51,10 @@ async fn poke_cycle(bot: Arc<Bot>, ctx: Context) {
         let Some((channel, recent)) = idle_channel(&bot) else {
             continue;
         };
+        let context = bot.prompt_context(&channel);
+        let instruction = context.render(instruction);
 
-        let line = match bot.generate(&[user(recent)], instruction, Some(120), "laf").await {
+        let line = match bot.generate_for(&channel, &[user(recent)], &instruction, Some(120), "laf").await {
             Ok(l) => l,
             Err(e) => {
                 log::error!("ai [poke]: {e}");
@@ -128,11 +130,13 @@ async fn memory_cycle(bot: Arc<Bot>) {
             if !sleep::is_awake(&state) && now_unix() - state.last_night_observation >= 2 * 3600 {
                 let recent = recent_messages(&state, 300);
                 state.last_night_observation = now_unix();
+                let observed = state.recent_users.clone();
                 state.memory_queue.push_back((
                     recent,
                     "gece gözlemi (bot uykuda)".to_string(),
                     "gece".to_string(),
                     false,
+                    observed,
                 ));
             }
         }
@@ -148,11 +152,11 @@ async fn memory_cycle(bot: Arc<Bot>) {
                 }
                 state.memory_queue.pop_front()
             };
-            let Some((transcript_text, source, channel_name, run_critic)) = job else {
+            let Some((transcript_text, source, channel_name, run_critic, observed)) = job else {
                 break;
             };
             let transcript_copy = transcript_text.clone();
-            if let Err(e) = bot.diarist(transcript_text, &source, &channel_name).await {
+            if let Err(e) = bot.diarist(transcript_text, &source, &channel_name, &observed).await {
                 log::warn!(
                     "mind: diarist failed [{source}]: {}",
                     trim_error(&e.to_string())
@@ -166,7 +170,7 @@ async fn memory_cycle(bot: Arc<Bot>) {
 }
 
 // checks the sleep plan once a minute; on waking, replies to mentions received while asleep
-async fn sleep_cycle(bot: Arc<Bot>, ctx: Context) {
+async fn sleep_cycle(bot: Arc<Bot>) {
     loop {
         sleep(Duration::from_secs(60)).await;
         if SHUTTING_DOWN.load(Ordering::SeqCst) {
@@ -177,6 +181,6 @@ async fn sleep_cycle(bot: Arc<Bot>, ctx: Context) {
             sleep::update(&mut state);
         }
         bot.sleep_transition().await;
-        bot.close_timed_out(&ctx).await;
+        bot.close_timed_out().await;
     }
 }

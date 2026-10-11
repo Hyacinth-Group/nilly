@@ -7,6 +7,61 @@
 // `get` below.
 
 use crate::lang::Lang;
+use crate::platform::types::PlatformKind;
+use serde::Deserialize;
+use std::{collections::BTreeMap, sync::LazyLock};
+
+#[derive(Deserialize)]
+struct PlatformFragment {
+    discord: String,
+    telegram: String,
+    slack: String,
+    matrix: String,
+    terminal: String,
+    without_reactions: Option<String>,
+    without_legacy_history: Option<String>,
+}
+
+static TR_PLATFORM: LazyLock<BTreeMap<String, PlatformFragment>> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("../prompts/tr/platform-context.json"))
+        .expect("valid Turkish platform prompt fragments")
+});
+static EN_PLATFORM: LazyLock<BTreeMap<String, PlatformFragment>> = LazyLock::new(|| {
+    serde_json::from_str(include_str!("../prompts/en/platform-context.json"))
+        .expect("valid English platform prompt fragments")
+});
+
+/// Localized prose is embedded with the templates, never supplied by a transport.
+pub(crate) fn platform_fragment(
+    lang: Lang,
+    key: &str,
+    platform: PlatformKind,
+    reactions: bool,
+    legacy_history: bool,
+) -> Option<&'static str> {
+    let fragments = match lang {
+        Lang::Tr => &*TR_PLATFORM,
+        Lang::En => &*EN_PLATFORM,
+    };
+    let fragment = fragments.get(key)?;
+    if !reactions {
+        if let Some(text) = &fragment.without_reactions {
+            return Some(text);
+        }
+    }
+    if platform == PlatformKind::Discord && !legacy_history {
+        if let Some(text) = &fragment.without_legacy_history {
+            return Some(text);
+        }
+    }
+    Some(match platform {
+        PlatformKind::Discord => &fragment.discord,
+        PlatformKind::Telegram => &fragment.telegram,
+        PlatformKind::Slack => &fragment.slack,
+        PlatformKind::Matrix => &fragment.matrix,
+        PlatformKind::Terminal => &fragment.terminal,
+    })
+}
 
 mod tr {
     pub const PERSONALITY: &str = include_str!("../prompts/tr/kisilik.md");
@@ -181,7 +236,7 @@ const EN: Prompts = Prompts {
     mood: en::MOOD,
 };
 
-fn get(lang: Lang) -> &'static Prompts {
+pub(crate) fn get(lang: Lang) -> &'static Prompts {
     match lang {
         Lang::Tr => &TR,
         Lang::En => &EN,

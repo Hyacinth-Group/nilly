@@ -166,7 +166,7 @@
     /// Verifies `start_chat` doesn't duplicate an opening message that's already present in the channel history.
     #[test]
     fn opening_not_seeded_twice() {
-        let channel = RoomKey::discord(7);
+        let channel = ConversationKey { room: RoomKey::discord(7), thread: None };
         let mut state = State {
             bot_name: "kaju".into(),
             ..State::default()

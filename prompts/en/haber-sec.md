@@ -1,6 +1,6 @@
 # Picking a news item
 
-Below is a Discord group's profile, then a list of news items from two sources: [hn] Hacker
+{platform_en_news_group}
 News' front page (tech), [gündem] Turkey's news agenda. Pick a single item to post to this
 group.
 

@@ -23,7 +23,7 @@ fn system_json(fixed: &str, variable: &str, api_url: &str) -> serde_json::Value 
 // index... changes when an agent runs, this is where the prompt cache pays off) and
 // VARIABLE (retrieved memory, time, task)
 /// Assembles the fixed/variable system-message text (see `docs/architecture.md`'s numbered list).
-fn system_text(state: &State, instruction: &str, retrieved: &str) -> (String, String) {
+fn system_text_with(state: &State, instruction: &str, retrieved: &str, context: &platform::prompt_context::PromptContext) -> (String, String) {
     let p = prompts::current();
     let favorite_line = match &state.favorite_name {
         Some(f) => p.favorite_line.replace("{favori}", f),
@@ -40,10 +40,8 @@ fn system_text(state: &State, instruction: &str, retrieved: &str) -> (String, St
         }
     };
 
-    let mut fixed = p
-        .personality
-        .replace("{ad}", &state.bot_name)
-        .replace("{favori_satiri}", &favorite_line);
+    let mut fixed = context.render_with(p.personality,
+        &[("{ad}", &state.bot_name), ("{favori_satiri}", &favorite_line)]).into_owned();
     section(
         &mut fixed,
         "GELİŞİM EVREN",
@@ -91,23 +89,23 @@ fn system_text(state: &State, instruction: &str, retrieved: &str) -> (String, St
 
 /// Opens (or returns the existing) `Chat` for a channel, seeding fresh history from the
 /// channel's recent lines and, if given, an already-sent opening message.
-fn start_chat<'a>(state: &'a mut State, channel: &RoomKey, opening: Option<String>) -> &'a mut Chat {
+fn start_chat<'a>(state: &'a mut State, channel: &ConversationKey, opening: Option<String>) -> &'a mut Chat {
     let mut chat = Chat::default();
     // start from the channel's recent lines, so it knows what's already been discussed
     let prefix = format!("{}: ", state.bot_name);
     if let Some(hist) = state.channel_history.get(channel) {
         let skip = hist.len().saturating_sub(CHAT_SEED);
-        for line in hist.iter().skip(skip) {
+        for (index, line) in hist.iter().enumerate().skip(skip) {
             match line.strip_prefix(&prefix) {
                 Some(m) => chat.history.push(assistant(m)),
                 None => {
-                    if let Some((name, _)) = line.split_once(": ") {
-                        let label = name.to_lowercase();
-                        if let Some(id) = state.name_to_id.get(&label) {
-                            chat.participants.entry(label).or_insert_with(|| id.clone());
-                        }
+                    let mut turn = user(line.clone());
+                    turn.observed_user = state.channel_observations.get(channel)
+                        .and_then(|users| users.get(index)).and_then(Clone::clone);
+                    if let (Some(person), Some((label, _))) = (&turn.observed_user, line.split_once(": ")) {
+                        chat.participants.insert(label.to_lowercase(), person.id.clone());
                     }
-                    chat.history.push(user(line.clone()));
+                    chat.history.push(turn);
                 }
             }
         }
@@ -134,13 +132,13 @@ fn start_chat<'a>(state: &'a mut State, channel: &RoomKey, opening: Option<Strin
 }
 
 /// Removes the chat and clears its awaiting-comment flag.
-fn end_chat(state: &mut State, channel: &RoomKey) -> Option<Chat> {
+fn end_chat(state: &mut State, channel: &ConversationKey) -> Option<Chat> {
     state.awaiting_comment.remove(channel);
     state.chats.remove(channel)
 }
 
 /// Detects a user message arriving after reply generation captured `Chat.incoming`.
-fn new_message_arrived(state: &State, channel: &RoomKey, generated_incoming: u32) -> bool {
+fn new_message_arrived(state: &State, channel: &ConversationKey, generated_incoming: u32) -> bool {
     state
         .chats
         .get(channel)

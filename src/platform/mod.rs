@@ -5,7 +5,9 @@ pub mod discord;
 pub mod interface;
 pub mod keys;
 pub mod outgoing;
+pub mod prompt_context;
 pub mod registry;
+pub mod runtime;
 pub mod types;
 
 pub use interface::{Adapter, Platform, PlatformError, PlatformResult};

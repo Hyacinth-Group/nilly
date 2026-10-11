@@ -28,12 +28,13 @@ Selected messages, saved notes, and optionally images leave the host for model p
 |---|---|
 | `src/main.rs`, `src/bot/setup.rs` | process/configuration and startup |
 | `src/bot/types/` | shared state and limits |
-| `src/bot/handler/` | Discord events, scope filters, willingness decisions |
+| `src/bot/handler/`, `src/bot/lifecycle.rs` | normalized events, approval, history and willingness decisions |
 | `src/bot/chat/` | conversation turns and research |
 | `src/bot/provider/` | requests, personality/analysis split, streaming and send paths |
 | `src/bot/text/` | pure reply parsing and text helpers |
 | `src/bot/cycle/` | background loops, memory queues and actions |
-| `src/command.rs`, `src/command/`, `src/modal.rs` | slash registration, handlers and UI cards |
+| `src/command.rs`, `src/command/` | shared typed actions, validation and administrative read models |
+| `src/platform/discord/` | native gateway, SDK transport, slash registration, UI cards/modals and renderer |
 | `src/agents.rs`, `src/agenda.rs` | analysis and web/news work |
 | `src/memory.rs`, `src/migrate.rs` | redb records, retrieval, summarization/archive support and legacy import |
 | `src/growth.rs`, `src/sleep.rs`, `src/travel.rs` | growth stages, clock/sleep, Turkish calendar |
@@ -48,7 +49,7 @@ Serenity is vendored under `vendor/serenity` for planned in-tree changes; the Ca
 
 `Bot` owns a `Mutex<State>` and an HTTP client. State includes open chats, channel histories, memory context, sleep plans, queued observations and runtime flags. Take a short lock to snapshot inputs, drop it before network/model awaits, and take another short lock to apply results. **No state/cache lock crosses `.await`.** A per-channel RAII busy guard clears reply ownership on normal exit or unwinding.
 
-Conversation uses `generate` / `generate_stream`, with the persona and evolving context. Background extraction/evaluation uses `analyze`, without the conversational persona. Image commentary is intentionally a talking path.
+Conversation uses route-aware `generate_for` / `generate_stream_for`, with the persona and evolving context; shared-brain `generate` remains for non-route work. Background extraction/evaluation uses `analyze` / `analyze_with`, without the conversational persona. Trusted prompt templates are rendered once before literal runtime instructions are passed to those methods. Image commentary is intentionally a talking path.
 
 ## Context and storage
 
@@ -187,3 +188,80 @@ owner gating for model setters. Other connections deny administration until an
 explicit qualified administrator set is supplied through
 `ConnectionRegistry::set_admin_users`; token changes/reconnects preserve policy.
 `authorize` compares full source-qualified identity, never numeric ID or name.
+
+### Generic lifecycle and adapter registration
+
+`platform::runtime::ConnectionConfig::Discord { connection: ConnectionId, token: String }`
+is the current startup configuration; credentials remain runner-local. Startup
+calls `platform::runtime::run(Arc<Bot>, Vec<ConnectionConfig>) -> Result<(), BotError>`.
+Adding a concrete network means extending this configuration enum and `Adapter`,
+implementing the complete `Platform` interface, and providing an adapter-local
+runner accepting an `EventSender` and `ShutdownReceiver`. No generic brain code
+should need an SDK import. The Discord gateway and event handler now live under
+`platform::discord`, including intents, slash UI, safe-content decoding and HTTP
+enrichment.
+
+Before connection readiness, configure its source through
+`ConnectionRegistry::configure(&ConnectionId, PlatformKind) -> PlatformResult<()>`.
+Set `RoomPolicy::Approved(HashSet<RoomKey>)` and qualified administrators explicitly
+for non-Discord connections. Discovery alone never grants access. On real readiness
+call `Bot::register_adapter(Adapter) -> PlatformResult<Arc<Adapter>>`, register native
+UI, then send `ChatEvent::ConnectionReady(UserRef)`. Reconnecting updates account
+metadata but does not replace the primary brain identity or duplicate its six cycles.
+`ConnectionClosed` and runner termination mark only that connection disconnected.
+Configured/connecting/disconnected entries remain visible in the status snapshot.
+
+`EventSender::channel(capacity) -> (EventSender, Receiver<EventEnvelope>)` and
+`EventSender::send(EventEnvelope) -> PlatformResult<()>` provide bounded ingress
+(runtime capacity 256). The envelope contains a credential-independent connection,
+source-qualified EventKey, timestamp in milliseconds, and domain event. Native
+message IDs must be reused on replay; synthetic lifecycle/reaction IDs must not
+collapse distinct legitimate events. Deduplication precedes model/memory work and
+retains 4096 recent connection-qualified event IDs. Lifecycle discovery is ordered;
+message/reaction/member model work is independently spawned. SDK acknowledgment
+and private command response handles stay native: command surfaces call the shared
+AdminService directly rather than publish a private response through generic send.
+
+`SpaceRef` retains adapter-supplied room order and preferred-room metadata.
+`HistoryRequest` carries a cutoff, bounded limit and optional native cursor;
+`HistoryPage` declares ordering, continuation and limitations. Discord keeps its
+attempt-once marker before the fetch, fourteen-day cutoff, native text-channel
+selection, empty/bot filtering and two-thousand-character retained history.
+`HistoryInitializationPolicy::AfterSuccess` does not mark failed or unsupported
+new-platform history initialized. History is sorted oldest-first and prepended
+to concurrently received live text without discarding it.
+
+All chat state, active replies, queues and outgoing routes use `ConversationKey`
+(base RoomKey plus optional source-qualified ThreadKey); transport always resolves
+an explicitly bound, ready route. A base room cannot belong to two connections,
+including through different topics. Legacy Discord NEWS/DEBUG overrides and
+native-command routes remain explicit exceptions to learning filters; there is
+no arbitrary-room or disconnected default-Discord fallback. Core observations
+retain captured account IDs, not identities reconstructed from display names or
+model output. Duplicate display names receive transcript-local disambiguation;
+historical unattributed text remains unattributed. New threaded history uses a
+reversible canonical filename without rewriting old Discord history bodies.
+
+`OWNER_KEY` accepts a canonical UserKey and takes precedence over legacy numeric
+`OWNER_ID` (Discord only); an invalid explicit value never falls back. The panel's
+typed settings registry should validate it through `UserKey::from_str`, expose
+it as optional, and preserve the numeric compatibility input. Configuration,
+memory and status APIs do not expose native SDK objects or credentials.
+
+Localized platform fragments render the common prompts through `PromptContext`.
+The Discord golden fixtures retain complete English/Turkish bytes. Other networks
+receive honest platform labels, reaction capability and actual-history context;
+they are never instructed to pretend to be Discord. One brain intentionally
+shares memory across explicitly trusted rooms; registry approval is the trust
+boundary, not an independent brain per tenant.
+
+History text and its companion `kanal-kimlikleri/{canonical-room}.md` (including
+the same optional `/threads/{canonical-thread}` suffix) are committed in one redb
+transaction. Companion JSON stores aligned optional `UserRef` entries, not IDs
+guessed from text; absent legacy metadata remains `None`. Loading preserves
+captured local speaker labels and source identities across restart.
+
+Runtime additionally limits concurrent ingress model jobs to 32. Its separate
+64-slot lifecycle/control queue remains serviceable while the 256-slot message
+queue applies backpressure; SDK native private-command acknowledgment is not
+queued behind model work.

@@ -1,122 +1,162 @@
-/// One-time (per guild) scan of the last `HISTORY_DAYS` of messages, on first join.
-/// Populates recent messages and user-name mappings in the background.
-async fn read_history(bot: &Bot, ctx: &Context, guild: &Guild) {
-    let bot_id = ctx.cache.current_user().id;
-    let member = match guild.member(ctx, bot_id).await {
-        Ok(u) => u,
-        Err(e) => {
-            log::warn!("{}: couldn't get membership: {e}", guild.name);
-            return;
-        }
+/// Fetch approved rooms in adapter-native position order. Pages remain normalized;
+/// denied/unsupported history is not a successful empty scan.
+async fn read_history(bot: &Bot, connection: &ConnectionId, space: &SpaceRef) -> bool {
+    let adapter = {
+        bot.adapters.lock().unwrap_or_else(|e| e.into_inner()).get(connection)
     };
-    let cutoff = now_unix() - HISTORY_DAYS * 24 * 60 * 60;
-
-    let mut channels: Vec<&GuildChannel> = guild
-        .channels
-        .values()
-        .filter(|k| k.kind == ChannelType::Text)
-        .collect();
-    channels.sort_by_key(|k| k.position);
-
-    let mut collected: Vec<(i64, String, UserKey, String)> = Vec::new();
-    for ch in channels {
-        if bot
-            .allowed_channels
-            .as_ref()
-            .is_some_and(|s| !s.contains(&RoomKey::discord(ch.id.get())))
-        {
-            continue;
-        }
-        let perms = guild.user_permissions_in(ch, &member);
-        if !perms.contains(Permissions::VIEW_CHANNEL | Permissions::READ_MESSAGE_HISTORY) {
-            continue;
-        }
-        let mut before: Option<MessageId> = None;
+    let Some(adapter) = adapter else {
+        return false;
+    };
+    let cutoff = history_cutoff(now_unix());
+    let rooms: Vec<_> = {
+        let registry = bot.adapters.lock().unwrap_or_else(|e| e.into_inner());
+        space.rooms.iter()
+            .filter(|room| registry.allows(connection, room) && registry.is_bound(connection, room))
+            .cloned()
+            .collect()
+    };
+    let mut collected = Vec::new();
+    let mut succeeded = !rooms.is_empty();
+    for room in rooms {
+        let mut cursor = None;
         loop {
-            let mut query = GetMessages::new().limit(100);
-            if let Some(id) = before {
-                query = query.before(id);
-            }
-            let batch = match ch.id.messages(&ctx.http, query).await {
-                Ok(p) if !p.is_empty() => p,
-                _ => break,
-            };
-            let mut hit_cutoff = false;
-            for m in &batch {
-                if m.timestamp.unix_timestamp() < cutoff {
-                    hit_cutoff = true;
+            let page = match adapter.fetch_history(&room, platform::outgoing::HistoryRequest {
+                cursor: cursor.clone(),
+                cutoff_unix_ms: Some(cutoff),
+                limit: 100,
+            }).await {
+                Ok(page) => page,
+                Err(error) => {
+                    log::warn!("history [{}]: {error}", room.conversation());
+                    succeeded = false;
                     break;
                 }
-                if !m.author.bot && !m.content.trim().is_empty() {
-                    collected.push((
-                        m.timestamp.unix_timestamp(),
-                        display_name(&m.author),
-                        UserKey::discord(m.author.id.get()),
-                        m.content_safe(&ctx.cache),
-                    ));
-                }
-            }
-            if hit_cutoff || batch.len() < 100 {
+            };
+            if !page.messages.iter().all(|message|
+                valid_message_source(message, connection, room.id.platform())
+                    && message.room.id == room.id && message.room.thread == room.thread
+            ) {
+                log::warn!("history [{}]: invalid page source identity", room.conversation());
+                succeeded = false;
                 break;
             }
-            before = batch.last().map(|m| m.id);
+            if page.limitations.iter().any(|limitation| matches!(
+                limitation,
+                platform::outgoing::HistoryLimitation::Restricted
+                    | platform::outgoing::HistoryLimitation::Undecryptable
+            )) {
+                log::warn!("history [{}]: access limitations {:?}", room.conversation(), page.limitations);
+                succeeded = false;
+            }
+            let next = page.next_cursor.clone();
+            let hit_cutoff = collect_history_page(&mut collected, page, cutoff);
+            if hit_cutoff || next.is_none() {
+                break;
+            }
+            if next == cursor {
+                log::warn!("history [{}]: repeated history cursor", room.conversation());
+                succeeded = false;
+                break;
+            }
+            cursor = next;
         }
     }
+    let count = collected.len();
+    apply_history(&mut bot.state(), collected);
+    log::debug!("{}: read {count} message(s)", space.id);
+    succeeded
+}
 
-    // discord hands back newest-to-oldest, we want oldest-to-newest
-    collected.sort_by_key(|t| t.0);
-    let skip = collected.len().saturating_sub(MEMORY_SIZE);
-    let mut state = bot.state();
-    for (_, name, id, _) in collected.iter().skip(skip) {
-        if is_owner(id) {
-            state.favorite_name = Some(name.clone());
+fn history_cutoff(now: i64) -> i64 {
+    (now - HISTORY_DAYS * 24 * 60 * 60) * 1000
+}
+
+fn collect_history_page(
+    collected: &mut Vec<IncomingMessage>,
+    page: platform::outgoing::HistoryPage,
+    cutoff: i64,
+) -> bool {
+    let newest_first = page.order == platform::outgoing::HistoryOrder::NewestFirst;
+    let mut hit_cutoff = false;
+    for message in page.messages {
+        if message.sent_at_unix_ms < cutoff {
+            hit_cutoff = true;
+            if newest_first {
+                break;
+            }
+        } else {
+            collected.push(message);
         }
-        // live mappings take priority: the scan shouldn't overwrite them with stale info
-        state.name_to_id.entry(name.to_lowercase()).or_insert_with(|| id.clone());
     }
-    // live messages may have entered memory while the scan was running: history is
-    // prepended, not appended — appending would break chronological order and get
-    // overwritten by the live messages
-    for (_, name, _, text) in collected.iter().skip(skip).rev() {
-        state.recent_messages.push_front(format!("{name}: {text}"));
+    // Oldest-first pages may still have newer pages after crossing the cutoff.
+    hit_cutoff && newest_first
+}
+
+fn apply_history(state: &mut State, mut collected: Vec<IncomingMessage>) {
+    collected.sort_by_key(|message| message.sent_at_unix_ms);
+    let skip = collected.len().saturating_sub(MEMORY_SIZE);
+    let mut lines = Vec::with_capacity(collected.len().saturating_sub(skip));
+    for message in collected.into_iter().skip(skip) {
+        if is_owner(&message.author.id) {
+            state.favorite_name = Some(message.author.display_name.clone());
+        }
+        let live = state.recent_users.iter()
+            .find(|(_, person)| person.id == message.author.id)
+            .map(|(label, person)| (label.clone(), person.clone()));
+        let username = state.usernames.get(&message.author.id).cloned();
+        let name = observe_user(state, &message.author);
+        // Live identity metadata takes priority over stale historical names.
+        if let Some((label, person)) = live {
+            state.recent_users.insert(label, person);
+        }
+        if let Some(username) = username {
+            state.usernames.insert(message.author.id.clone(), username);
+        }
+        lines.push(format!("{name}: {}", message.text));
+    }
+    // Live messages received during the scan stay at the chronological end.
+    for line in lines.into_iter().rev() {
+        state.recent_messages.push_front(line);
     }
     while state.recent_messages.len() > MEMORY_SIZE {
         state.recent_messages.pop_front();
     }
-    log::debug!("{}: read {} message(s)", guild.name, collected.len());
 }
 
-// channel used for news and welcome messages: the configured one if set, else the
-// server's system channel, else the topmost text channel
-fn default_channel(bot: &Bot, ctx: &Context) -> Option<RoomKey> {
-    if let Some(k) = &bot.news_channel {
-        return Some(k.clone());
+/// Explicit news targets precede discovered preferred rooms; otherwise use the
+/// native system-room then text-position order within each discovered space.
+fn default_channel(bot: &Bot) -> Option<ConversationKey> {
+    let registry = bot.adapters.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(room) = &bot.news_channel {
+        let route = ConversationKey { room: room.clone(), thread: None };
+        return registry.for_conversation(&route).map(|_| route);
     }
-    let allowed = |id: ChannelId| {
-        bot.allowed_channels
-            .as_ref()
-            .is_none_or(|s| s.contains(&RoomKey::discord(id.get())))
-    };
-    for guild_id in ctx.cache.guilds() {
-        if bot.guild_id.as_ref().is_some_and(|g| *g != SpaceKey::discord(guild_id.get())) {
+    for (connection, space) in registry.discovered_spaces() {
+        if registry.get(&connection).is_none() {
             continue;
         }
-        let Some(guild) = ctx.cache.guild(guild_id) else {
-            continue;
+        if let Some(route) = preferred_route(&space, |room|
+            registry.allows(&connection, room) && registry.is_bound(&connection, room)
+        ) {
+            return Some(route);
+        }
+    }
+    registry.first_approved_room()
+}
+
+fn preferred_route(space: &SpaceRef, approved: impl Fn(&RoomRef) -> bool)
+    -> Option<ConversationKey>
+{
+    if let Some(preferred) = &space.preferred_room {
+        let room = RoomRef {
+            space: Some(space.id.clone()),
+            ..RoomRef::from_key(preferred.clone())
         };
-        if let Some(k) = guild.system_channel_id.filter(|id| allowed(*id)) {
-            return Some(RoomKey::discord(k.get()));
-        }
-        if let Some(k) = guild
-            .channels
-            .values()
-            .filter(|k| k.kind == ChannelType::Text && allowed(k.id))
-            .min_by_key(|k| k.position)
-        {
-            return Some(RoomKey::discord(k.id.get()));
+        if approved(&room) {
+            return Some(room.conversation());
         }
     }
-    None
+    space.rooms.iter().find(|room| approved(room)).map(RoomRef::conversation)
 }
 
 // ---------- background cycles ----------
@@ -153,4 +193,108 @@ where
     });
 }
 
-// every six hours: the agents run, then a hacker news item gets posted
+#[cfg(test)]
+mod generic_history_tests {
+    use super::*;
+
+    fn person(id: u64, name: &str) -> UserRef {
+        UserRef {
+            id: UserKey::discord(id),
+            display_name: name.into(),
+            username: Some(name.into()),
+            automation: platform::types::Automation::Human,
+            stability: platform::types::IdentityStability::Persistent,
+        }
+    }
+
+    fn message(id: u64, timestamp: i64, author: UserRef) -> IncomingMessage {
+        IncomingMessage {
+            id: MessageKey::discord(id),
+            room: RoomRef::from_key(RoomKey::discord(7)),
+            author,
+            sent_at_unix_ms: timestamp,
+            text: id.to_string(),
+            mentions: Vec::new(),
+            reply_to: None,
+            attachments: Vec::new(),
+        }
+    }
+
+    fn page(messages: Vec<IncomingMessage>, order: platform::outgoing::HistoryOrder)
+        -> platform::outgoing::HistoryPage
+    {
+        platform::outgoing::HistoryPage {
+            messages,
+            next_cursor: None,
+            limitations: Vec::new(),
+            order,
+        }
+    }
+
+    #[test]
+    fn cutoff_is_fourteen_days_inclusive_and_respects_page_order() {
+        let cutoff = history_cutoff(2_000_000_000);
+        assert_eq!(cutoff, (2_000_000_000 - 14 * 24 * 60 * 60) * 1000);
+        let messages = || vec![
+            message(1, cutoff + 1, person(1, "Alice")),
+            message(2, cutoff, person(1, "Alice")),
+            message(3, cutoff - 1, person(1, "Alice")),
+        ];
+        let mut collected = Vec::new();
+        assert!(collect_history_page(&mut collected,
+            page(messages(), platform::outgoing::HistoryOrder::NewestFirst), cutoff));
+        assert_eq!(collected.len(), 2);
+        let mut reverse = messages();
+        reverse.reverse();
+        collected.clear();
+        assert!(!collect_history_page(&mut collected,
+            page(reverse, platform::outgoing::HistoryOrder::OldestFirst), cutoff));
+        assert_eq!(collected.len(), 2);
+    }
+
+    #[test]
+    fn historical_messages_prepend_live_and_preserve_live_identity() {
+        let mut state = State::default();
+        let live = person(1, "Alice");
+        observe_user(&mut state, &live);
+        state.recent_messages.push_back("Alice: live".into());
+        apply_history(&mut state, vec![
+            message(2, 20, person(1, "Alice")),
+            message(1, 10, person(2, "Alice")),
+        ]);
+        assert_eq!(state.recent_messages.back().unwrap(), "Alice: live");
+        assert_eq!(state.recent_messages[0], "Alice [discord:user:2]: 1");
+        assert_eq!(state.recent_messages[1], "Alice: 2");
+        assert_eq!(state.recent_users["alice"].id, live.id);
+        assert_eq!(state.recent_users["alice [discord:user:2]"].id, UserKey::discord(2));
+    }
+
+    #[test]
+    fn chronological_history_trims_before_prepending_live_messages() {
+        let mut state = State::default();
+        state.recent_messages.push_back("Alice: live".into());
+        let messages = (0..MEMORY_SIZE + 10).rev()
+            .map(|i| message(i as u64, i as i64, person(1, "Alice")))
+            .collect();
+        apply_history(&mut state, messages);
+        assert_eq!(state.recent_messages.len(), MEMORY_SIZE);
+        assert_eq!(state.recent_messages.front().unwrap(), "Alice: 11");
+        assert_eq!(state.recent_messages.back().unwrap(), "Alice: live");
+    }
+
+    #[test]
+    fn preferred_room_precedes_native_text_position_and_requires_approval() {
+        let first = RoomRef::from_key(RoomKey::discord(30));
+        let second = RoomRef::from_key(RoomKey::discord(20));
+        let space = SpaceRef {
+            id: SpaceKey::discord(9),
+            name: None,
+            rooms: vec![first.clone(), second],
+            preferred_room: Some(RoomKey::discord(10)),
+        };
+        assert_eq!(preferred_route(&space, |_| true).unwrap().room, RoomKey::discord(10));
+        assert_eq!(preferred_route(&space, |room| room.id != RoomKey::discord(10)).unwrap(),
+            first.conversation());
+        assert!(preferred_route(&space, |_| false).is_none());
+    }
+}

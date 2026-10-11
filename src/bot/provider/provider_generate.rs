@@ -1,6 +1,6 @@
 impl Bot {
     /// Builds the fixed/variable system-message pair for a chat reply.
-    fn chat_system(&self, history: &[ChatMessage], instruction: &str) -> (String, String, String) {
+    fn chat_system(&self, history: &[ChatMessage], instruction: &str, context: &platform::prompt_context::PromptContext) -> (String, String, String) {
         let mut participants: Vec<String> = Vec::new();
         let mut texts: Vec<String> = Vec::new();
         for m in history.iter().filter(|m| m.role == "user") {
@@ -17,15 +17,17 @@ impl Bot {
         }
         let keywords = memory::keywords(&texts);
         let s = self.state();
-        let retrieved = memory::retrieve(&participants, &s.name_to_id, &keywords, &s.recent_messages, CHAT_SIZE);
-        let (fixed, variable) = system_text(&s, instruction, &retrieved);
+        let identities = observed_users(history).into_iter().map(|(label, person)| (label, person.id)).collect();
+        let retrieved = memory::retrieve(&participants, &identities, &keywords, &s.recent_messages, CHAT_SIZE);
+        let (fixed, variable) = system_text_with(&s, instruction, &retrieved, context);
         (fixed, variable, s.bot_name.clone())
     }
 
     // talks with personality: chat, welcome, unprompted remarks, introducing news, pranks.
     // budget None means max_tokens isn't sent; chat replies get their budget from reply_budget!.
     // category only feeds the token metrics breakdown (!durum), it has no effect on the request.
-    /// The single non-streaming personality-generation entry point (see AGENTS.md rule 6).
+    /// Background personality generation. Render the trusted instruction template once before calling;
+    /// substituted names, observations, and research remain literal data.
     async fn generate(
         &self,
         history: &[ChatMessage],
@@ -33,32 +35,47 @@ impl Bot {
         budget: Option<u32>,
         category: &'static str,
     ) -> Result<String, BotError> {
-        let (fixed, variable, bot_name) = self.chat_system(history, instruction);
+        let (fixed, variable, bot_name) = self.chat_system(history, instruction, &self.default_prompt_context());
         let reply = self
             .ask_split(&fixed, &variable, history, budget, category)
             .await?;
         Ok(clean(reply, &bot_name))
     }
 
-    // opens the chat reply as a stream; chunks are read from the reader as they arrive
-    /// The streaming counterpart of `generate` (see AGENTS.md rule 6).
-    /// Also returns the bot's current name for stripping the prefix while streaming.
-    async fn generate_stream(
-        &self,
-        history: &[ChatMessage],
-        instruction: &str,
-        budget: Option<u32>,
-        category: &'static str,
-    ) -> Result<(StreamReader, String), BotError> {
-        let (fixed, variable, bot_name) = self.chat_system(history, instruction);
-        let reader = self
-            .ask_raw_stream(&fixed, &variable, history, budget, category)
-            .await?;
+
+    fn default_prompt_context(&self) -> platform::prompt_context::PromptContext {
+        let state = self.state();
+        let kind = state.primary_connection.as_ref().and_then(|connection| state.accounts.get(connection))
+            .map(|account| account.id.platform()).unwrap_or(platform::types::PlatformKind::Discord);
+        platform::prompt_context::PromptContext::for_platform(kind)
+    }
+
+    fn prompt_context(&self, channel: &ConversationKey) -> platform::prompt_context::PromptContext {
+        let context = platform::prompt_context::PromptContext::for_platform(channel.room.platform());
+        match self.transport(channel) {
+            Ok((adapter, room)) => context.with_capabilities(&adapter.capabilities(&room)),
+            Err(_) => context.with_capabilities(&platform::capabilities::Capabilities::unavailable()),
+        }
+    }
+
+    /// Routed personality generation; `instruction` is already rendered and never expanded again.
+    async fn generate_for(&self, channel: &ConversationKey, history: &[ChatMessage], instruction: &str,
+        budget: Option<u32>, category: &'static str) -> Result<String, BotError> {
+        let (fixed, variable, bot_name) = self.chat_system(history, instruction, &self.prompt_context(channel));
+        let reply = self.ask_split(&fixed, &variable, history, budget, category).await?;
+        Ok(clean(reply, &bot_name))
+    }
+
+    /// Routed streaming counterpart, using the same prepared-instruction contract.
+    async fn generate_stream_for(&self, channel: &ConversationKey, history: &[ChatMessage], instruction: &str,
+        budget: Option<u32>, category: &'static str) -> Result<(StreamReader, String), BotError> {
+        let (fixed, variable, bot_name) = self.chat_system(history, instruction, &self.prompt_context(channel));
+        let reader = self.ask_raw_stream(&fixed, &variable, history, budget, category).await?;
         Ok((reader, bot_name))
     }
 
     // personality-free, plain analysis: used by the agents
-    /// The single personality-free analysis entry point (see AGENTS.md rule 6).
+    /// Analysis with an already-rendered instruction; only the trusted analyst system template is expanded.
     async fn analyze(
         &self,
         text: &str,
@@ -66,9 +83,15 @@ impl Bot {
         max_tokens: u32,
         category: &'static str,
     ) -> Result<String, BotError> {
+        self.analyze_with(text, instruction, max_tokens, category, &self.default_prompt_context()).await
+    }
+
+    async fn analyze_with(&self, text: &str, instruction: &str, max_tokens: u32,
+        category: &'static str, context: &platform::prompt_context::PromptContext) -> Result<String, BotError> {
+
+
         let input = user(format!("{text}\n\n---\n\n{instruction}"));
-        self.ask(prompts::current().analyst, &[input], max_tokens, category)
-            .await
+        self.ask(&context.render(prompts::current().analyst), &[input], max_tokens, category).await
     }
 
     // "do I want to join this conversation?" mini evaluation (0-10 score).
@@ -78,7 +101,7 @@ impl Bot {
     // content used in the main chat, and only change every 6 hours — kept separate so
     // they aren't sent at full price on every single message.
     /// Returns a 0–10 score and reason, or `None` without context or on failure.
-    async fn willingness(&self) -> Option<(u8, String)> {
+    async fn willingness(&self, channel: &ConversationKey) -> Option<(u8, String)> {
         let (context, profile, index, bot_name) = {
             let s = self.state();
             (
@@ -92,8 +115,9 @@ impl Bot {
             return None;
         }
         let p = prompts::current();
-        let fixed = format!("{}\n\nGRUP PROFİLİ\n{profile}\n\nKİŞİ DİZİNİ\n{index}", p.analyst);
-        let variable = p.willingness.replace("{ad}", &bot_name);
+        let prompt = self.prompt_context(channel);
+        let fixed = format!("{}\n\nGRUP PROFİLİ\n{profile}\n\nKİŞİ DİZİNİ\n{index}", prompt.render(p.analyst));
+        let variable = prompt.render_with(p.willingness, &[("{ad}", &bot_name)]);
         let input = user(format!("SON MESAJLAR\n{context}"));
         match self
             .ask_split(&fixed, &variable, &[input], Some(80), "isteklilik")
@@ -112,13 +136,14 @@ impl Bot {
     // instruction is in the fixed block (cache_control): it doesn't include profile/index,
     // but at least it's constant on its own.
     /// Returns `None` if target selection fails.
-    async fn pick_target(&self, waiting: &[String]) -> Option<String> {
+    async fn pick_target(&self, channel: &ConversationKey, waiting: &[String]) -> Option<String> {
         let (context, bot_name) = {
             let s = self.state();
             (recent_messages(&s, 12), s.bot_name.clone())
         };
         let p = prompts::current();
-        let fixed = format!("{}\n\n{}", p.analyst, p.target_pick.replace("{ad}", &bot_name));
+        let prompt = self.prompt_context(channel);
+        let fixed = format!("{}\n\n{}", prompt.render(p.analyst), prompt.render_with(p.target_pick, &[("{ad}", &bot_name)]));
         let variable = format!("BEKLEYENLER\n- {}", waiting.join("\n- "));
         let input = user(format!("SON MESAJLAR\n{context}"));
         match self
@@ -136,7 +161,7 @@ impl Bot {
     // determines this chat's mood: a cheap mini call, only made by `reply` when a chat
     // opens and every few turns after (not on every message). Neutral/low intensity or an
     // error -> None, which the caller treats as "no clear mood".
-    async fn determine_mood(&self, history: &[ChatMessage]) -> Option<String> {
+    async fn determine_mood(&self, channel: &ConversationKey, history: &[ChatMessage]) -> Option<String> {
         if history.is_empty() {
             return None;
         }
@@ -151,9 +176,10 @@ impl Bot {
             })
             .collect();
         let p = prompts::current();
-        let variable = p.mood.replace("{ad}", &self.state().bot_name);
+        let prompt = self.prompt_context(channel);
+        let variable = prompt.render_with(p.mood, &[("{ad}", &self.state().bot_name)]).into_owned();
         match self
-            .ask_split(p.analyst, &variable, &history, Some(40), "ruh_hali")
+            .ask_split(&prompt.render(p.analyst), &variable, &history, Some(40), "ruh_hali")
             .await
         {
             Ok(c) => extract_mood(&c),
@@ -170,19 +196,19 @@ impl Bot {
     /// `ping` is the only user allowed to be mentioned.
     async fn send(
         &self,
-        channel: &RoomKey,
+        channel: &ConversationKey,
         text: &str,
         ping: Option<&UserKey>,
         file: Option<&PathBuf>,
         reply_to: Option<&MessageKey>,
     ) {
-        let transport = match self.transport(channel) {
+        let (transport, room) = match self.transport(channel) {
             Ok(transport) => transport,
             Err(e) => { log::error!("send failed ({channel}): {e}"); return; }
         };
-        let room = platform::types::RoomRef::from_key(channel.clone());
+
         let target = reply_to.map(|id| platform::types::MessageRef {
-            id: id.clone(), room: channel.clone(), author: None,
+            id: id.clone(), room: channel.room.clone(), author: None,
         });
         let attachments = file
             .map(|path| platform::outgoing::OutgoingAttachment::LocalPath(path.as_path()));

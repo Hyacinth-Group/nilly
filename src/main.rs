@@ -9,7 +9,6 @@ mod logging;
 mod memory;
 mod memory_migration;
 mod migrate;
-mod modal;
 pub mod platform;
 mod prompts;
 mod sleep;
@@ -30,8 +29,6 @@ use platform::types::*;
 use platform::types::{Emoji, UserRef};
 use platform::Platform;
 use serde::{Deserialize, Serialize};
-use serenity::all::*;
-use serenity::async_trait;
 use tokio::time::sleep;
 
 // The old content of this file (constants, State/Bot/Handler, the chat engine, the
@@ -47,6 +44,7 @@ include!("bot/chat/chat.rs");
 include!("bot/cycle/cycle.rs");
 include!("bot/handler/handler.rs");
 include!("bot/setup.rs");
+include!("bot/lifecycle.rs");
 
 /// Runs the Discord client or terminal chat bench until shutdown or failure.
 #[tokio::main]
@@ -99,31 +97,13 @@ async fn main() -> Result<(), BotError> {
     };
     let bot = Bot::setup()?;
 
-    let intents = GatewayIntents::GUILDS
-        | GatewayIntents::GUILD_MESSAGES
-        | GatewayIntents::GUILD_MEMBERS
-        | GatewayIntents::GUILD_MESSAGE_REACTIONS
-        | GatewayIntents::MESSAGE_CONTENT;
-
-    let mut client = Client::builder(&token, intents)
-        .event_handler(Handler {
-            bot,
-            started: AtomicBool::new(false),
-            announced: AtomicBool::new(false),
-        })
-        .await?;
-
-    // shut down cleanly on ctrl+c or sigterm
-    let shard_manager = client.shard_manager.clone();
-    tokio::spawn(async move {
-        wait_for_shutdown().await;
-        log::info!("shutting down");
-        // cycles should not open a new round, and the watchdog should not restart them
-        SHUTTING_DOWN.store(true, Ordering::SeqCst);
-        shard_manager.shutdown_all().await;
-    });
-
-    client.start().await?;
-    Ok(())
+    platform::runtime::run(
+        bot,
+        vec![platform::runtime::ConnectionConfig::Discord {
+            connection: ConnectionId::new("discord-default"),
+            token,
+        }],
+    )
+    .await
 }
 include!("bot/tests/tests.rs");

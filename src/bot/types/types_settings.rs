@@ -73,18 +73,22 @@ const REASONING_MANDATORY_BASE: u32 = 500;
 // budget floor for the reasoning-on retry on stream-less agent calls: 2x the current
 // budget, or this, whichever is larger
 const REASONING_BUDGET_BASE: u32 = 1500;
-/// OWNER_ID from .env: always liked and the only user who can switch /model.
-/// Unset or invalid means no owner.
+/// An explicit qualified owner takes precedence; legacy numeric OWNER_ID is Discord.
+fn configured_owner(explicit: Option<&str>, legacy: Option<&str>) -> Result<Option<UserKey>, platform::types::KeyError> {
+    if let Some(explicit) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
+        return explicit.parse().map(Some);
+    }
+    legacy.map(str::trim).filter(|value| !value.is_empty())
+        .map(|value| value.parse::<u64>().map(UserKey::discord).map_err(|_| platform::types::KeyError)).transpose()
+}
 fn owner_id() -> Option<&'static UserKey> {
-    static OWNER: std::sync::LazyLock<Option<UserKey>> = std::sync::LazyLock::new(|| match std::env::var("OWNER_ID") {
-        Ok(v) if !v.trim().is_empty() => match v.trim().parse::<u64>() {
-            Ok(id) => Some(UserKey::discord(id)),
-            Err(_) => {
-                log::warn!("invalid OWNER_ID '{}', running without an owner", v.trim());
-                None
-            }
-        },
-        _ => None,
+    static OWNER: std::sync::LazyLock<Option<UserKey>> = std::sync::LazyLock::new(|| {
+        let explicit = std::env::var("OWNER_KEY").ok();
+        let legacy = std::env::var("OWNER_ID").ok();
+        configured_owner(explicit.as_deref(), legacy.as_deref()).unwrap_or_else(|_| {
+            log::warn!("invalid owner identity, running without an owner");
+            None
+        })
     });
     OWNER.as_ref()
 }
@@ -121,3 +125,19 @@ type BotError = Box<dyn std::error::Error + Send + Sync>;
 static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 
 // ---------- state ----------
+
+#[cfg(test)]
+mod owner_identity_tests {
+    use super::*;
+    #[test]
+    fn explicit_qualified_owner_has_no_numeric_collision_or_invalid_fallback() {
+        assert_eq!(configured_owner(None, Some("42")).unwrap(), Some(UserKey::discord(42)));
+        assert_eq!(configured_owner(Some(" "), Some("42")).unwrap(), Some(UserKey::discord(42)));
+        let telegram = configured_owner(Some("telegram:user:42"), Some("42")).unwrap().unwrap();
+        assert_ne!(telegram, UserKey::discord(42));
+        assert_eq!(telegram.platform(), PlatformKind::Telegram);
+        assert!(configured_owner(Some("invalid"), Some("42")).is_err());
+        assert!(configured_owner(None, Some("invalid")).is_err());
+        assert_eq!(configured_owner(None, None).unwrap(), None);
+    }
+}

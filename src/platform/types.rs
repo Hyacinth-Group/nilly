@@ -101,8 +101,9 @@ fn validate(value: &str, entity: &str) -> Result<(), KeyError> {
         return Err(KeyError);
     }
     let expected = match (platform, entity) {
-        (PlatformKind::Slack, "message") => 3,
-        (PlatformKind::Slack, _) | (PlatformKind::Telegram, "message") => 2,
+        (PlatformKind::Slack, "space") => 1,
+        (PlatformKind::Slack, "message" | "thread") => 3,
+        (PlatformKind::Slack, _) | (PlatformKind::Telegram, "message" | "thread") => 2,
         (PlatformKind::Terminal, _) => 2,
         _ => 1,
     };
@@ -277,6 +278,19 @@ impl RoomRef {
         }
     }
 }
+/// Ordered room discovery metadata is supplied by adapters, not SDK cache in core.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpaceRef {
+    pub id: SpaceKey,
+    pub name: Option<String>,
+    pub rooms: Vec<RoomRef>,
+    pub preferred_room: Option<RoomKey>,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HistoryInitializationPolicy {
+    AttemptOnce,
+    AfterSuccess,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageRef {
     pub id: MessageKey,
@@ -350,6 +364,12 @@ pub struct CommandInvocation {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ChatEvent {
+    ConnectionReady(UserRef),
+    ConnectionClosed,
+    SpaceReady {
+        space: SpaceRef,
+        history: HistoryInitializationPolicy,
+    },
     RoomReady(RoomRef),
     MessageCreated(IncomingMessage),
     ReactionAdded(ReactionEvent),
@@ -423,5 +443,37 @@ mod tests {
                 .as_str(),
             "matrix:user:%40alice%3Aexample.org"
         );
+    }
+}
+
+#[cfg(test)]
+mod namespace_scope_tests {
+    use super::*;
+    #[test]
+    fn workspace_and_topic_keys_preserve_native_scope() {
+        assert_eq!(
+            SpaceKey::new(PlatformKind::Slack, &["T123"])
+                .unwrap()
+                .as_str(),
+            "slack:space:T123"
+        );
+        assert_ne!(
+            ThreadKey::new(PlatformKind::Telegram, &["-1001", "81"]).unwrap(),
+            ThreadKey::new(PlatformKind::Telegram, &["-1002", "81"]).unwrap()
+        );
+        assert_ne!(
+            ThreadKey::new(PlatformKind::Slack, &["T1", "C1", "1700000000.000123"]).unwrap(),
+            ThreadKey::new(PlatformKind::Slack, &["T1", "C2", "1700000000.000123"]).unwrap()
+        );
+    }
+}
+
+impl fmt::Display for ConversationKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.room.fmt(formatter)?;
+        if let Some(thread) = &self.thread {
+            write!(formatter, "/threads/{thread}")?;
+        }
+        Ok(())
     }
 }

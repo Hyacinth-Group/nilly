@@ -5,12 +5,12 @@ impl Bot {
     /// streams a reply (falling back to non-streaming on an empty stream), records it, and
     /// loops again if a new message arrived meanwhile. See `docs/flows.md`'s `reply` diagram
     /// for the full step-by-step.
-    async fn reply(&self, channel: &RoomKey) {
-        let transport = match self.transport(channel) {
+    async fn reply(&self, channel: &ConversationKey) {
+        let (transport, room) = match self.transport(channel) {
             Ok(transport) => transport,
             Err(e) => { log::error!("reply [{channel}]: {e}"); return; }
         };
-        let room = platform::types::RoomRef::from_key(channel.clone());
+
         loop {
             let instruction = {
                 let mut state = self.state();
@@ -94,7 +94,7 @@ impl Bot {
             // the mood isn't refreshed on every message, only every few turns (it's cheap,
             // but still a call — don't burn one on every reply)
             let mood = if counter % 4 == 0 {
-                let new_mood = self.determine_mood(&history).await.unwrap_or_default();
+                let new_mood = self.determine_mood(channel, &history).await.unwrap_or_default();
                 if let Some(chat) = self.state().chats.get_mut(channel) {
                     chat.mood = new_mood.clone();
                 }
@@ -107,7 +107,8 @@ impl Bot {
             };
             // if asked to, look something up online (news, research, a link) and add
             // whatever it finds to the task
-            let mut instruction = instruction.to_string();
+            let bot_name = self.state().bot_name.clone();
+            let mut instruction = self.prompt_context(channel).render_with(instruction, &[("{ad}", &bot_name)]).into_owned();
             if !mood.is_empty() {
                 instruction = format!(
                     "{instruction}\n\nŞU ANKİ RUH HALİN: {mood} — bunu ilan etme, üslubuna ve kelime seçimine yedir."
@@ -124,7 +125,7 @@ impl Bot {
                 waiting.iter().map(|(i, _)| i.as_str()).collect();
             if speakers.len() >= 2 {
                 let names: Vec<String> = waiting.iter().map(|(i, _)| i.clone()).collect();
-                if let Some(target) = self.pick_target(&names).await {
+                if let Some(target) = self.pick_target(channel, &names).await {
                     if let Some((_, id)) = waiting
                         .iter()
                         .rev()
@@ -155,7 +156,7 @@ impl Bot {
                 let _ = transport.typing(&room).await;
             }
             let budget = reply_budget!();
-            let (reader, bot_name) = match self.generate_stream(&history, &instruction, budget, "sohbet").await
+            let (reader, bot_name) = match self.generate_stream_for(channel, &history, &instruction, budget, "sohbet").await
             {
                 Ok(x) => x,
                 Err(e) => {
@@ -208,7 +209,7 @@ impl Bot {
                         drop(_busy_guard);
                         continue;
                     }
-                    match self.generate(&history, &instruction, budget, "sohbet").await {
+                    match self.generate_for(channel, &history, &instruction, budget, "sohbet").await {
                         Ok(c) => {
                             // de-duplication here is also LINE-based: in the channel
                             // history the bot's lines sit one by one, so a multi-line raw

@@ -1,6 +1,6 @@
 /// The 6-hourly background cycle: runs the profiler/coach, queues a general observation,
 /// and posts a news item (or stashes one while asleep/skips while traveling).
-async fn news_cycle(bot: Arc<Bot>, ctx: Context) {
+async fn news_cycle(bot: Arc<Bot>) {
     loop {
         sleep(NEWS_INTERVAL).await;
         if SHUTTING_DOWN.load(Ordering::SeqCst) {
@@ -27,19 +27,24 @@ async fn news_cycle(bot: Arc<Bot>, ctx: Context) {
             continue;
         }
 
-        bot.check_growth(&ctx).await;
+        bot.check_growth().await;
         bot.profiler().await;
-        let recent = recent_messages(&bot.state(), 300);
-        // this observation is also processed off the queue (doesn't need the critic)
-        bot.state().memory_queue.push_back((
-            recent,
-            "6 saatlik gözlem, bot konuşmamış olabilir".to_string(),
-            "gozlem".to_string(),
-            false,
-        ));
+        {
+            let mut state = bot.state();
+            let recent = recent_messages(&state, 300);
+            let observed = state.recent_users.clone();
+            // Observed identities are captured with the transcript, never reconstructed later.
+            state.memory_queue.push_back((
+                recent,
+                "6 saatlik gözlem, bot konuşmamış olabilir".to_string(),
+                "gozlem".to_string(),
+                false,
+                observed,
+            ));
+        }
         bot.coach().await;
 
-        let Some(channel) = default_channel(&bot, &ctx) else {
+        let Some(channel) = default_channel(&bot) else {
             continue;
         };
         if bot.state().chats.contains_key(&channel) {
@@ -61,10 +66,12 @@ async fn news_cycle(bot: Arc<Bot>, ctx: Context) {
 
 impl Bot {
     // posts a small, made-up but believable software gripe, asking "how do I fix this"
-    async fn post_problem(&self, channel: &RoomKey) {
+    async fn post_problem(&self, channel: &ConversationKey) {
         let recent = recent_messages(&self.state(), 30);
+        let context = self.prompt_context(channel);
+        let instruction = context.render(prompts::current().problem);
         match self
-            .generate(&[user(recent)], prompts::current().problem, Some(160), "sorun")
+            .generate_for(channel, &[user(recent)], &instruction, Some(160), "sorun")
             .await
         {
             Ok(line) => match self
@@ -82,7 +89,7 @@ impl Bot {
 
     // picks a news item and posts it to the channel, opening a chat that waits for comments
     /// Returns whether a news item was posted.
-    async fn post_news(&self, channel: &RoomKey) -> bool {
+    async fn post_news(&self, channel: &ConversationKey) -> bool {
         let item = match self.news_agent().await {
             Ok(item) => item,
             Err(e) => {
@@ -95,16 +102,19 @@ impl Bot {
 
     // shares an already-picked news item: both this turn's pick and the one stashed while asleep go through here
     /// Returns `false` if the intro call fails or the model stays silent.
-    async fn send_news(&self, channel: &RoomKey, item: agents::News) -> bool {
+    async fn send_news(&self, channel: &ConversationKey, item: agents::News) -> bool {
         let link = if item.url.starts_with("https://") || item.url.starts_with("http://") {
             item.url.clone()
         } else {
             format!("https://news.ycombinator.com/item?id={}", item.id)
         };
+        let context = self.prompt_context(channel);
+        let instruction = context.render(prompts::current().news_intro);
         let intro = match self
-            .generate(
+            .generate_for(
+                channel,
                 &[user(item.title.clone())],
-                prompts::current().news_intro,
+                &instruction,
                 Some(200),
                 "haber_tanit",
             )
@@ -136,7 +146,7 @@ impl Bot {
     }
 
     // an image prank; if it's the hacked variant, it opens with the "hacked" bit
-    async fn run_prank(&self, channel: &RoomKey, hack: bool) {
+    async fn run_prank(&self, channel: &ConversationKey, hack: bool) {
         let Some(image) = random_image() else {
             if self.stealth {
                 log::warn!("prank: no images in photos/, skipped");
@@ -151,15 +161,18 @@ impl Bot {
             return;
         };
         let text = if hack {
-            self.generate(
+            let context = self.prompt_context(channel);
+            let instruction = context.render(prompts::current().hack_enter);
+            self.generate_for(
+                channel,
                 &[user("şaka başlıyor")],
-                prompts::current().hack_enter,
+                &instruction,
                 Some(150),
                 "hack_giris",
             )
             .await
         } else {
-            self.image_commenter(&image).await
+            self.image_commenter(channel, &image).await
         };
         let text = match text {
             Ok(m) => m,
@@ -172,10 +185,13 @@ impl Bot {
         // protocol, decorations cleaned up. strip_name is applied here just like every
         // other path (name prefix, quotes)
         let bot_name = self.state().bot_name.clone();
-        let limits = self
-            .transport(channel)
-            .map(|adapter| adapter.capabilities(&RoomRef::from_key(channel.clone())).output)
-            .unwrap_or(OutputLimits::DISCORD);
+        let limits = match self.transport(channel) {
+            Ok((adapter, room)) => adapter.capabilities(&room).output,
+            Err(error) => {
+                log::warn!("prank [{channel}]: {error}");
+                return;
+            }
+        };
         let reply = parse_reply(strip_name(&text, &bot_name), limits);
         let Some(first) = reply.lines.first().cloned() else {
             log::debug!("prank: model stayed silent, prank skipped");
@@ -191,5 +207,3 @@ impl Bot {
         }
     }
 }
-
-// if the last-talked-in channel is idle and the bot can post there, returns that channel

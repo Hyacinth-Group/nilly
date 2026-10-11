@@ -1,14 +1,14 @@
 impl Bot {
     // closes chats that have gone quiet: no goodbye message, no channel ban.
     // a closed chat's transcript goes to the diarist and the critic (moved to the queue in the memory step)
-    async fn close_timed_out(&self, ctx: &Context) {
-        let closed: Vec<(RoomKey, Chat)> = {
+    async fn close_timed_out(&self) {
+        let closed: Vec<(ConversationKey, Chat)> = {
             let mut state = self.state();
             // drop activity records for chats that no longer exist
-            let open_channels: HashSet<RoomKey> = state.chats.keys().cloned().collect();
+            let open_channels: HashSet<ConversationKey> = state.chats.keys().cloned().collect();
             state.last_activity.retain(|channel, _| open_channels.contains(channel));
             let now = Instant::now();
-            let to_close: Vec<RoomKey> = state
+            let to_close: Vec<ConversationKey> = state
                 .last_activity
                 .iter()
                 .filter(|(channel, t)| {
@@ -25,7 +25,7 @@ impl Bot {
             }
             // news chats past their window: if nobody commented (no activity for the whole
             // window, or the record already dropped), it closes silently and the map doesn't bloat
-            let news_expired: Vec<RoomKey> = state
+            let news_expired: Vec<ConversationKey> = state
                 .awaiting_comment
                 .iter()
                 .filter(|(channel, t)| {
@@ -48,10 +48,11 @@ impl Bot {
         for (channel, chat) in closed {
             let bot_name = self.state().bot_name.clone();
             let transcript_text = transcript(&chat.history, &bot_name);
-            let channel_name = match platform::discord::native_room(&channel) {
-                Ok(native) => native.name(ctx).await.unwrap_or_else(|_| channel.to_string()),
-                Err(_) => channel.to_string(),
-            };
+            let channel_name = self.adapters.lock().unwrap_or_else(|e| e.into_inner())
+                .room(&channel)
+                .and_then(|room| room.name)
+                .unwrap_or_else(|| channel.to_string());
+            let observed = observed_users(&chat.history);
             // not handled inline, processed in the memory cycle instead (so the critic runs too)
             let queue_len = {
                 let mut state = self.state();
@@ -60,6 +61,7 @@ impl Bot {
                     "biten sohbet".to_string(),
                     channel_name,
                     true,
+                    observed,
                 ));
                 state.memory_queue.len()
             };
@@ -70,7 +72,7 @@ impl Bot {
             self.debug_note(&channel, format!("sohbet kapandı ({minutes} dk sessiz)"))
                 .await;
             self.state().growth.chats += 1;
-            self.check_growth(ctx).await;
+            self.check_growth().await;
         }
     }
 }
@@ -79,7 +81,7 @@ impl Bot {
 
 impl Bot {
     // jumps to the earned stage and persists it; picks a name once it reaches the established stage
-    async fn check_growth(&self, ctx: &Context) {
+    async fn check_growth(&self) {
         let needs_name = {
             let mut state = self.state();
             let earned = growth::earned_stage(&state.growth);
@@ -91,16 +93,18 @@ impl Bot {
             state.growth.name.is_none() && state.growth.stage >= growth::NAME_STAGE
         };
         if needs_name {
-            self.pick_name(ctx).await;
+            self.pick_name().await;
         }
     }
 
     // picks its own name, changes its nickname on every server, and announces it to the group
-    async fn pick_name(&self, ctx: &Context) {
+    async fn pick_name(&self) {
+        let context = self.default_prompt_context();
+        let instruction = context.render(prompts::current().name_pick);
         let reply = match self
             .generate(
                 &[user("isim seçme vakti")],
-                prompts::current().name_pick,
+                &instruction,
                 Some(12),
                 "isim_sec",
             )
@@ -112,9 +116,22 @@ impl Bot {
         let Some(name) = growth::clean_name(&reply) else {
             return log::warn!("name: couldn't parse the choice: {reply}");
         };
-        for guild in ctx.cache.guilds() {
-            if let Err(e) = guild.edit_nickname(&ctx.http, Some(&name)).await {
-                log::warn!("name: couldn't change nickname ({guild}): {e}");
+        let targets: Vec<_> = {
+            let registry = self.adapters.lock().unwrap_or_else(|e| e.into_inner());
+            registry.discovered_spaces().into_iter().filter_map(|(connection, space)| {
+                let adapter = registry.get(&connection)?;
+                // Legacy Discord changed every cached guild nickname, even when
+                // GUILD_ID restricts learning. Other adapters require approved spaces.
+                let approved = space.id.platform() == PlatformKind::Discord
+                    || space.rooms.iter().any(|room| registry.allows(&connection, room));
+                approved.then_some((adapter, space.id))
+            }).collect()
+        };
+        for (adapter, space) in targets {
+            if let Err(error) = adapter.set_nickname(
+                platform::outgoing::NickTarget::Space(&space), &name,
+            ).await {
+                log::warn!("name: couldn't change nickname ({space}): {error}");
             }
         }
         {
@@ -125,13 +142,16 @@ impl Bot {
         }
         log::info!("growth: new name {name}");
 
-        let Some(channel) = default_channel(self, ctx) else {
+        let Some(channel) = default_channel(self) else {
             return;
         };
+        let context = self.prompt_context(&channel);
+        let instruction = context.render_with(prompts::current().name_announce, &[("{isim}", &name)]);
         match self
-            .generate(
+            .generate_for(
+                &channel,
                 &[user("ismini seçtin")],
-                &prompts::current().name_announce.replace("{isim}", &name),
+                &instruction,
                 Some(150),
                 "isim_duyuru",
             )
@@ -150,7 +170,3 @@ impl Bot {
         }
     }
 }
-
-// ---------- memory ----------
-
-// reads a channel's last two weeks on joining a server

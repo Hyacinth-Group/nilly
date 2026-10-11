@@ -26,7 +26,6 @@ pub fn localized_description(error: &ActionError) -> String {
         ActionError::MissingConnection => strings::t("admin.error.connection").to_string(),
         ActionError::MissingRoom => strings::t("admin.error.room").to_string(),
         ActionError::UnboundRoom => strings::t("admin.error.unbound").to_string(),
-        ActionError::UnsupportedRoute => strings::t("admin.error.thread").to_string(),
         ActionError::PrivateSurfaceRequired => strings::t("admin.error.private").to_string(),
         ActionError::Memory(error) => {
             strings::t("admin.error.memory").replace("{error}", &error.to_string())

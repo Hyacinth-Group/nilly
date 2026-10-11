@@ -2,7 +2,7 @@
     /// Verifies `new_message_arrived` compares against the chat's `incoming` counter to detect a newer message.
     #[test]
     fn new_message_invalidates_old_reply() {
-        let channel = RoomKey::discord(7);
+        let channel = ConversationKey { room: RoomKey::discord(7), thread: None };
         let mut state = State::default();
         state.chats.insert(
             channel.clone(),

@@ -465,7 +465,7 @@ pub fn read_person_result(id: &UserKey) -> Result<Person, BotError> {
 // ---------- channel history ----------
 
 // reads durum/kanallar/<id> records: (channel id, recent lines)
-pub fn load_channel_history() -> Vec<(RoomKey, VecDeque<String>)> {
+pub fn load_channel_history() -> Vec<(ConversationKey, VecDeque<String>)> {
     let mut list = Vec::new();
     for key in files("kanallar") {
         let Some(id) = platform::keys::parse_room_record(&key) else {
@@ -479,6 +479,47 @@ pub fn load_channel_history() -> Vec<(RoomKey, VecDeque<String>)> {
         list.push((id, lines));
     }
     list
+}
+
+/// Companion metadata leaves old history text byte-for-byte unchanged and unattributed.
+pub fn load_channel_observations() -> Vec<(ConversationKey, VecDeque<Option<UserRef>>)> {
+    files("kanal-kimlikleri")
+        .into_iter()
+        .filter_map(|key| {
+            let canonical = key.replacen("kanal-kimlikleri/", "kanallar/", 1);
+            let conversation = platform::keys::parse_room_record(&canonical)?;
+            let users = serde_json::from_str(&read(&key)).ok()?;
+            Some((conversation, users))
+        })
+        .collect()
+}
+
+/// History text and its companion identities share one commit, preventing attribution drift.
+pub fn write_channel_history(
+    conversation: &ConversationKey,
+    text: &str,
+    users: &VecDeque<Option<UserRef>>,
+) {
+    let result = (|| -> Result<(), BotError> {
+        let metadata = serde_json::to_string(users)?;
+        let history_key = platform::keys::room_record(conversation);
+        let metadata_key = platform::keys::observation_record(conversation);
+        let transaction = db_result()?.begin_write()?;
+        {
+            let mut content = transaction.open_table(CONTENT)?;
+            let mut modified = transaction.open_table(MODIFIED)?;
+            let now = now_unix() as u64;
+            content.insert(history_key.as_str(), text)?;
+            content.insert(metadata_key.as_str(), metadata.as_str())?;
+            modified.insert(history_key.as_str(), now)?;
+            modified.insert(metadata_key.as_str(), now)?;
+        }
+        transaction.commit()?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        log::error!("couldn't write conversation history {conversation}: {error}");
+    }
 }
 
 // ---------- index ----------
@@ -1114,8 +1155,14 @@ pub(crate) mod test {
     #[test]
     fn canonical_room_history_uses_typed_keys_only() {
         ensure_test_db();
-        let discord = RoomKey::discord(8_800_000_000_000_000_042);
-        let telegram: RoomKey = "telegram:room:-8800000000000000042".parse().unwrap();
+        let discord = ConversationKey {
+            room: RoomKey::discord(8_800_000_000_000_000_042),
+            thread: None,
+        };
+        let telegram = ConversationKey {
+            room: "telegram:room:-8800000000000000042".parse().unwrap(),
+            thread: None,
+        };
         write_result(
             &platform::keys::room_record(&discord),
             "discord-first\n\ndiscord-second\n",

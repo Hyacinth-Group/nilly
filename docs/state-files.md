@@ -120,3 +120,18 @@ Rollback requires stopping the new binary, restoring the saved v1 snapshot and
 using the old binary. Never run the old binary against the v2 identity scheme.
 Archives are not migrated or removed. Retain the backup and manifest alongside
 operator backups; this migration is not a member-erasure mechanism.
+
+## Thread routes and captured identities
+
+Unthreaded Discord history retains its canonical `kanallar/discord:room:<id>.md`
+record and original text format. New topic/thread conversations use
+`kanallar/<RoomKey>/threads/<ThreadKey>.md`; both keys are reversible typed
+identities, not display-name slugs. Identical native topic IDs in different
+Telegram chats or Slack channels remain different keys.
+
+Each history has an aligned optional-user JSON companion under
+`kanal-kimlikleri/` with the same room/thread suffix. History and companion are
+written in a single transaction. Legacy history without metadata remains
+unattributed; current display-name collisions never reinterpret its authors.
+The companion preserves captured UserRef source, automation and identity
+stability across restart and supports transcript-local name disambiguation.

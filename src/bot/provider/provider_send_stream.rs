@@ -4,12 +4,12 @@ impl Bot {
     /// A stream read failure propagates only if no usable content was produced.
     async fn send_stream(
         &self,
-        channel: &RoomKey,
+        channel: &ConversationKey,
         mut reader: StreamReader,
         context: StreamContext<'_>,
     ) -> Result<StreamResult, BotError> {
-        let transport = self.transport(channel)?;
-        let room = platform::types::RoomRef::from_key(channel.clone());
+        let (transport, room) = self.transport(channel)?;
+
         let capabilities = transport.capabilities(&room);
         let mut text = String::new();
         let mut thought = String::new();
@@ -112,7 +112,7 @@ impl Bot {
                 repeats.join(" / ")
             );
             let retry_reply = match self
-                .generate(context.history, &follow_up, context.budget, "sohbet")
+                .generate_for(channel, context.history, &follow_up, context.budget, "sohbet")
                 .await
             {
                 Ok(y) => parse_reply(&y, capabilities.output),
@@ -137,7 +137,7 @@ impl Bot {
         if let (Some(emoji), Some(target)) = (&reply.reaction, context.reaction_target) {
             if capabilities.react {
                 let target = platform::types::MessageRef {
-                    id: target.clone(), room: channel.clone(), author: None,
+                    id: target.clone(), room: channel.room.clone(), author: None,
                 };
                 if let Err(e) = transport.react(&target, &platform::types::Emoji::Unicode(emoji.clone())).await {
                     log::warn!("couldn't add reaction ({channel}): {e}");

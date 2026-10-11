@@ -116,7 +116,7 @@ fn reply_chunks(text: &str, limits: OutputLimits) -> Vec<String> {
 
 // if two of the last 4 bot lines (reaction lines don't count) ended in a question mark,
 // it's been asking questions back-to-back; `reply` turns this into an instruction
-fn too_many_questions(state: &State, channel: &RoomKey) -> bool {
+fn too_many_questions(state: &State, channel: &ConversationKey) -> bool {
     let prefix = format!("{}: ", state.bot_name);
     state
         .channel_history

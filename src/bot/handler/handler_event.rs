@@ -1,177 +1,12 @@
-/// Serenity's `EventHandler` implementor. Holds `bot: Arc<Bot>` (shared with every
-/// background cycle) plus two once-per-process flags: `started` (guards against starting
-/// the background cycles twice on a reconnect) and `announced` (the startup version
-/// announcement, see `guild_create` below).
-struct Handler {
-    bot: Arc<Bot>,
-    started: AtomicBool,
-    announced: AtomicBool, // the version announcement goes out once per process
-}
-
-#[async_trait]
-impl EventHandler for Handler {
-    /// Serenity's `ready` callback — fires once per gateway connection (including
-    /// reconnects). Background cycles start only once, guarded by `self.started`.
-    async fn ready(&self, ctx: Context, data: Ready) {
-        let connection = platform::discord::events::connection_id().clone();
-        let account = platform::discord::events::decode_user(&data.user);
-        self.bot.adapters
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .register(platform::Adapter::Discord(platform::discord::DiscordAdapter::new(
-                ctx.clone(), connection.clone(), account.clone(),
-            )));
-        {
-            let mut state = self.bot.state();
-            state.accounts.insert(
-                connection,
-                account,
-            );
-            state.bot_name = state
-                .growth
-                .name
-                .clone()
-                .unwrap_or_else(|| data.user.name.clone());
-        }
-        log::info!("logged in: {}", data.user.name);
-        if data.guilds.is_empty() {
-            log::warn!(
-                "not in any server yet, invite me: {}",
-                init::invite_url(data.application.id.get())
-            );
-        }
-
-        // slash commands (/durum /yardim /zihin): registered per guild, idempotent. In
-        // stealth the command API isn't touched at all
-        if !self.bot.stealth {
-            for guild in ctx.cache.guilds() {
-                if let Err(e) = modal::register_commands(&ctx.http, guild).await {
-                    log::warn!("couldn't register slash commands [{guild}]: {e}");
-                }
-            }
-        }
-
-        // ready fires again on every reconnect; the cycles should only start once —
-        // the watchdog restarts them on panic
-        if !self.started.swap(true, Ordering::SeqCst) {
-            let (bot, ctx2) = (self.bot.clone(), ctx.clone());
-            run_cycle("news", move || news_cycle(bot.clone(), ctx2.clone()));
-            let (bot, ctx2) = (self.bot.clone(), ctx.clone());
-            run_cycle("poke", move || poke_cycle(bot.clone(), ctx2.clone()));
-            let bot = self.bot.clone();
-            run_cycle("prank", move || prank_cycle(bot.clone()));
-            let bot = self.bot.clone();
-            run_cycle("wanderer", move || wanderer_cycle(bot.clone()));
-            let bot = self.bot.clone();
-            run_cycle("memory", move || memory_cycle(bot.clone()));
-            let (bot, ctx2) = (self.bot.clone(), ctx.clone());
-            run_cycle("sleep", move || sleep_cycle(bot.clone(), ctx2.clone()));
-        }
-    }
-
-    /// Serenity's `guild_create` callback — fires once per guild on every connect/reconnect.
-    async fn guild_create(&self, ctx: Context, guild: Guild, _new: Option<bool>) {
-        // if GUILD_ID is set, only that guild gets scanned; it also never enters the on-disk scanned list
-        let space = SpaceKey::discord(guild.id.get());
-        if self.bot.guild_id.as_ref().is_some_and(|g| g != &space) {
-            return;
-        }
-        let first_time = {
-            let mut state = self.bot.state();
-            let is_new = state.scanned.insert(space);
-            if is_new {
-                let mut list: Vec<String> = state.scanned.iter().map(ToString::to_string).collect();
-                list.sort();
-                // Unknown historical scan lines stay retained, but never become active spaces.
-                list.extend(memory::read("taranan.md").lines()
-                    .filter(|line| platform::keys::parse_space_line(line).is_none())
-                    .map(ToString::to_string));
-                memory::write("taranan.md", &list.join("\n"));
-            }
-            is_new
-        };
-        // once per restart: shows which build is running, in-channel (requested by Emin).
-        // The guild cache isn't populated yet in `ready`, so the channel is found here
-        // instead. Not written to memory: the bot shouldn't mistake this for its own
-        // words and start making small talk about versions.
-        if !self.bot.stealth && !self.announced.swap(true, Ordering::SeqCst) {
-            if let Some(channel) = default_channel(&self.bot, &ctx) {
-                let (model, mode) = {
-                    let state = self.bot.state();
-                    (state.model.clone(), state.thinking_mode.label())
-                };
-                let description = strings::t("announce.description")
-                    .replace("{model}", &model)
-                    .replace("{mode}", mode);
-                let title = format!("{} · {}", strings::t("announce.title"), version_text());
-                let embed = modal::info_embed(&title, &description);
-                let msg = CreateMessage::new().embed(embed);
-                let Ok(native_channel) = platform::discord::native_room(&channel) else {
-                    return;
-                };
-                if let Err(e) = native_channel.send_message(&ctx.http, msg).await {
-                    log::warn!("couldn't send version announcement ({channel}): {e}");
-                }
-            }
-        }
-        if !first_time {
-            return;
-        }
-        let bot = self.bot.clone();
-        tokio::spawn(async move {
-            read_history(&bot, &ctx, &guild).await;
-            bot.profiler().await;
-            if bot.state().temperament.is_empty() {
-                bot.coach().await;
-            }
-        });
-    }
-
-    /// Serenity's `guild_member_addition` callback — fires when a new member joins.
-    async fn guild_member_addition(&self, ctx: Context, member: Member) {
-        if let Some((room, user)) =
-            platform::discord::events::decode_member_join(&self.bot, &ctx, &member)
-        {
-            self.member_joined(room, user).await;
-        }
-    }
-
-    async fn message(&self, ctx: Context, msg: Message) {
-        let Some(message) = platform::discord::events::decode_message(
-            &msg,
-            &ctx.cache,
-            self.bot.guild_id.as_ref(),
-            self.bot.allowed_channels.as_ref(),
-            self.bot.image_analysis,
-        ) else {
-            return;
-        };
-        self.message_created(platform::discord::events::connection_id(), message)
-            .await;
-    }
-
-    async fn reaction_add(&self, ctx: Context, add_reaction: Reaction) {
-        if let Some(event) =
-            platform::discord::events::decode_reaction(&self.bot, &ctx, &add_reaction).await
-        {
-            self.reaction_added(event).await;
-        }
-    }
-
-    /// Native command/component deadlines and rendering belong to the adapter.
-    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
-        platform::discord::commands::interaction_create(&self.bot, &ctx, interaction).await;
-    }
-}
-
-
-impl Handler {
+impl Bot {
     /// Common welcome decision consumes only decoded room and member identities.
-    async fn member_joined(&self, room: RoomRef, member: UserRef) {
-        let channel = &room.id;
+    async fn member_joined(self: &Arc<Self>, connection: &ConnectionId, room: RoomRef, member: UserRef) {
+        if !self.accepts_author(connection, &member) { return; }
+        let channel = &room.conversation();
+        if !self.member_room_allowed(connection, &room) || !self.adapters.lock().unwrap_or_else(|error| error.into_inner()).is_bound(connection, &room) { return; }
         let name = &member.display_name;
         {
-            let mut state = self.bot.state();
+            let mut state = self.state();
             if is_owner(&member.id) {
                 state.favorite_name = Some(name.clone());
             }
@@ -181,10 +16,10 @@ impl Handler {
         }
 
         let greeting = match self
-            .bot
-            .generate(
+
+            .generate_for(channel, 
                 &[user(format!("{name} sunucuya yeni katıldı."))],
-                prompts::current().welcome,
+                &self.prompt_context(channel).render(prompts::current().welcome),
                 Some(200),
                 "hos_geldin",
             )
@@ -200,46 +35,40 @@ impl Handler {
         // pasting it onto the front of the text made the "-" and "tepki:" protocol lines
         // unrecognizable
         match self
-            .bot
+
             .send_lines(channel, &greeting, None, None, Some(&member.id))
             .await
         {
             Some(p) => {
-                start_chat(&mut self.bot.state(), channel, Some(p));
+                start_chat(&mut self.state(), channel, Some(p));
             }
             None => log::debug!("hos_geldin: model stayed silent, skipped"),
         }
     }
 
-    /// Common message decisions consume decoded text and identities, never native cache.
+    /// Common decisions consume normalized identities and resolve media only when enabled.
     async fn message_created(
-        &self,
+        self: &Arc<Self>,
         connection: &ConnectionId,
         msg: IncomingMessage,
     ) {
-        let channel = &msg.room.id;
-        let name = &msg.author.display_name;
-        let text = &msg.text;
-        let image = msg.attachments.iter().find_map(|attachment| {
-            match (&attachment.kind, &attachment.source) {
-                (MediaKind::Image, MediaSource::PublicUrl(url)) => Some(url.as_str()),
-                _ => None,
-            }
-        });
+        if !self.accepts_author(connection, &msg.author) || msg.room.kind == platform::types::RoomKind::Direct { return; }
+        let channel = &msg.room.conversation();
+        if !self.accepts_room(connection, &msg.room) { return; }
+        let Ok((adapter, _bound_room)) = self.transport(channel) else { return; };
+        let selected = self.image_analysis.then(|| msg.attachments.iter().find(|attachment| attachment.kind == MediaKind::Image)).flatten();
+        let text = &incoming_text(&msg.text, selected.is_some(), self.image_analysis);
+        if text.trim().is_empty() { return; }
+        let name = &observe_user(&mut self.state(), &msg.author);
 
         // phase 1 (locked): recording facts + flag decisions
         let (direct_reply, tagged, evaluate, ongoing_dialog, debug) = {
-            let mut state = self.bot.state();
+            let mut state = self.state();
             // was it mentioned, named, or replied to?
             let tagged = message_is_tagged(&msg, &state.bot_name, state.accounts.get(connection));
             state.growth.messages += 1;
             remember(&mut state, name, text);
-            state
-                .name_to_id
-                .insert(name.to_lowercase(), msg.author.id.clone());
-            if let Some(username) = &msg.author.username {
-                state.usernames.insert(msg.author.id.clone(), username.clone());
-            }
+            // Identity was captured together with this raw observation.
             state.last_channel = Some(channel.clone());
             if is_owner(&msg.author.id) {
                 state.favorite_name = Some(name.clone());
@@ -260,7 +89,7 @@ impl Handler {
                 if tagged {
                     state
                         .pending_mentions
-                        .push((channel.clone(), format!("{name}: {text}")));
+                        .push((channel.clone(), format!("{name}: {text}"), msg.author.clone()));
                     if state.pending_mentions.len() > 20 {
                         state.pending_mentions.remove(0);
                     }
@@ -280,9 +109,8 @@ impl Handler {
                         .iter()
                         .rev()
                         .find(|m| m.role == "user")
-                        .and_then(|m| m.content.split_once(": ").map(|(speaker, _)| speaker))
-                        // eq_ignore_ascii_case misses on Turkish İ/i̇; casefold exists exactly for this
-                        .is_some_and(|speaker| casefold(speaker) == casefold(name))
+                        .and_then(|m| m.observed_user.as_ref())
+                        .is_some_and(|speaker| speaker.id == msg.author.id)
                 });
             let evaluate = if !tagged && !ongoing_dialog {
                 // rate limit: at most one willingness call every 2 minutes per channel
@@ -322,7 +150,7 @@ impl Handler {
         };
         if evaluate {
             let threshold = {
-                let state = self.bot.state();
+                let state = self.state();
                 // stage confidence scales the threshold: new is shy, an old hand is relaxed
                 let mut threshold = WILLINGNESS_THRESHOLD as i32;
                 let confidence = growth::stage(&state.growth).confidence;
@@ -336,7 +164,7 @@ impl Handler {
                 }
                 threshold
             };
-            match self.bot.willingness().await {
+            match self.willingness(channel).await {
                 Some((score, reason)) => {
                     log::debug!("willingness [{channel}]: score={score} threshold={threshold} reason={reason}");
                     join = i32::from(score) >= threshold;
@@ -355,9 +183,16 @@ impl Handler {
             }
         }
 
+        // Media resolution is only needed for a model turn, never a sleeping/raw observation.
+        let needs_turn = join || self.state().chats.contains_key(channel);
+        let image = match selected.filter(|_| needs_turn) {
+            Some(attachment) => adapter.resolve_media(attachment).await.ok(),
+            None => None,
+        };
+
         // phase 3 (locked): join the chat and process the message
         let should_reply = {
-            let mut state = self.bot.state();
+            let mut state = self.state();
             let mut open = state.chats.contains_key(channel);
             if !open && join {
                 start_chat(&mut state, channel, None);
@@ -369,10 +204,12 @@ impl Handler {
                 for m in chat.history.iter_mut() {
                     m.image = None;
                 }
-                chat.history.push(match image {
-                    Some(url) => user_with_image(format!("{name}: {text}"), url),
+                let mut turn = match image.as_ref() {
+                    Some(platform::outgoing::ModelMedia::PublicUrl(url) | platform::outgoing::ModelMedia::DataUrl(url)) => user_with_image(format!("{name}: {text}"), url),
                     None => user(format!("{name}: {text}")),
-                });
+                };
+                turn.observed_user = Some(msg.author.clone());
+                chat.history.push(turn);
                 chat.last_message = Some(msg.id.clone());
                 chat.last_was_tagged = tagged;
                 chat.incoming += 1;
@@ -385,7 +222,7 @@ impl Handler {
                 }
                 state.last_activity.insert(channel.clone(), Instant::now());
             }
-            channel_note(&mut state, channel, format!("{name}: {text}"));
+            channel_observe(&mut state, channel, format!("{name}: {text}"), &msg.author);
             // the willingness result also applies to an already-open chat: if someone
             // else wrote and the score was below the threshold, the message still enters
             // history but gets no reply (otherwise the evaluation would just burn tokens for nothing)
@@ -394,19 +231,23 @@ impl Handler {
 
         if debug {
             let decision = if should_reply { "reply" } else { "silent" };
-            self.bot
+            self
                 .debug_note(channel, format!("{trace} → {decision}"))
                 .await;
         }
         if should_reply {
-            self.bot.reply(channel).await;
+            self.reply(channel).await;
         }
     }
 
     /// Social reactions record context but never trigger a willingness check or reply.
-    async fn reaction_added(&self, event: ReactionEvent) {
-        let channel = &event.room.id;
-        let name = &event.actor.display_name;
+    async fn reaction_added(self: &Arc<Self>, connection: &ConnectionId, event: ReactionEvent) {
+        if !self.accepts_author(connection, &event.actor) { return; }
+        let channel = &event.room.conversation();
+        if !self.accepts_room(connection, &event.room) { return; }
+        let account = self.state().accounts.get(connection).map(|account| account.id.clone());
+        if account.is_none() || event.target.author.as_ref() != account.as_ref() { return; }
+        let name = &observe_user(&mut self.state(), &event.actor);
         let Some(content) = &event.original_text else {
             return;
         };
@@ -420,26 +261,33 @@ impl Handler {
             memory::trim(content, 200)
         );
         {
-            let mut state = self.bot.state();
-            state
-                .name_to_id
-                .insert(name.to_lowercase(), event.actor.id.clone());
-            if let Some(username) = &event.actor.username {
-                state.usernames.insert(event.actor.id.clone(), username.clone());
-            }
+            let mut state = self.state();
+            // Actor identity is captured before recording the social observation.
             remember(&mut state, name, &text);
             if let Some(chat) = state.chats.get_mut(channel) {
                 chat.participants.insert(name.to_lowercase(), event.actor.id.clone());
-                chat.history.push(user(format!("{name}: {text}")));
+                let mut turn = user(format!("{name}: {text}"));
+                turn.observed_user = Some(event.actor.clone());
+                chat.history.push(turn);
                 if chat.history.len() > CHAT_SIZE {
                     chat.history.drain(..chat.history.len() - CHAT_SIZE);
                 }
             }
-            channel_note(&mut state, channel, format!("{name}: {text}"));
+            channel_observe(&mut state, channel, format!("{name}: {text}"), &event.actor);
         }
-        self.bot
+        self
             .debug_note(channel, format!("tepki: {name} → {emoji}"))
             .await;
+    }
+
+    fn accepts_room(&self, connection: &ConnectionId, room: &RoomRef) -> bool {
+        let registry = self.adapters.lock().unwrap_or_else(|error| error.into_inner());
+        registry.allows(connection, room) && registry.is_bound(connection, room)
+    }
+
+    fn accepts_author(&self, connection: &ConnectionId, person: &UserRef) -> bool {
+        !matches!(person.automation, platform::types::Automation::Bot | platform::types::Automation::Integration)
+            && self.state().accounts.get(connection).is_none_or(|account| account.id != person.id)
     }
 }
 

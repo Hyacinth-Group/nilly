@@ -1,15 +1,10 @@
 //! Native exclusions, safe-content decoding and reaction enrichment live here.
 use crate::platform::types::*;
 use serenity::all::{
-    Attachment, ChannelId, Context, GuildId, Member, Message, Reaction, ReactionType, User,
+    Attachment, ChannelId, ChannelType, Context, Guild, GuildId, Member, Message, Reaction,
+    ReactionType, User,
 };
 use std::{collections::HashSet, sync::Arc};
-
-pub(crate) fn connection_id() -> &'static ConnectionId {
-    static CONNECTION: std::sync::LazyLock<ConnectionId> =
-        std::sync::LazyLock::new(|| ConnectionId::new("discord-default"));
-    &CONNECTION
-}
 
 pub(crate) fn display_name(user: &User) -> String {
     user.global_name
@@ -45,6 +40,82 @@ fn room(channel: ChannelId, guild: Option<GuildId>) -> RoomRef {
     }
 }
 
+pub(super) fn decode_room(channel: &serenity::all::GuildChannel) -> RoomRef {
+    RoomRef {
+        name: Some(channel.name.clone()),
+        ..room(channel.id, Some(channel.guild_id))
+    }
+}
+
+pub(crate) fn decode_space(guild: &Guild) -> SpaceRef {
+    let mut channels: Vec<_> = guild
+        .channels
+        .values()
+        .filter(|channel| channel.kind == ChannelType::Text)
+        .collect();
+    channels.sort_by_key(|channel| (channel.position, channel.id));
+    SpaceRef {
+        id: SpaceKey::discord(guild.id.get()),
+        name: Some(guild.name.clone()),
+        rooms: channels.into_iter().map(decode_room).collect(),
+        preferred_room: guild.system_channel_id.map(|id| RoomKey::discord(id.get())),
+    }
+}
+
+pub(crate) fn message_envelope(
+    connection: &ConnectionId,
+    message: IncomingMessage,
+) -> EventEnvelope {
+    // Discord message snowflakes are globally unique and stable across delivery.
+    let native_id = message
+        .id
+        .as_str()
+        .strip_prefix("discord:message:")
+        .expect("Discord ingress carries Discord message keys");
+    let event_id = EventKey::new(PlatformKind::Discord, &[native_id])
+        .expect("message snowflakes are valid event components");
+    EventEnvelope {
+        connection: connection.clone(),
+        event_id,
+        occurred_at_unix_ms: message.sent_at_unix_ms,
+        event: ChatEvent::MessageCreated(message),
+    }
+}
+
+pub(crate) fn synthetic_envelope(
+    connection: &ConnectionId,
+    event: ChatEvent,
+    scope: &str,
+) -> EventEnvelope {
+    static SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let occurred_at_unix_ms = serenity::all::Timestamp::now().timestamp_millis();
+    let kind = match &event {
+        ChatEvent::ConnectionReady(_) => "connection-ready",
+        ChatEvent::ConnectionClosed => "connection-closed",
+        ChatEvent::SpaceReady { .. } => "space-ready",
+        ChatEvent::RoomReady(_) => "room-ready",
+        ChatEvent::MessageCreated(_) => "message",
+        ChatEvent::ReactionAdded(_) => "reaction-add",
+        ChatEvent::MemberJoined { .. } => "member-join",
+        ChatEvent::CommandInvoked(_) => "command",
+        ChatEvent::CapabilitiesChanged { .. } => "capabilities",
+    };
+    // Reaction additions have no native event ID. A delivery nonce, not a tuple
+    // dedup key, preserves a legitimate remove-and-re-add by the same actor.
+    let component = format!(
+        "{}:{kind}:{scope}:{occurred_at_unix_ms}:{sequence}",
+        connection.as_str()
+    );
+    EventEnvelope {
+        connection: connection.clone(),
+        event_id: EventKey::new(PlatformKind::Discord, &[&component])
+            .expect("nonempty synthetic scope"),
+        occurred_at_unix_ms,
+        event,
+    }
+}
+
 fn message_input<'a>(
     msg: &'a Message,
     cache: &Arc<serenity::cache::Cache>,
@@ -74,12 +145,7 @@ fn message_input<'a>(
     if raw_text.trim().is_empty() && image.is_none() {
         return None;
     }
-    let text = match image {
-        None => raw_text,
-        Some(_) if raw_text.trim().is_empty() => "[resim attı]".to_string(),
-        Some(_) => format!("[resim] {raw_text}"),
-    };
-    Some((text, image))
+    Some((raw_text, image))
 }
 
 pub(crate) fn decode_message(
@@ -90,7 +156,11 @@ pub(crate) fn decode_message(
     image_analysis: bool,
 ) -> Option<IncomingMessage> {
     // A webhook author is excluded; application/system metadata alone is not.
-    if msg.author.bot || msg.webhook_id.is_some() || msg.guild_id.is_none() {
+    if msg.author.id == cache.current_user().id
+        || msg.author.bot
+        || msg.webhook_id.is_some()
+        || msg.guild_id.is_none()
+    {
         return None;
     }
     let room = room(msg.channel_id, msg.guild_id);
@@ -137,21 +207,67 @@ pub(crate) fn decode_member_join(
     ctx: &Context,
     member: &Member,
 ) -> Option<(RoomRef, UserRef)> {
+    if member.user.id == ctx.cache.current_user().id {
+        return None;
+    }
     let space = SpaceKey::discord(member.guild_id.get());
     if bot.guild_id.as_ref().is_some_and(|guild| guild != &space) {
         return None;
     }
+    // Legacy welcome bypasses CHANNELS for the joining guild's system channel.
+    // Its fallback, however, is the global default channel and honors filters.
     let system = ctx
         .cache
         .guild(member.guild_id)
         .and_then(|guild| guild.system_channel_id);
+    let fallback = || {
+        if let Some(channel) = &bot.news_channel {
+            return Some(channel.clone());
+        }
+        for guild_id in ctx.cache.guilds() {
+            let Some(guild) = ctx.cache.guild(guild_id) else {
+                continue;
+            };
+            let discovered = decode_space(&guild);
+            if bot.guild_id.as_ref().is_some_and(|id| id != &discovered.id) {
+                continue;
+            }
+            let allowed = |id: &RoomKey| {
+                bot.allowed_channels
+                    .as_ref()
+                    .is_none_or(|channels| channels.contains(id))
+            };
+            if let Some(id) = discovered.preferred_room.filter(&allowed) {
+                return Some(id);
+            }
+            if let Some(room) = discovered.rooms.into_iter().find(|room| allowed(&room.id)) {
+                return Some(room.id);
+            }
+        }
+        None
+    };
     let channel = system
         .map(|id| RoomKey::discord(id.get()))
-        .or_else(|| crate::default_channel(bot, ctx))?;
+        .or_else(fallback)?;
+    let native_channel = super::native_room(&channel).ok()?;
+    let actual_space = if system.is_some() {
+        Some(space)
+    } else {
+        ctx.cache.guilds().into_iter().find_map(|id| {
+            ctx.cache.guild(id).and_then(|guild| {
+                (guild.channels.contains_key(&native_channel)
+                    || guild
+                        .threads
+                        .iter()
+                        .any(|thread| thread.id == native_channel))
+                .then(|| SpaceKey::discord(id.get()))
+            })
+        })
+    };
     Some((
         RoomRef {
             id: channel,
-            space: Some(space),
+            space: actual_space,
             kind: RoomKind::Channel,
             name: None,
             thread: None,
@@ -180,7 +296,10 @@ pub(crate) async fn decode_reaction(
     reaction: &Reaction,
 ) -> Option<ReactionEvent> {
     let bot_id = ctx.cache.current_user().id;
-    if reaction.guild_id.is_none() || reaction.message_author_id != Some(bot_id) {
+    if reaction.guild_id.is_none()
+        || reaction.message_author_id != Some(bot_id)
+        || reaction.user_id == Some(bot_id)
+    {
         return None;
     }
     let room = room(reaction.channel_id, reaction.guild_id);
@@ -262,7 +381,10 @@ pub(crate) fn discord_message_input(
                     MediaSource::PublicUrl(url) => Some(url),
                     MediaSource::Native { .. } => None,
                 });
-        (message.text, image)
+        (
+            crate::incoming_text(&message.text, image.is_some(), image_analysis),
+            image,
+        )
     })
 }
 
@@ -345,7 +467,7 @@ mod tests {
             })
             .into();
         let decoded = decode_message(&message, &cache, None, None, true).unwrap();
-        assert_eq!(decoded.text, "[resim] hello");
+        assert_eq!(decoded.text, "hello");
         assert_eq!(decoded.attachments.len(), 1);
         let attachment = &decoded.attachments[0];
         assert_eq!(attachment.kind, MediaKind::Image);
@@ -370,7 +492,8 @@ mod tests {
         other.id = UserKey::new(PlatformKind::Telegram, &["99"]).unwrap();
         other.username = Some("other".into());
         let mut state = crate::State::default();
-        state.accounts.insert(connection_id().clone(), account);
+        let connection = ConnectionId::new("discord-default");
+        state.accounts.insert(connection.clone(), account);
         state
             .accounts
             .insert(ConnectionId::new("telegram-default"), other.clone());
@@ -379,7 +502,7 @@ mod tests {
         assert!(crate::message_is_tagged(
             &message,
             "",
-            state.accounts.get(connection_id())
+            state.accounts.get(&connection)
         ));
         assert!(!crate::message_is_tagged(&message, "", Some(&other)));
         message.mentions.clear();
@@ -391,7 +514,7 @@ mod tests {
         assert!(crate::message_is_tagged(
             &message,
             "",
-            state.accounts.get(connection_id())
+            state.accounts.get(&connection)
         ));
         assert!(!crate::message_is_tagged(&message, "", Some(&other)));
         message.reply_to = None;
@@ -399,7 +522,7 @@ mod tests {
         assert!(crate::message_is_tagged(
             &message,
             "",
-            state.accounts.get(connection_id())
+            state.accounts.get(&connection)
         ));
         assert!(!crate::message_is_tagged(&message, "", Some(&other)));
         message.text = "KAjU, hey".into();
@@ -428,5 +551,132 @@ mod tests {
         assert_eq!(label.as_deref(), Some("kekw"));
         assert!(animated);
         assert_eq!(reaction_label(&emoji), ":kekw:");
+    }
+
+    #[test]
+    fn message_envelopes_are_stable_and_connection_scoped() {
+        let cache = Arc::new(serenity::cache::Cache::new());
+        let first = ConnectionId::new("first");
+        let second = ConnectionId::new("second");
+        let decode = || decode_message(&fixture(), &cache, None, None, false).unwrap();
+        let a = message_envelope(&first, decode());
+        let b = message_envelope(&first, decode());
+        let c = message_envelope(&second, decode());
+        assert_eq!(a.event_id, b.event_id);
+        assert_eq!(a.event_id, c.event_id);
+        assert_ne!(a.connection, c.connection);
+        assert_eq!(a.occurred_at_unix_ms, 1_700_000_000_123);
+        assert!(matches!(a.event, ChatEvent::MessageCreated(_)));
+    }
+
+    #[test]
+    fn synthetic_deliveries_preserve_readds_and_lifecycle_kind_scope() {
+        let connection = ConnectionId::new("one");
+        let reaction = || {
+            ChatEvent::ReactionAdded(ReactionEvent {
+                room: RoomRef::from_key(RoomKey::discord(7)),
+                actor: decode_user(&fixture().author),
+                target: MessageRef {
+                    id: MessageKey::discord(81),
+                    room: RoomKey::discord(7),
+                    author: Some(UserKey::discord(99)),
+                },
+                emoji: Emoji::Unicode("💀".into()),
+                original_text: Some("hello".into()),
+            })
+        };
+        let a = synthetic_envelope(&connection, reaction(), "7:81:42");
+        let b = synthetic_envelope(&connection, reaction(), "7:81:42");
+        let closed = synthetic_envelope(&connection, ChatEvent::ConnectionClosed, "7:81:42");
+        assert_ne!(a.event_id, b.event_id);
+        assert_ne!(a.event_id, closed.event_id);
+        let scope = a.event_id.components().next().unwrap().unwrap();
+        assert!(scope.contains("reaction-add:7:81:42"));
+        let scope = closed.event_id.components().next().unwrap().unwrap();
+        assert!(scope.contains("connection-closed"));
+    }
+
+    #[test]
+    fn self_messages_are_excluded_even_without_bot_metadata() {
+        let cache = Arc::new(serenity::cache::Cache::new());
+        let mut message = fixture();
+        message.author.id = cache.current_user().id;
+        message.author.bot = false;
+        assert!(decode_message(&message, &cache, None, None, false).is_none());
+    }
+
+    #[test]
+    fn space_metadata_preserves_text_position_and_separate_system_preference() {
+        let mut guild = Guild::default();
+        guild.id = GuildId::new(9);
+        guild.name = "friends".into();
+        guild.system_channel_id = Some(ChannelId::new(10));
+        for (id, position, kind) in [
+            (7, 2, ChannelType::Text),
+            (8, 1, ChannelType::Text),
+            (10, 0, ChannelType::News),
+        ] {
+            let mut channel = serenity::all::GuildChannel::default();
+            channel.id = ChannelId::new(id);
+            channel.guild_id = guild.id;
+            channel.position = position;
+            channel.kind = kind;
+            channel.name = format!("channel-{id}");
+            guild.channels.insert(channel.id, channel);
+        }
+        let space = decode_space(&guild);
+        assert_eq!(space.id, SpaceKey::discord(9));
+        assert_eq!(space.name.as_deref(), Some("friends"));
+        assert_eq!(
+            space
+                .rooms
+                .iter()
+                .map(|room| room.id.clone())
+                .collect::<Vec<_>>(),
+            vec![RoomKey::discord(8), RoomKey::discord(7)]
+        );
+        assert_eq!(space.preferred_room, Some(RoomKey::discord(10)));
+        assert_eq!(space.rooms[0].name.as_deref(), Some("channel-8"));
+    }
+
+    #[tokio::test]
+    async fn bounded_ingress_preserves_ready_account_metadata_and_event_order() {
+        use crate::platform::runtime::EventSender;
+        use std::{
+            future::{poll_fn, Future},
+            task::Poll,
+        };
+        let (ingress, mut receiver) = EventSender::channel(1);
+        let connection = ConnectionId::new("second-discord");
+        let mut native_account = fixture().author;
+        native_account.bot = true;
+        native_account.global_name = Some("Visible account".into());
+        let ready = synthetic_envelope(
+            &connection,
+            ChatEvent::ConnectionReady(decode_user(&native_account)),
+            "ready:42",
+        );
+        ingress.send(ready).await.unwrap();
+        let closed = synthetic_envelope(&connection, ChatEvent::ConnectionClosed, "closed");
+        let send_closed = ingress.send(closed);
+        tokio::pin!(send_closed);
+        // Polling one delivery proves it is capacity-blocked, not silently dropped
+        // or delegated to an unbounded background task.
+        let pending = poll_fn(|cx| Poll::Ready(send_closed.as_mut().poll(cx).is_pending())).await;
+        assert!(pending);
+        let ready = receiver.recv().await.unwrap();
+        assert_eq!(ready.connection, connection);
+        let ChatEvent::ConnectionReady(account) = ready.event else {
+            panic!("the ready account must precede connection closure");
+        };
+        assert_eq!(account.id, UserKey::discord(42));
+        assert_eq!(account.display_name, "Visible account");
+        assert_eq!(account.username.as_deref(), Some("account"));
+        assert_eq!(account.automation, Automation::Bot);
+        assert_eq!(account.stability, IdentityStability::Persistent);
+        send_closed.await.unwrap();
+        let closed = receiver.recv().await.unwrap();
+        assert_eq!(closed.connection, connection);
+        assert!(matches!(closed.event, ChatEvent::ConnectionClosed));
     }
 }

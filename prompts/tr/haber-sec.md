@@ -1,6 +1,6 @@
 # Haber seçme
 
-Aşağıda bir discord grubunun profili, sonra iki kaynaktan haber listesi var: [hn] hacker news'in
+{platform_tr_news_group}
 ilk sayfası (teknoloji), [gündem] Türkiye gündemi. Bu gruba atılacak tek bir haber seç.
 
 Seçerken şunlara bak:

@@ -166,7 +166,6 @@
   "admin.error.connection": "Choose a platform connection for this action.",
   "admin.error.room": "Choose a room for this action.",
   "admin.error.unbound": "This room is not bound to the selected connection.",
-  "admin.error.thread": "This action cannot target a thread.",
   "admin.error.private": "A private response surface is required.",
   "admin.error.memory": "Could not read memory: {error}",
   "admin.error.platform": "Platform operation failed: {error}",

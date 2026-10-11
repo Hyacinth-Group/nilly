@@ -84,13 +84,15 @@ impl ThinkingMode {
     }
 }
 
+type MemoryObservation = (String, String, String, bool, HashMap<String, UserRef>);
+
 /// The single shared state, held behind `Bot.state: Mutex<State>`. Holds:
 /// - identity: `bot_name`, `favorite_name`, `accounts`, `model`, `thinking_mode`, `debug`.
 /// - agent output (mirrored on disk under `durum/`): `profile` (profiler), `temperament`
 ///   (coach), `corrections` (critic), `myself` (diarist), `index` (memory index), `agenda`
 ///   (wanderer), `growth` (stage/counters/chosen name, see `growth::Growth`).
 /// - what it has observed: `recent_messages`, `own_messages`, `last_channel`,
-///   `name_to_id`/`usernames` (identity mappings), `channel_history` (per-channel, also on disk).
+///   `recent_users`/`usernames` (observed identity mappings), `channel_history` (per-conversation, also on disk).
 /// - chat tracking: `chats`, `busy`, `last_activity`, `last_evaluation`, `awaiting_comment`,
 ///   `posted_news`, `scanned`.
 /// - sleep: `sleep_start`/`sleep_start_memory_len`, `last_night_observation`, `stashed_news`,
@@ -115,16 +117,18 @@ struct State {
     index: String,       // memory index, sent with every reply
     // what it has observed
     recent_messages: VecDeque<String>, // recent server messages, "name: text"
+    recent_users: HashMap<String, UserRef>,
     own_messages: VecDeque<String>,    // the bot's own recent messages
-    last_channel: Option<RoomKey>,
+    last_channel: Option<ConversationKey>,
     // chat tracking
-    chats: HashMap<RoomKey, Chat>,
-    busy: HashSet<RoomKey>, // rooms currently generating a reply
-    last_activity: HashMap<RoomKey, Instant>, // when a chat last had activity
-    last_evaluation: HashMap<RoomKey, Instant>, // last willingness call per room
-    awaiting_comment: HashMap<RoomKey, Instant>,
+    chats: HashMap<ConversationKey, Chat>,
+    busy: HashSet<ConversationKey>, // rooms currently generating a reply
+    last_activity: HashMap<ConversationKey, Instant>, // when a chat last had activity
+    last_evaluation: HashMap<ConversationKey, Instant>, // last willingness call per room
+    awaiting_comment: HashMap<ConversationKey, Instant>,
     posted_news: HashSet<u64>,
     scanned: HashSet<SpaceKey>,
+    history_in_progress: HashSet<SpaceKey>,
     // sleep: start time + raw memory length at sleep onset, so waking up can evaluate
     // what was written overnight
     sleep_start: i64,
@@ -134,17 +138,18 @@ struct State {
     // agenda and sleep
     agenda: String, // wanderer: what it last read and thought
     // identity mappings: display name (lowercase) -> id, id -> username
-    name_to_id: HashMap<String, UserKey>,
     usernames: HashMap<UserKey, String>,
-    // queue the memory cycle works through: (transcript, source, channel name, also run the critic?)
-    memory_queue: VecDeque<(String, String, String, bool)>,
+    // transcript, source, channel label, critic flag, captured identity mapping
+    memory_queue: VecDeque<MemoryObservation>,
     plans: Vec<sleep::Plan>,
     asleep: bool,
     forced_awake_until: i64, // after !wake, sleep plans are ignored until this unix time
-    channel_history: HashMap<RoomKey, VecDeque<String>>, // recent lines per room, also kept on disk
-    pending_mentions: Vec<(RoomKey, String)>, // mentions received while asleep
+    channel_history: HashMap<ConversationKey, VecDeque<String>>, // recent lines per room, also kept on disk
+    channel_observations: HashMap<ConversationKey, VecDeque<Option<UserRef>>>,
+    pending_mentions: Vec<(ConversationKey, String, UserRef)>, // mentions received while asleep
     growth: growth::Growth,
     accounts: HashMap<ConnectionId, UserRef>, // identity belongs to a connection, not the brain
+    primary_connection: Option<ConnectionId>,
     model: String,     // model in use; changed with !model, persisted in durum/model.md
     thinking_mode: ThinkingMode, // thinking mode; changed with !thinking, persisted in durum/dusunme.md
     debug: bool, // !debug: decisions (willingness, target, silence/reaction) get posted to the channel; durum/debug.md
@@ -161,7 +166,7 @@ impl State {
     /// Builds the initial `State` at startup by reading everything persisted under `durum/`.
     /// Non-persisted fields retain their defaults.
     fn load() -> Self {
-        State {
+        let mut state = State {
             profile: memory::read("profil.md"),
             temperament: memory::read("huy.md"),
             corrections: memory::read("duzeltmeler.md"),
@@ -170,6 +175,7 @@ impl State {
             agenda: agenda::latest_agenda(&memory::read("gundem.md")),
             growth: growth::load(),
             channel_history: memory::load_channel_history().into_iter().collect(),
+            channel_observations: memory::load_channel_observations().into_iter().collect(),
             thinking_mode: ThinkingMode::read(),
             debug: memory::read("debug.md").trim() == "acik",
             // guilds already scanned before: persisted so a restart doesn't re-fetch 14
@@ -179,7 +185,12 @@ impl State {
                 .filter_map(platform::keys::parse_space_line)
                 .collect(),
             ..State::default()
+        };
+        for conversation in state.channel_history.keys() {
+            let observed = channel_observed_users(&state, conversation, CHANNEL_HISTORY);
+            state.recent_users.extend(observed);
         }
+        state
     }
 
     // links a thought to its reply's message id, so the button in hide mode can find it;

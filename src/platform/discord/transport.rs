@@ -1,32 +1,123 @@
 //! Private Serenity transport. Receipts never retain a native message or cache guard.
-use super::{events::decode_user, native_message, native_room, native_space, native_user, render};
+use super::{
+    events::{decode_room, decode_user},
+    native_message, native_room, native_space, native_user, render,
+};
 use crate::platform::{
     capabilities::*, outgoing::*, types::*, Platform, PlatformError, PlatformResult,
 };
 use serenity::all::{
     ChannelId, ChannelType, Context, CreateAttachment, EmojiId, GetMessages, GuildChannel, GuildId,
-    Message, ModelError, Permissions, ReactionType,
+    Member, Message, ModelError, Permissions, ReactionType,
 };
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+
+/// Outbound work needs HTTP/cache handles, not the callback's gateway messenger.
+struct DiscordContext {
+    http: Arc<serenity::http::Http>,
+    cache: Arc<serenity::cache::Cache>,
+}
 
 pub struct DiscordAdapter {
-    context: Context,
+    context: DiscordContext,
     connection: ConnectionId,
     account: UserRef,
+    fetched_members: Mutex<HashMap<GuildId, Member>>,
+    #[cfg(test)]
+    media_resolutions: std::sync::atomic::AtomicUsize,
 }
 
 impl DiscordAdapter {
     /// Called only from Ready, after Discord accepted the configured privileged intents.
-    pub fn new(context: Context, connection: ConnectionId, account: UserRef) -> Self {
+    pub(super) fn new(context: &Context, connection: ConnectionId, account: UserRef) -> Self {
         Self {
-            context,
+            context: DiscordContext {
+                http: context.http.clone(),
+                cache: context.cache.clone(),
+            },
             connection,
             account,
+            fetched_members: Mutex::new(HashMap::new()),
+            #[cfg(test)]
+            media_resolutions: std::sync::atomic::AtomicUsize::new(0),
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn test_adapter(
+        connection: ConnectionId,
+        account: UserRef,
+    ) -> crate::platform::Adapter {
+        let cache = Arc::new(serenity::cache::Cache::new());
+        let mut native = serenity::all::CurrentUser::default();
+        native.id = native_user(&account.id).unwrap();
+        native.name = account
+            .username
+            .clone()
+            .unwrap_or_else(|| account.display_name.clone());
+        native.global_name = Some(account.display_name.clone());
+        native.bot = account.automation == Automation::Bot;
+        let mut event: serenity::all::UserUpdateEvent =
+            serde_json::from_value(serde_json::to_value(native).unwrap()).unwrap();
+        cache.update(&mut event);
+        crate::platform::Adapter::Discord(Self {
+            context: DiscordContext {
+                http: Arc::new(serenity::http::Http::new("offline-test")),
+                cache,
+            },
+            connection,
+            account,
+            fetched_members: Mutex::new(HashMap::new()),
+            media_resolutions: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn media_resolution_count(&self) -> usize {
+        self.media_resolutions
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     fn ready(&self) -> bool {
         native_user(&self.account.id).is_ok_and(|id| self.context.cache.current_user().id == id)
+    }
+
+    pub(super) async fn prepare_space(&self, guild_id: GuildId) -> PlatformResult<()> {
+        let user_id = native_user(&self.account.id)?;
+        let cached = self
+            .context
+            .cache
+            .guild(guild_id)
+            .is_some_and(|guild| guild.members.contains_key(&user_id));
+        if cached {
+            self.fetched_members
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&guild_id);
+            return Ok(());
+        }
+        if self
+            .fetched_members
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains_key(&guild_id)
+        {
+            return Ok(());
+        }
+        // The cache reference above has already dropped before the HTTP fetch.
+        let member = guild_id
+            .member(&self.context.http, user_id)
+            .await
+            .map_err(classify)?;
+        self.fetched_members
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(guild_id, member);
+        Ok(())
     }
 
     fn guild_for_room(&self, room: &RoomRef) -> Option<GuildId> {
@@ -66,17 +157,36 @@ impl DiscordAdapter {
     }
 
     fn permission_snapshot(&self, room: &RoomRef) -> Option<Capabilities> {
+        self.permission_snapshot_for(room, None)
+    }
+
+    fn permission_snapshot_for(
+        &self,
+        room: &RoomRef,
+        native_channel: Option<&GuildChannel>,
+    ) -> Option<Capabilities> {
         if !self.ready() || room.thread.is_some() {
             return None;
         }
         let channel_id = native_room(&room.id).ok()?;
-        let guild_id = self.guild_for_room(room)?;
+        let guild_id = room
+            .space
+            .as_ref()
+            .and_then(|id| native_space(id).ok())
+            .or_else(|| self.guild_for_room(room))?;
         let guild = self.context.cache.guild(guild_id)?;
-        let channel = guild
-            .channels
-            .get(&channel_id)
+        let channel = native_channel
+            .or_else(|| guild.channels.get(&channel_id))
             .or_else(|| guild.threads.iter().find(|t| t.id == channel_id))?;
-        let member = guild.members.get(&native_user(&self.account.id).ok()?)?;
+        let fetched = self
+            .fetched_members
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let user_id = native_user(&self.account.id).ok()?;
+        let member = guild
+            .members
+            .get(&user_id)
+            .or_else(|| fetched.get(&guild_id))?;
         // Unknown role records cannot be treated as a known permission grant.
         if !guild
             .roles
@@ -203,16 +313,6 @@ async fn attachment(source: &OutgoingAttachment<'_>) -> Option<CreateAttachment>
     }
 }
 
-fn room_ref(channel: &GuildChannel) -> RoomRef {
-    RoomRef {
-        id: RoomKey::discord(channel.id.get()),
-        space: Some(SpaceKey::discord(channel.guild_id.get())),
-        kind: RoomKind::Channel,
-        name: Some(channel.name.clone()),
-        thread: None,
-    }
-}
-
 /// History intentionally differs from live ingress: raw emptiness gates safe text,
 /// bots are excluded but webhook metadata and attachments do not change the old scan.
 fn decode_history(
@@ -220,7 +320,10 @@ fn decode_history(
     room: &RoomRef,
     cache: &std::sync::Arc<serenity::cache::Cache>,
 ) -> Option<IncomingMessage> {
-    if message.author.bot || message.content.trim().is_empty() {
+    if message.author.id == cache.current_user().id
+        || message.author.bot
+        || message.content.trim().is_empty()
+    {
         return None;
     }
     Some(IncomingMessage {
@@ -407,6 +510,10 @@ impl Platform for DiscordAdapter {
             return Err(PlatformError::Unsupported("separate Discord thread scope"));
         }
         let channel = native_room(&room.id)?;
+        let guild = self
+            .guild_for_room(room)
+            .ok_or(PlatformError::PermissionDenied)?;
+        self.prepare_space(guild).await?;
         // Discord can return an indistinguishable empty page without READ_MESSAGE_HISTORY.
         // Resolve permissions first; unknown permission state is not successful empty history.
         if self.capabilities(room).history == HistoryAccess::None {
@@ -459,8 +566,11 @@ impl Platform for DiscordAdapter {
             return Err(PlatformError::Disconnected);
         }
         let mut rooms = Vec::new();
-        for guild_id in self.context.cache.guilds() {
-            // Fetch the real channel list; only cached guild/member facts decide usability.
+        let mut guilds = self.context.cache.guilds();
+        guilds.sort();
+        for guild_id in guilds {
+            self.prepare_space(guild_id).await?;
+            // Room discovery preserves Discord's native text-channel order.
             let channels = guild_id
                 .channels(&self.context.http)
                 .await
@@ -468,28 +578,14 @@ impl Platform for DiscordAdapter {
             let mut channels: Vec<_> = channels.into_values().collect();
             channels.sort_by_key(|channel| (channel.position, channel.id));
             for channel in channels {
-                let room = room_ref(&channel);
-                if matches!(
-                    channel.kind,
-                    ChannelType::Text | ChannelType::News | ChannelType::Voice | ChannelType::Stage
-                ) {
+                let room = decode_room(&channel);
+                if channel.kind == ChannelType::Text {
                     let capabilities = self
-                        .permission_snapshot(&room)
+                        .permission_snapshot_for(&room, Some(&channel))
                         .ok_or(PlatformError::PermissionDenied)?;
                     if capabilities.decryption_available {
                         rooms.push(room);
                     }
-                }
-            }
-            let threads = self
-                .context
-                .cache
-                .guild(guild_id)
-                .map(|guild| guild.threads.iter().map(room_ref).collect::<Vec<_>>())
-                .unwrap_or_default();
-            for room in threads {
-                if self.capabilities(&room).decryption_available {
-                    rooms.push(room);
                 }
             }
         }
@@ -500,6 +596,9 @@ impl Platform for DiscordAdapter {
         &'a self,
         attachment: &'a AttachmentRef,
     ) -> PlatformResult<ModelMedia> {
+        #[cfg(test)]
+        self.media_resolutions
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         match (&attachment.kind, &attachment.source) {
             (MediaKind::Image, MediaSource::PublicUrl(url)) => {
                 Ok(ModelMedia::PublicUrl(url.clone()))
@@ -525,6 +624,59 @@ fn thinking_mode(mode: ThoughtPresentation) -> crate::ThinkingMode {
 mod tests {
     use super::*;
     use serenity::all::{MessageId, Timestamp, UserId, WebhookId};
+
+    #[tokio::test]
+    async fn separate_typed_thread_scope_never_dispatches_to_parent_channel() {
+        let connection = ConnectionId::new("thread-fixture");
+        let account = UserRef {
+            id: UserKey::discord(99),
+            display_name: "bot".into(),
+            username: Some("bot".into()),
+            automation: Automation::Bot,
+            stability: IdentityStability::Persistent,
+        };
+        let adapter = DiscordAdapter::test_adapter(connection.clone(), account.clone());
+        let mut room = RoomRef::from_key(RoomKey::discord(7));
+        room.space = Some(SpaceKey::discord(9));
+        room.thread = Some(ThreadKey::discord(8));
+        let body = OutgoingMessage::text("must not reach parent");
+        assert!(matches!(
+            adapter.send(&room, &body).await,
+            Err(PlatformError::Unsupported("separate Discord thread scope"))
+        ));
+        assert!(matches!(
+            adapter.typing(&room).await,
+            Err(PlatformError::Unsupported("separate Discord thread scope"))
+        ));
+        assert!(matches!(
+            adapter
+                .fetch_history(&room, HistoryRequest::default())
+                .await,
+            Err(PlatformError::Unsupported("separate Discord thread scope"))
+        ));
+        let receipt = MessageReceipt {
+            connection,
+            message: MessageRef {
+                id: MessageKey::discord(81),
+                room: room.id.clone(),
+                author: Some(account.id),
+            },
+            room: room.clone(),
+            last_accepted_text: "old".into(),
+            version: 0,
+        };
+        assert!(matches!(
+            adapter.edit(&receipt, &body).await,
+            Err(PlatformError::Unsupported("separate Discord thread scope"))
+        ));
+        assert!(matches!(
+            adapter.delete(&receipt).await,
+            Err(PlatformError::Unsupported("separate Discord thread scope"))
+        ));
+        let capabilities = adapter.capabilities(&room);
+        assert!(!capabilities.send);
+        assert_eq!(capabilities.history, HistoryAccess::None);
+    }
 
     #[test]
     fn history_keeps_raw_nonempty_webhook_text_but_excludes_bots_and_empty_content() {

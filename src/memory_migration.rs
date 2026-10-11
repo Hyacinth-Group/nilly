@@ -84,7 +84,10 @@ pub(crate) fn normalize_legacy_record_key(key: &str) -> String {
                 return if person {
                     keys::person_record(&UserKey::discord(id))
                 } else {
-                    keys::room_record(&RoomKey::discord(id))
+                    keys::room_record(&crate::platform::types::ConversationKey {
+                        room: RoomKey::discord(id),
+                        thread: None,
+                    })
                 };
             }
         }

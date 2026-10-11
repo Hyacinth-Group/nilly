@@ -166,7 +166,6 @@
   "admin.error.connection": "Bu işlem için bir platform bağlantısı seç.",
   "admin.error.room": "Bu işlem için bir oda seç.",
   "admin.error.unbound": "Bu oda seçilen bağlantıya bağlı değil.",
-  "admin.error.thread": "Bu işlem bir ileti dizisini hedefleyemez.",
   "admin.error.private": "Özel bir yanıt arayüzü gerekiyor.",
   "admin.error.memory": "Hafıza okunamadı: {error}",
   "admin.error.platform": "Platform işlemi başarısız: {error}",

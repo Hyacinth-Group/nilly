@@ -8,16 +8,40 @@ fn now_unix() -> i64 {
         .unwrap_or(0)
 }
 
-/// Prefers the global display name, falling back to the account name.
-fn display_name(u: &User) -> String {
-    u.global_name.clone().unwrap_or_else(|| u.name.clone())
-}
 
 /// Appends one line to the in-memory raw message buffer, capped at `MEMORY_SIZE`.
 fn remember(state: &mut State, name: &str, text: &str) {
     state.recent_messages.push_back(format!("{name}: {text}"));
     if state.recent_messages.len() > MEMORY_SIZE {
         state.recent_messages.pop_front();
+    }
+}
+
+/// Stable observed speaker handles never reuse a label for another identity.
+fn observe_user(state: &mut State, person: &UserRef) -> String {
+    let plain = person.display_name.to_lowercase();
+    let mut label = if state.recent_users.get(&plain).is_some_and(|known| known.id != person.id) {
+        format!("{} [{}]", person.display_name, person.id)
+    } else {
+        person.display_name.clone()
+    };
+    while state.recent_users.get(&label.to_lowercase()).is_some_and(|known| known.id != person.id) {
+        label.push_str(&format!(" [{}]", person.id));
+    }
+    state.recent_users.insert(label.to_lowercase(), person.clone());
+    if let Some(username) = &person.username {
+        state.usernames.insert(person.id.clone(), username.clone());
+    }
+    label
+}
+
+/// Discord-compatible image transcript markers contain no media URL or native token.
+fn incoming_text(text: &str, has_image: bool, image_analysis: bool) -> String {
+    if has_image && image_analysis {
+        if text.trim().is_empty() { "[resim attı]".to_string() }
+        else { format!("[resim] {text}") }
+    } else {
+        text.to_string()
     }
 }
 
@@ -76,7 +100,7 @@ fn spoiler(text: &str) -> String {
 }
 
 // appends a line to a channel's history and writes it to disk; survives a closed chat and a restart
-fn channel_note(state: &mut State, channel: &RoomKey, line: String) {
+fn channel_note(state: &mut State, channel: &ConversationKey, line: String) {
     channel_notes(state, channel, [line]);
 }
 
@@ -84,15 +108,25 @@ fn channel_note(state: &mut State, channel: &RoomKey, line: String) {
 // line, writing on every single line used to rewrite the whole channel history 4-5 times
 // per turn.
 /// Caps history at `CHANNEL_HISTORY` and persists it under `kanallar/<id>.md`.
-fn channel_notes(state: &mut State, channel: &RoomKey, lines: impl IntoIterator<Item = String>) {
+fn channel_notes(state: &mut State, channel: &ConversationKey, lines: impl IntoIterator<Item = String>) {
+    channel_notes_observed(state, channel, lines.into_iter().map(|line| (line, None)));
+}
+
+fn channel_notes_observed(state: &mut State, channel: &ConversationKey, lines: impl IntoIterator<Item = (String, Option<UserRef>)>) {
     let mut lines = lines.into_iter().peekable();
     if lines.peek().is_none() {
         return;
     }
     let hist = state.channel_history.entry(channel.clone()).or_default();
-    hist.extend(lines);
+    let observations = state.channel_observations.entry(channel.clone()).or_default();
+    observations.resize(hist.len(), None);
+    for (line, person) in lines {
+        hist.push_back(line);
+        observations.push_back(person);
+    }
     while hist.len() > CHANNEL_HISTORY {
         hist.pop_front();
+        observations.pop_front();
     }
     // no intermediate Vec: joined directly into a single String
     let mut content = String::new();
@@ -102,7 +136,21 @@ fn channel_notes(state: &mut State, channel: &RoomKey, lines: impl IntoIterator<
         }
         content.push_str(line);
     }
-    memory::write(&platform::keys::room_record(channel), &content);
+    memory::write_channel_history(channel, &content, observations);
+}
+
+fn channel_observe(state: &mut State, channel: &ConversationKey, line: String, person: &UserRef) {
+    channel_notes_observed(state, channel, [(line, Some(person.clone()))]);
+}
+
+fn channel_observed_users(state: &State, channel: &ConversationKey, limit: usize) -> HashMap<String, UserRef> {
+    let Some(lines) = state.channel_history.get(channel) else { return HashMap::new(); };
+    let Some(people) = state.channel_observations.get(channel) else { return HashMap::new(); };
+    lines.iter().zip(people).skip(lines.len().saturating_sub(limit)).filter_map(|(line, person)| {
+        let person = person.as_ref()?;
+        let (label, _) = line.split_once(": ")?;
+        Some((label.to_lowercase(), person.clone()))
+    }).collect()
 }
 
 /// Returns the last `n` raw message lines in chronological order.

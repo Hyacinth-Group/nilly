@@ -1,5 +1,3 @@
-// named ChatMessage, not Message: `use serenity::all::*` already brings in Discord's own
-// Message type, and this crate talks about both in the same file constantly
 /// One turn of the AI chat history sent to the provider (OpenRouter/Mistral), not a Discord
 /// message. Holds:
 /// - `role`: `"user"` or `"assistant"` (matches the OpenAI-style chat/completions schema).
@@ -19,6 +17,8 @@ struct ChatMessage {
     // nothing.
     #[serde(skip)]
     image: Option<String>,
+    #[serde(skip)]
+    observed_user: Option<UserRef>,
 }
 
 /// Builds a plain user turn (no image).
@@ -27,6 +27,7 @@ fn user(text: impl Into<String>) -> ChatMessage {
         role: "user",
         content: text.into(),
         image: None,
+        observed_user: None,
     }
 }
 
@@ -37,6 +38,7 @@ fn user_with_image(text: impl Into<String>, url: impl Into<String>) -> ChatMessa
         role: "user",
         content: text.into(),
         image: Some(url.into()),
+        observed_user: None,
     }
 }
 
@@ -46,7 +48,17 @@ fn assistant(text: impl Into<String>) -> ChatMessage {
         role: "assistant",
         content: text.into(),
         image: None,
+        observed_user: None,
     }
+}
+
+/// Extracts only identities captured at ingress, never inferred from historical names.
+fn observed_users(history: &[ChatMessage]) -> HashMap<String, UserRef> {
+    history.iter().filter_map(|turn| {
+        let person = turn.observed_user.as_ref()?;
+        let (label, _) = turn.content.split_once(": ")?;
+        Some((label.to_lowercase(), person.clone()))
+    }).collect()
 }
 
 // turns a message into an OpenAI-compatible request block. With an image, content is a

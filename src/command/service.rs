@@ -34,14 +34,6 @@ impl<'a> AdminService<'a> {
         if args.requires_room() && target.room.is_none() {
             return Err(ActionError::MissingRoom);
         }
-        if args.requires_room()
-            && target
-                .room
-                .as_ref()
-                .is_some_and(|room| room.thread.is_some())
-        {
-            return Err(ActionError::UnsupportedRoute);
-        }
         if let ActionArgs::Sleep { hours } = args {
             let option = &super::schema::definition(super::ActionId::Sleep).options[0];
             if option.min.is_some_and(|min| *hours < min)
@@ -57,7 +49,7 @@ impl<'a> AdminService<'a> {
                 });
             }
         }
-        let registry = self
+        let mut registry = self
             .bot
             .adapters
             .lock()
@@ -88,16 +80,18 @@ impl<'a> AdminService<'a> {
                     return Err(ActionError::UnboundRoom);
                 }
             }
-            // Native Discord slash actions historically ignore message-ingress allowlists.
-            // Other transports must route only explicitly bound conversations.
-            if room.id.platform() != PlatformKind::Discord {
-                let connection = target
-                    .connection
-                    .as_ref()
-                    .ok_or(ActionError::MissingConnection)?;
-                if !registry.is_bound(connection, room) {
+            if let Some(connection) = &target.connection {
+                if room.id.platform() == PlatformKind::Discord {
+                    // Actual native command targets are trusted independently of learning policy.
+                    registry
+                        .bind(connection, room.clone())
+                        .map_err(ActionError::Platform)?;
+                } else if !registry.allows(connection, room) || !registry.is_bound(connection, room)
+                {
                     return Err(ActionError::UnboundRoom);
                 }
+            } else if !matches!(actor, Actor::LocalOperator) {
+                return Err(ActionError::MissingConnection);
             }
         }
         Ok(())
@@ -131,7 +125,7 @@ impl<'a> AdminService<'a> {
                     let state = bot.state();
                     state
                         .channel_history
-                        .get(&room.id)
+                        .get(&room.conversation())
                         .map(|history| history.iter().rev().take(30).cloned().collect())
                         .unwrap_or_default()
                 };
@@ -140,12 +134,17 @@ impl<'a> AdminService<'a> {
                 } else {
                     lines.reverse();
                     let fallback = room.id.to_string();
+                    let observed = {
+                        let state = bot.state();
+                        crate::channel_observed_users(&state, &room.conversation(), 30)
+                    };
                     let channel_name = room.name.as_deref().unwrap_or(&fallback);
                     let result = bot
                         .diarist(
                             lines.join("\n"),
                             strings::t("admin.mind_test.label"),
                             channel_name,
+                            &observed,
                         )
                         .await;
                     let description = match result {
@@ -168,9 +167,9 @@ impl<'a> AdminService<'a> {
                     state.busy.clear();
                 } else {
                     let room = target.room.as_ref().ok_or(ActionError::MissingRoom)?;
-                    state.chats.remove(&room.id);
-                    state.awaiting_comment.remove(&room.id);
-                    state.busy.remove(&room.id);
+                    state.chats.remove(&room.conversation());
+                    state.awaiting_comment.remove(&room.conversation());
+                    state.busy.remove(&room.conversation());
                 }
                 ack(
                     "reset.title",
@@ -179,8 +178,8 @@ impl<'a> AdminService<'a> {
             }
             ActionArgs::News {} => {
                 let room = target.room.as_ref().ok_or(ActionError::MissingRoom)?;
-                bot.state().chats.remove(&room.id);
-                let found = bot.post_news(&room.id).await;
+                bot.state().chats.remove(&room.conversation());
+                let found = bot.post_news(&room.conversation()).await;
                 ack(
                     "news.title",
                     strings::t(if found {
@@ -192,8 +191,8 @@ impl<'a> AdminService<'a> {
             }
             ActionArgs::Problem {} => {
                 let room = target.room.as_ref().ok_or(ActionError::MissingRoom)?;
-                bot.state().chats.remove(&room.id);
-                bot.post_problem(&room.id).await;
+                bot.state().chats.remove(&room.conversation());
+                bot.post_problem(&room.conversation()).await;
                 ack("problem.title", strings::t("common.sent"))
             }
             ActionArgs::Wander {} => {
@@ -203,8 +202,8 @@ impl<'a> AdminService<'a> {
             ActionArgs::Prank {} | ActionArgs::Hack {} => {
                 let hack = matches!(args, ActionArgs::Hack {});
                 let room = target.room.as_ref().ok_or(ActionError::MissingRoom)?;
-                bot.state().chats.remove(&room.id);
-                bot.run_prank(&room.id, hack).await;
+                bot.state().chats.remove(&room.conversation());
+                bot.run_prank(&room.conversation(), hack).await;
                 ack(
                     if hack {
                         "prank.title_hack"
@@ -316,6 +315,8 @@ mod tests {
         Bot {
             state: std::sync::Mutex::new(crate::State::default()),
             adapters: std::sync::Mutex::new(crate::platform::ConnectionRegistry::default()),
+            cycles_started: std::sync::atomic::AtomicBool::new(false),
+            announcement_sent: std::sync::atomic::AtomicBool::new(false),
             http: reqwest::Client::new(),
             api_url: "https://custom.invalid/chat/completions".into(),
             key: String::new(),
@@ -381,8 +382,8 @@ mod tests {
     async fn reset_scopes_preserve_history_and_other_room_until_all() {
         use crate::platform::types::{RoomKey, RoomRef};
         let bot = fixture();
-        let first = RoomKey::discord(7001);
-        let second = RoomKey::discord(7002);
+        let first = RoomRef::from_key(RoomKey::discord(7001)).conversation();
+        let second = RoomRef::from_key(RoomKey::discord(7002)).conversation();
         {
             let mut state = bot.state();
             for room in [&first, &second] {
@@ -400,7 +401,7 @@ mod tests {
         let service = AdminService::new(&bot);
         let target = ActionTarget {
             connection: None,
-            room: Some(RoomRef::from_key(first.clone())),
+            room: Some(RoomRef::from_key(first.room.clone())),
         };
         let result = service
             .execute(
@@ -541,5 +542,92 @@ mod tests {
             Some(&owner)
         ));
         assert!(!model_owner(&Actor::User(owner), None));
+    }
+    #[tokio::test]
+    async fn reset_can_address_a_topic_without_erasing_base_room_or_other_topics() {
+        let bot = fixture();
+        let base = crate::platform::types::RoomRef::from_key(
+            crate::platform::types::RoomKey::discord(87230),
+        );
+        let mut first = base.clone();
+        first.thread = Some(crate::platform::types::ThreadKey::discord(87231));
+        let mut second = base.clone();
+        second.thread = Some(crate::platform::types::ThreadKey::discord(87232));
+        for room in [&base, &first, &second] {
+            bot.state()
+                .chats
+                .insert(room.conversation(), crate::Chat::default());
+        }
+        AdminService::new(&bot)
+            .execute(
+                &Actor::LocalOperator,
+                &ActionTarget {
+                    connection: None,
+                    room: Some(first.clone()),
+                },
+                ActionArgs::Reset { all: false },
+            )
+            .await
+            .unwrap();
+        let state = bot.state();
+        assert!(!state.chats.contains_key(&first.conversation()));
+        assert!(state.chats.contains_key(&base.conversation()));
+        assert!(state.chats.contains_key(&second.conversation()));
+    }
+
+    #[test]
+    fn legacy_command_binding_preserves_actual_topic_without_approving_learning() {
+        let bot = fixture();
+        let connection = crate::platform::types::ConnectionId::new("legacy-command-route");
+        let account = crate::platform::types::UserRef {
+            id: UserKey::discord(87233),
+            display_name: "Bot".into(),
+            username: None,
+            automation: crate::platform::types::Automation::Bot,
+            stability: crate::platform::types::IdentityStability::Persistent,
+        };
+        let mut room = crate::platform::types::RoomRef::from_key(
+            crate::platform::types::RoomKey::discord(87234),
+        );
+        room.thread = Some(crate::platform::types::ThreadKey::discord(87235));
+        room.name = Some("actual command topic".into());
+        {
+            let mut registry = bot
+                .adapters
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            registry.register(crate::platform::discord::test_adapter(
+                connection.clone(),
+                account,
+            ));
+            registry
+                .set_room_policy(
+                    &connection,
+                    crate::platform::registry::RoomPolicy::Approved(
+                        std::collections::HashSet::new(),
+                    ),
+                )
+                .unwrap();
+        }
+        let target = ActionTarget {
+            connection: Some(connection.clone()),
+            room: Some(room.clone()),
+        };
+        AdminService::new(&bot)
+            .authorize(
+                &Actor::User(UserKey::discord(87236)),
+                &target,
+                &ActionArgs::Reset { all: false },
+            )
+            .unwrap();
+        let registry = bot
+            .adapters
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert!(registry.is_bound(&connection, &room));
+        assert!(!registry.allows(&connection, &room));
+        let actual = registry.room(&room.conversation()).unwrap();
+        assert_eq!(actual.thread, room.thread);
+        assert_eq!(actual.name, room.name);
     }
 }

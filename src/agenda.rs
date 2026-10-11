@@ -246,13 +246,19 @@ impl Bot {
             .map(|(i, item)| format!("{i}. {} — {}", item.title, memory::trim(&item.summary, 120)))
             .collect::<Vec<_>>()
             .join("\n");
+        let context = self.default_prompt_context();
         let instruction = {
             let state = self.state();
-            prompts::current()
-                .wanderer_pick
-                .replace("{ad}", &state.bot_name)
-                .replace("{huy}", &state.temperament)
-                .replace("{profil}", &state.profile)
+            context
+                .render_with(
+                    prompts::current().wanderer_pick,
+                    &[
+                        ("{ad}", &state.bot_name),
+                        ("{huy}", &state.temperament),
+                        ("{profil}", &state.profile),
+                    ],
+                )
+                .into_owned()
         };
         let pick = match self.analyze(&list, &instruction, 20, "gezgin_sec").await {
             Ok(s) => s,
@@ -278,10 +284,11 @@ impl Bot {
             read_text += &format!("## {}\n{}\n{}\n\n", item.title, item.link, content);
         }
 
+        let note_instruction = context.render(prompts::current().wanderer_note);
         let note = match self
             .generate(
                 &[user(read_text)],
-                prompts::current().wanderer_note,
+                &note_instruction,
                 Some(350),
                 "gezgin_not",
             )

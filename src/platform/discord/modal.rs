@@ -4,9 +4,10 @@
 // strings.rs, langs/tr.json) rather than a Rust string literal, so the whole surface follows
 // `BOT_LANG` (lang.rs).
 
-use super::*;
 use crate::command::read_models::{MetricsView, MindView, PersonView, SettingsView, StatusView};
 use crate::command::ThinkingSetting;
+use crate::*;
+use serenity::all::*;
 
 const MODAL_LIMIT: usize = 4000; // discord TextInput value upper bound
 const FIELD_LIMIT: usize = 1024; // discord embed field value upper bound

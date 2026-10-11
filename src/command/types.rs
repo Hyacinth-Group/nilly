@@ -217,7 +217,6 @@ pub enum ActionError {
     MissingConnection,
     MissingRoom,
     UnboundRoom,
-    UnsupportedRoute,
     PrivateSurfaceRequired,
     Memory(crate::BotError),
     Platform(crate::platform::PlatformError),
@@ -231,9 +230,6 @@ impl std::fmt::Display for ActionError {
             Self::MissingConnection => f.write_str("administration requires a connection"),
             Self::MissingRoom => f.write_str("action requires a room"),
             Self::UnboundRoom => f.write_str("room is not bound to this connection"),
-            Self::UnsupportedRoute => {
-                f.write_str("action cannot address a thread through a room-only route")
-            }
             Self::PrivateSurfaceRequired => {
                 f.write_str("private administration response surface required")
             }
