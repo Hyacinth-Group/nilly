@@ -27,7 +27,7 @@
 | AI_RETRIES | 2 | extra retry count on network error / 429 / 5xx (total is this + 1) |
 | `reply_budget!()` (macro) / REPLY_CAP | debug `Some(2000)` / release `Some(4096)` | chat reply token budget; both have an upper bound, in release it only cuts off runaway cases like repetition/loops |
 | REASONING_BUDGET_BASE | 1500 | in a non-stream agent call, when reasoning can't be turned off, the retry budget: max(2×current, this) |
-| FAVORITE | 259669117248864257 | id of the user who is always favored |
+| `owner_id()` | `OWNER_ID`, unset means none | user always favored, and the only user allowed to change `/model` |
 | WANDERER_INTERVAL | 4 hours | agenda wandering |
 | IMAGE_DIR / STATE_DIR | photos / durum | folders (relative to the working directory; real disk paths) |
 
@@ -38,16 +38,16 @@ is `durum/hafiza.redb` (fixed file name, not configurable via `.env`); `durum/ar
 exception, still real files (see docs/state-files.md).
 
 ## src/agenda.rs
-RSS_URL (Sözcü) · AGENDA_ENTRIES 12 · PAGE_LIMIT 3500
+`NEWS_RSS` overrides the feed; default BBC World for English, Sözcü for Turkish · AGENDA_ENTRIES 12 · PAGE_LIMIT 3500
 
 ## src/sleep.rs
-TIMEZONE_OFFSET +3 hours (TR, no daylight saving) · INSOMNIA_CHANCE 0.07 · INSOMNIA_TENSE 0.20 ·
+`TZ_OFFSET` defaults to 0 hours from UTC (fractional offsets supported) · INSOMNIA_CHANCE 0.07 · INSOMNIA_TENSE 0.20 ·
 normal sleep 01:00→09:00 ±45 min · sleepless night: up at 01:00, 06:00→13:00 ±45 min
 
 ## src/travel.rs
-EVENTS table (new year's 30 Dec 4d, semester break 24 Jan 7d, ramadan
-feast 2026: 19 Mar 4d / 2027: 8 Mar, 23 Apr 3d, 19 May 3d, sacrifice feast 2026: 26 May 5d / 2027:
-15 May, summer 14 Jul 6d, zeytinli rock 21 Aug 4d, 30 Aug 3d, 29 Oct 3d)
+Turkish-only EVENTS table (disabled for `BOT_LANG=en`): new year's 30 Dec 4d, semester break 24 Jan 7d,
+ramadan feast 2026: 19 Mar 4d / 2027: 8 Mar, 23 Apr 3d, 19 May 3d, sacrifice feast
+2026: 26 May 5d / 2027: 15 May, summer 14 Jul 6d, zeytinli rock 21 Aug 4d, 30 Aug 3d, 29 Oct 3d.
 
 ## Numbers embedded in code (not constants)
 `send` own message buffer 50 · `pending_mentions` 20 · `retrieve` person ≤4/1200, topic ≤2/800,
@@ -55,35 +55,14 @@ event 8, raw lines 12/200, keyword ≤40, ≥2 matches · `read_history` page 10
 RSS 12 · wander rss 20, page ≤3 · on-the-road message once a day, 25% · coach last 200 lines ·
 profiler 600 · observation 300 · hack entry max_tokens 150
 
-## `durum/taranan.md`
-`read_history` (the 14-day history scan) keeps the ids of servers already scanned here;
-`State::load` reads it on every restart, and it's updated in `guild_create`. Without it, every
-process restart would rescan every channel of every server from scratch (wasteful of both API
-calls and time).
+## Scanned guilds
+`taranan.md` is a **redb key**, not a physical file. The first-join history scan stores scanned
+guild IDs there; `State::load` restores them and `guild_create` updates the record.
 
 ## Environment variables (.env)
-DISCORD_TOKEN (required to connect to Discord; not needed for `cargo run -- chat`) ·
-OPENROUTER_KEY or MISTRAL_KEY (one is required, also in CLI chat mode; if both are set, openrouter
-wins) · PROVIDER=mistral (force it) · MODEL (model id, overrides the provider's default) ·
-API_URL (an OpenAI-compatible chat/completions address; overrides the chosen provider's address) ·
-FIRECRAWL_KEY (falls back to a plain download if absent) · NEWS_CHANNEL (channel id; falls back
-to the system channel / first text channel if absent) ·
-GUILD_ID (single server id; if set, the bot only runs in this server) ·
-CHANNELS (comma-separated channel id list; if set, the bot only runs in these channels) ·
-DEBUG_CHANNEL (channel id; while `/debug` is on, decision traces go here, otherwise to the
-message's channel) ·
-IMAGE_ANALYSIS (on by default; `kapali/off/hayir/0` turns off reading attached photos — read only
-at startup, cannot be changed at runtime by any slash command, `Bot.image_analysis`) ·
-LOG_LEVEL (error/warn/info/debug/trace, default info) · LOG_COLOR (on/off; default: on in a
-terminal, off in a file) ·
-BOT_LANG (default tr; not `LANG` — that's already set by the OS locale in most shells, hence the
-separate name to avoid clashing; pinned for the life of the process via `Lang::current()`, see
-`src/lang.rs`, AGENTS.md item 12)
-
-**Note (2026-09-03):** these variable names used to be Turkish (`SAGLAYICI`, `HABER_KANALI`,
-`KANALLAR`, `DEBUG_KANALI`, `RESIM_ANALIZI`, `API_ADRES`, `LOG_SEVIYE`, `LOG_RENK`); they were
-translated too when the code was translated to English. Local `.env` files need to be updated by
-hand, there is no backward-compatibility shim.
+See [configuration.md](configuration.md) for the complete environment reference.
+`BOT_LANG` defaults to `en` and is fixed for the life of the process, independently of the OS `LANG`.
+`GUILD_ID` and `CHANNELS` blank means every accessible server/channel; restrict them before first launch.
 
 ## src/growth.rs
 NAME_STAGE 2 (yerlesik) · STAGES: yeni (0 days, 0 chats, confidence×0.7, poke×0.4) · isinma (3d, 8c, ×0.8, ×0.7) ·

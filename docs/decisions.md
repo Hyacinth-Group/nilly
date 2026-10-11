@@ -1,6 +1,9 @@
 # Decisions and rationale
 
-In chronological order. When changing a decision, add a new line here — don't delete the old one.
+This is a dated historical record, not the current behavior reference. Some entries were
+superseded; consult [architecture](architecture.md), [configuration](configuration.md) and
+[state formats](state-files.md) for maintained contracts. Earlier session notes remain in Git
+history, not the distributed documentation.
 
 - **2026-09-01 · Python → Go → Rust.** The language changed twice at Emin's request. Settled on
   Rust; serenity 0.12 + tokio. The Go version is in git history (`git log --all -- main.go`).
@@ -671,8 +674,8 @@ In chronological order. When changing a decision, add a new line here — don't 
   counts as developer diagnostics and was translated to English). Rationale: international
   readability of the codebase; the bot's Turkish personality/behavior didn't change at all, only
   the language of the people reading the source did. Verification: `cargo build` + `cargo test`
-  (76 green) + `cargo clippy` (0 warnings) + `cargo fmt`; not tried live on Discord (it never had
-  been anyway, see AGENTS.md "Known gaps"). Detail: AGENTS.md item 8, docs/progress.md.
+  (76 green) + `cargo clippy` (0 warnings) + `cargo fmt`; not tried live on Discord in that session.
+  This is a historical verification claim, not a current test report.
 - **2026-09-03 · Moved from `durum/` markdown files to redb (`durum/hafiza.redb`).** User request:
   an embedded database instead of markdown-per-file, plus a migrator to carry over the old data.
   Three options were offered, the user chose redb: rusqlite (SQLite) would have brought in a C
@@ -695,5 +698,5 @@ In chronological order. When changing a decision, add a new line here — don't 
   reset everyone's "most recently changed" order; it doesn't touch the original files (deleted by
   hand). Verification: 85 tests + clippy 0 warnings + clean fmt + `migrate-durum` run with the real
   binary against a made-up file tree and verified by hand by reading it back with `cargo run --
-  chat` (model.md came through correctly) — but this environment has no real production `durum/`
-  data, see AGENTS.md "Known gaps." Detail: `docs/state-files.md`, docs/progress.md.
+  chat` (model.md came through correctly) — that session had no real production `durum/` data.
+  Current storage formats are described in [state-files.md](state-files.md).

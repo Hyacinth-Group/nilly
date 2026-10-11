@@ -4,13 +4,12 @@ All of them are `prompts/<lang>/<name>.md`; in `src/prompts.rs`: `mod tr { pub c
 include_str!(...); }` — each language has its own submodule, all collected into a single
 `Prompts` struct, and `prompts::current()` returns the right struct based on
 `Lang::current()`, which is fixed for the life of the process (call sites are
-`prompts::current().field_name` — see `src/lang.rs`, AGENTS.md item 12). The file's first
+`prompts::current().field_name` — see `src/lang.rs`). The file's first
 line, `# Title`, goes to the model too. Placeholders are filled in code via
 `.replace("{x}", ..)`; an unfilled placeholder passes through as-is, so update the code too
 when adding a new placeholder.
-(File names and content under `prompts/` were deliberately left in Turkish — the bot's
-personality, see AGENTS.md item 8. The Rust side below is in English. `tr/` and `en/` are
-both filled in.)
+`en/` and `tr/` contain language-specific prose. File names and serialized output keys
+retain some Turkish names for compatibility; they do not select the bot's language.
 
 Text shown on Discord (slash command name/description, embed, button, `/yardim`'s text)
 lives in a separate system: `langs/<lang>.json` — a flat `{"key": "value"}`, read by
@@ -62,8 +61,8 @@ DIARIST, WILLINGNESS, TARGET_PICK, WAKING, MOOD. The code takes what's between `
 (DIARIST) "diarist: couldn't parse json" is logged and memory doesn't change; for mini calls
 (e.g. MOOD) it silently falls back to `None`/a fallback behavior. (The JSON field names —
 `puan`, `sebep`, `hedef`, `durum`, `yogunluk`, `olay`, `kisiler`, `isim`, etc. — are
-deliberately Turkish: the model produces them under these names, and the Rust struct fields
-have to match them, see AGENTS.md item 8.)
+shared compatibility keys: the model produces them under these names and serde expects them
+in both languages.)
 
 ## Prompts that expect a number
 NEWS_PICK (single number), WANDERER_PICK (comma-separated). The code discards anything that
