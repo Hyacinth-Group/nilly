@@ -176,8 +176,7 @@ impl State {
             // days of history each time (guild_create fires again on every ready)
             scanned: memory::read("taranan.md")
                 .lines()
-                .filter_map(|l| l.trim().parse::<u64>().ok())
-                .map(SpaceKey::discord)
+                .filter_map(platform::keys::parse_space_line)
                 .collect(),
             ..State::default()
         }

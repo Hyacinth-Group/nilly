@@ -72,10 +72,12 @@ impl EventHandler for Handler {
             let mut state = self.bot.state();
             let is_new = state.scanned.insert(space);
             if is_new {
-                let list: Vec<String> = state.scanned.iter()
-                    .filter_map(|key| platform::discord::native_space(key).ok())
-                    .map(|guild| guild.get().to_string())
-                    .collect();
+                let mut list: Vec<String> = state.scanned.iter().map(ToString::to_string).collect();
+                list.sort();
+                // Unknown historical scan lines stay retained, but never become active spaces.
+                list.extend(memory::read("taranan.md").lines()
+                    .filter(|line| platform::keys::parse_space_line(line).is_none())
+                    .map(ToString::to_string));
                 memory::write("taranan.md", &list.join("\n"));
             }
             is_new

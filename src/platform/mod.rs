@@ -2,4 +2,5 @@
 //! belong to an adapter; credential/session IDs are distinct from durable identities.
 pub mod capabilities;
 pub mod discord;
+pub mod keys;
 pub mod types;

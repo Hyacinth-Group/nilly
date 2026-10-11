@@ -54,7 +54,11 @@ Conversation uses `generate` / `generate_stream`, with the persona and evolving 
 
 A reply combines the fixed language-specific persona, growth stage, temperament, group profile, memory index, bounded retrieved person/topic/event records, agenda, current self-state, clock/travel context, corrections, mood, and task. Retrieval has a 6,000-character budget; the index and fixed profile context are additional. Model output is parsed as a bounded line protocol: text, silence, or Unicode reaction. [Protocol details](flows.md#output-protocol-every-reply-with-personality-goes-through-this).
 
-`durum/hafiza.redb` stores text under path-like keys; person keys use Discord user IDs, topic keys use slugs. Overflow archives in `durum/arsiv/` are real files for human inspection, not bot retrieval. Channel history is bounded separately. See [state files](state-files.md).
+`durum/hafiza.redb` stores markdown under path-like keys; schema v2 person/room
+records use source-qualified domain identities, and topics retain slug keys.
+Overflow archives in `durum/arsiv/` are real files for human inspection, not bot
+retrieval. New canonical archive names are escaped; historical filenames and
+contents are unchanged. See [state files](state-files.md).
 
 ## Background work
 
@@ -102,3 +106,21 @@ selection, safe content, welcome and reply-user mentions, custom emoji labels,
 thought/stealth rendering, slash registration and private UI builder semantics.
 They are not live Discord network probes. Persisted settings-button `kapali`
 remains distinct from slash option `kapat`; existing Discord quirks are retained.
+
+### Fallible memory API
+
+Administrative callers use `memory::read_result(rel: &str)
+-> Result<Option<String>, BotError>` and
+`memory::write_result(rel: &str, content: &str) -> Result<(), BotError>`.
+Missing records return `Ok(None)`; database errors are never presented as empty
+memory. Construct identity record keys with `platform::keys::person_record`
+or `room_record`, and parse them through the matching canonical parsers.
+`memory::init_result(path: &Path) -> Result<(), BotError>` obtains exclusive
+ownership and completes the versioned identity migration before state loading.
+
+The migration preserves body bytes and modification times, creates a consistent
+v1 snapshot and manifest before cutover, rejects conflicting destinations, and
+advances the schema with all identity moves in one write transaction. Unknown
+legacy keys and malformed scan entries remain retained/unresolved. Completed
+version checks are idempotent. Derived `INDEX.md` is regenerated after success.
+Rollback is offline restoration with the old binary, not a reverse runtime alias.

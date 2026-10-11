@@ -7,6 +7,7 @@ mod init;
 mod lang;
 mod logging;
 mod memory;
+mod memory_migration;
 mod migrate;
 mod modal;
 pub mod platform;

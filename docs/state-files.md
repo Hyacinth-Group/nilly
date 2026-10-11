@@ -4,16 +4,16 @@ Runtime memory; not committed to git. The bot loads from here on restart.
 
 **Storage**: everything outside `arsiv/` lives in a single file, `durum/hafiza.redb`
 (redb — pure Rust, ACID transactions; why this instead of rusqlite/plain-JSON:
-`docs/decisions.md`). The table below still shows the old file paths because that's by
-design: each record is stored in redb keyed by its old relative path string
-(`"kisiler/1.md"`, `"profil.md"`, ...), with the value being an exact copy of the text
-the file used to hold — field names, limits, and formats below remain unchanged, only the
-container changed (see the module comment in `src/memory.rs`). `arsiv/` is the one
-exception: it's still real `.md` files, because it's for human eyes only, the bot never
-reads it again (see the table below). Migrating from an old `durum/` tree is done with
-`cargo run -- migrate-durum` (`src/migrate.rs`).
+`docs/decisions.md`). Records keep path-like keys and their existing markdown
+bodies, but schema v2 qualifies durable user/room/space identities by platform.
+For example `kisiler/discord:user:42.md` and `kanallar/discord:room:7.md` are
+active database keys. `platform::keys` is the sole identity-to-record mapping.
+`arsiv/` remains real files for human inspection; new canonical archive filename
+segments are escaped for filesystem safety, while historical archives retain
+their original names and raw content. Filesystem import uses
+`cargo run -- migrate-durum` and emits canonical keys, never v1 numeric aliases.
 Some persisted keys retain Turkish names for compatibility; they do not select the bot's language.
-Person records use Discord user IDs. Topic records use slugs.
+Person records use platform-qualified user identities. Topic records use slugs.
 
 | Record | Writer | Reader | Limit / maintenance |
 |---|---|---|---|
@@ -36,10 +36,10 @@ Person records use Discord user IDs. Topic records use slugs.
 ## Formats
 
 ### kisiler/<id>.md
-File name is the Discord user id (a name change doesn't cause a split).
+The record key is a platform-qualified `UserKey`; display-name changes never split it.
 ```
 # Emin
-id: 259669117248864257
+id: discord:user:259669117248864257
 kullanici_adi: kaju
 eski_adlar: önceki görünen ad
 puan: +3
@@ -56,11 +56,11 @@ not: rust'ı övdüm diye üç mesaj laf soktu
 `puan` ranges -10..10 (`OWNER_ID`, if configured, is fixed at +10). `etiket` ≤6, lowercase.
 `not` is a single sentence, an opinion. `eski_adlar` ≤5. `Bildiklerin` is non-repeating
 durable facts. `Son olaylar` is one line per finished chat, with second-precision
-timestamps (`date_time`). Parsing is done by `Person::parse`: `# ` heading, the `id:`
-`kullanici_adi:` `eski_adlar:` `puan:` `etiket:` `not:` fields, the `## Bildik…` and
-`## Son…` sections, and `- ` lines. Unknown lines are ignored. Name→id resolution goes
-through `State.name_to_id`; a record that can't be resolved is skipped for that round
-(logged). Old slug files are not read and can be deleted over time.
+timestamps (`date_time`). Parsing uses the record key as authoritative identity;
+historical `id:` lines cannot overwrite it. Other markdown fields and sections
+remain unchanged. Unresolved legacy slug records are retained and reported in the
+migration manifest, but are not invented as users or silently deleted. Names are
+presentation, not a cross-platform identity-linking mechanism.
 
 ### konular/<slug>.md
 ```
@@ -88,7 +88,7 @@ Once summarized, summary lines that don't start with `- ` appear at the top of t
 ## Slug rule
 `memory::slug`: lowercase; ç→c ğ→g ı→i ö→o ş→s ü→u â→a î→i û→u; non-alphanumeric collapses
 to a single `-`; `bilinmeyen` if empty. This is used for topics, not person keys.
-Person records are keyed by Discord user ID; display names remain readable fields inside records.
+Person records are keyed by platform-qualified user identity; display names remain readable fields inside records.
 
 ## Budget (memory that goes into one reply)
 `retrieve`: person files (≤4 × ≤1200) → topic (≤2 × ≤800) → last 8 events → ≤12 lines from
@@ -102,3 +102,21 @@ Channel history has a rolling 60-line limit; retrieval is bounded separately. Su
 can retain derived facts and archived raw text after a chat ends. Archives are not searched by the bot.
 Selective member deletion is not supported. `/reset` clears channel/chat state, not person/topic
 records or archives. Operator backups may retain older data. See [setup privacy](setup-guide.md#privacy).
+
+## Identity schema migration and rollback
+
+Startup acquires exclusive redb ownership before state loading. A versioned
+migration creates a consistent stopped-instance snapshot database and manifest,
+then renames person/room records, converts valid numeric Discord scan entries,
+removes superseded active keys and advances the schema in one redb transaction.
+Original body bytes and modification timestamps are preserved. Unknown keys and
+malformed scan lines remain in place and are reported as unresolved.
+Pre-existing destinations, timestamp conflicts, duplicate renames or any backup/
+database error abort before cutover; repeated completed migrations are no-ops.
+`INDEX.md` is derived again only after successful conversion; its pre-migration
+representation remains in the backup.
+
+Rollback requires stopping the new binary, restoring the saved v1 snapshot and
+using the old binary. Never run the old binary against the v2 identity scheme.
+Archives are not migrated or removed. Retain the backup and manifest alongside
+operator backups; this migration is not a member-erasure mechanism.

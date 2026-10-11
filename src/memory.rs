@@ -11,10 +11,9 @@
 // Everything above except `arsiv/` lives in one embedded database, `durum/hafiza.redb`
 // (redb — pure Rust, single file, ACID transactions; chosen over rusqlite specifically to
 // avoid a C dependency, see docs/decisions.md). The design deliberately doesn't reshape the
-// data: every value stored is the exact same text a file held before this migration, keyed
-// by the same relative path string the file used to have (`"kisiler/1.md"`, `"profil.md"`,
-// ...). Domain identities are translated only by the explicit v1 boundary helpers below;
-// canonical storage keys arrive with the atomic schema cutover.
+// data: values retain their original markdown bytes through the atomic identity migration.
+// Active person and room keys use canonical platform-qualified domain identities; unknown
+// historical keys remain stored but are never treated as runtime identity aliases.
 // `arsiv/` stays real files on disk: write-mostly, human-inspection-only, never read back by
 // the bot — keeping it out of the transactional store avoids unbounded DB growth and keeps
 // its documented "for humans" purpose intact.
@@ -47,68 +46,81 @@ pub const FAVORITE_NOTE: &str = "canın ciğerin, ne yaparsa yapsın arkasındas
 
 // ---------- database open + primitives ----------
 
-/// Opens (creating if missing) the redb database at `path` and makes it the process-wide
-/// store. Opening failure is fatal; initialize before loading any state.
-pub fn init(path: &Path) {
-    let db = match Database::create(path) {
-        Ok(db) => db,
-        Err(e) => {
-            log::error!("couldn't open {}: {e}", path.display());
-            return;
-        }
-    };
-    // touch both tables once so they exist even on a brand new file (redb creates a table
-    // lazily on its first open in a write transaction)
-    if let Ok(txn) = db.begin_write() {
-        let _ = txn.open_table(CONTENT);
-        let _ = txn.open_table(MODIFIED);
-        let _ = txn.commit();
+/// Opens the database exclusively, completes identity migration, and regenerates the
+/// derived index before publishing the process-wide store. Access failures abort startup.
+pub fn init_result(path: &Path) -> Result<(), BotError> {
+    if DB.get().is_some() {
+        return Err("memory database is already initialized".into());
     }
-    let _ = DB.set(db);
+    let database = Database::create(path)?;
+    let txn = database.begin_write()?;
+    {
+        txn.open_table(CONTENT)?;
+        txn.open_table(MODIFIED)?;
+    }
+    txn.commit()?;
+    crate::memory_migration::migrate_database(&database, path)?;
+    refresh_index_database(&database)?;
+    DB.set(database)
+        .map_err(|_| -> BotError { "memory database is already initialized".into() })
 }
 
-/// Panics if called before `init`, which is a programming error.
+/// Panics when internal runtime code is called before successful initialization.
 fn db() -> &'static Database {
-    DB.get().expect("memory::init wasn't called")
+    DB.get().expect("memory::init_result wasn't called")
 }
 
-/// Record keys are paths relative to STATE_DIR. Missing or unreadable records return "".
+fn db_result() -> Result<&'static Database, BotError> {
+    DB.get()
+        .ok_or_else(|| "memory database is not initialized".into())
+}
+
+fn read_database(database: &Database, rel: &str) -> Result<Option<String>, BotError> {
+    let txn = database.begin_read()?;
+    let table = txn.open_table(CONTENT)?;
+    Ok(table.get(rel)?.map(|value| value.value().to_string()))
+}
+
+/// Distinguishes a missing record from a database access failure.
+pub fn read_result(rel: &str) -> Result<Option<String>, BotError> {
+    read_database(db_result()?, rel)
+}
+
+/// Runtime convenience read; missing records are empty and access failures are logged.
 pub fn read(rel: &str) -> String {
-    let Ok(txn) = db().begin_read() else {
-        return String::new();
-    };
-    let Ok(table) = txn.open_table(CONTENT) else {
-        return String::new();
-    };
-    table
-        .get(rel)
-        .ok()
-        .flatten()
-        .map(|g| g.value().to_string())
-        .unwrap_or_default()
+    match read_result(rel) {
+        Ok(content) => content.unwrap_or_default(),
+        Err(error) => {
+            log::error!("couldn't read {rel}: {error}");
+            String::new()
+        }
+    }
 }
 
-/// Replaces the whole record; write failures are logged, not propagated.
+/// Replaces a record and propagates database access failures.
+pub fn write_result(rel: &str, content: &str) -> Result<(), BotError> {
+    write_with_mtime_result(rel, content, now_unix() as u64)
+}
+
+/// Runtime convenience write; failures are logged.
 pub fn write(rel: &str, content: &str) {
-    if let Err(e) = write_inner(rel, content) {
-        log::error!("couldn't write {rel}: {e}");
+    if let Err(error) = write_result(rel, content) {
+        log::error!("couldn't write {rel}: {error}");
     }
 }
 
-fn write_inner(rel: &str, content: &str) -> Result<(), redb::Error> {
-    write_with_mtime_inner(rel, content, now_unix() as u64)
+/// Stores a record with its source-file timestamp, propagating access failures.
+pub fn write_with_mtime_result(rel: &str, content: &str, modified: u64) -> Result<(), BotError> {
+    write_database(db_result()?, rel, content, modified)
 }
 
-/// Preserves source-file Unix mtimes during migration instead of resetting recency to now.
-/// Write failures are logged.
-pub(crate) fn write_with_mtime(rel: &str, content: &str, modified: u64) {
-    if let Err(e) = write_with_mtime_inner(rel, content, modified) {
-        log::error!("couldn't write {rel}: {e}");
-    }
-}
-
-fn write_with_mtime_inner(rel: &str, content: &str, modified: u64) -> Result<(), redb::Error> {
-    let txn = db().begin_write()?;
+fn write_database(
+    database: &Database,
+    rel: &str,
+    content: &str,
+    modified: u64,
+) -> Result<(), BotError> {
+    let txn = database.begin_write()?;
     {
         txn.open_table(CONTENT)?.insert(rel, content)?;
         txn.open_table(MODIFIED)?.insert(rel, modified)?;
@@ -117,15 +129,11 @@ fn write_with_mtime_inner(rel: &str, content: &str, modified: u64) -> Result<(),
     Ok(())
 }
 
-/// Counts stored records, returning zero if the database cannot be read.
-pub(crate) fn record_count() -> u64 {
-    let Ok(txn) = db().begin_read() else {
-        return 0;
-    };
-    let Ok(table) = txn.open_table(CONTENT) else {
-        return 0;
-    };
-    table.len().unwrap_or(0)
+/// Counts records without treating database access failures as an empty database.
+pub fn record_count_result() -> Result<u64, BotError> {
+    let txn = db_result()?.begin_read()?;
+    let table = txn.open_table(CONTENT)?;
+    Ok(table.len()?)
 }
 
 // a real append instead of read-modify-write from the caller's side; the get+insert
@@ -159,7 +167,7 @@ fn append(rel: &str, line: &str) {
 // back by the bot, so it's kept out of the transactional store on purpose.
 pub fn archive(rel: &str, content: &str) {
     archive_append(
-        &format!("arsiv/{rel}"),
+        &format!("arsiv/{}", platform::keys::archive_relative(rel)),
         &format!("\n## {} öncesi\n{}", date_time(), content.trim_end()),
     );
 }
@@ -246,41 +254,6 @@ pub fn month() -> String {
 
 // ---------- person record ----------
 
-// Step 1 retains numeric Discord records until the atomic storage migration.
-// Other platforms must never reuse these paths just because their IDs are numeric.
-fn v1_user_number(id: &UserKey) -> Result<u64, KeyError> {
-    id.as_str()
-        .strip_prefix("discord:user:")
-        .ok_or(KeyError)?
-        .parse()
-        .map_err(|_| KeyError)
-}
-
-pub fn v1_person_path(id: &UserKey) -> Result<String, KeyError> {
-    Ok(format!("kisiler/{}.md", v1_user_number(id)?))
-}
-
-pub fn v1_room_path(id: &RoomKey) -> Result<String, KeyError> {
-    let number: u64 = id
-        .as_str()
-        .strip_prefix("discord:room:")
-        .ok_or(KeyError)?
-        .parse()
-        .map_err(|_| KeyError)?;
-    Ok(format!("kanallar/{number}.md"))
-}
-
-fn v1_record_number(path: &str) -> Option<u64> {
-    stem(path).parse::<u64>().ok()
-}
-
-fn v1_person_id_text(id: &UserKey) -> &str {
-    id.as_str()
-        .strip_prefix("discord:user:")
-        .filter(|value| value.parse::<u64>().is_ok())
-        .unwrap_or(id.as_str())
-}
-
 /// One `kisiler/<id>.md` record's parsed contents. Holds `id` (domain user key),
 /// `name`/`username`/`previous_names` (identity), `score` (-10..10), `tags`, `note`,
 /// `facts`/`events` (the two bulleted lists). Round-trips through `parse`/`text` below.
@@ -351,11 +324,10 @@ impl Person {
 
     /// Serializes the persisted person-record format.
     pub fn text(&self) -> String {
-        let id = v1_person_id_text(&self.id);
         let mut s = format!(
             "# {}\nid: {}\nkullanici_adi: {}\neski_adlar: {}\npuan: {:+}\netiket: {}\nnot: {}\n\n## Bildiklerin\n",
             self.name,
-            id,
+            self.id,
             self.username,
             self.previous_names.join(", "),
             self.score,
@@ -375,20 +347,11 @@ impl Person {
 
 /// A missing record yields an empty person with the requested ID.
 pub fn read_person(id: &UserKey) -> Person {
-    let path = match v1_person_path(id) {
-        Ok(path) => path,
-        Err(error) => {
-            log::error!("can't read {id} from v1 person storage: {error}");
-            return Person::parse(id, "");
-        }
-    };
-    Person::parse(id, &read(&path))
+    Person::parse(id, &read(&platform::keys::person_record(id)))
 }
 
-pub fn write_person(p: &Person) -> Result<(), KeyError> {
-    let path = v1_person_path(&p.id)?;
-    write(&path, &p.text());
-    Ok(())
+pub fn write_person(p: &Person) -> Result<(), BotError> {
+    write_result(&platform::keys::person_record(&p.id), &p.text())
 }
 
 // ---------- topics and events ----------
@@ -431,12 +394,11 @@ pub fn add_event(channel: &str, event: &str) {
 
 // summaries for the modal display (most recently changed first)
 
-/// Omits records without a numeric Discord ID or a non-empty name.
+/// Omits records without a canonical user key or a non-empty name.
 pub fn person_summaries() -> Vec<Person> {
     let mut list = Vec::new();
     for key in files("kisiler") {
-        // key tail is id-based; old slug-keyed records (id can't be parsed) are skipped
-        let Some(id) = v1_record_number(&key).map(UserKey::discord) else {
+        let Some(id) = platform::keys::parse_person_record(&key) else {
             continue;
         };
         let person = Person::parse(&id, &read(&key));
@@ -492,7 +454,7 @@ pub fn event_months(month_count: usize) -> Vec<(String, Vec<String>)> {
 pub fn load_channel_history() -> Vec<(RoomKey, VecDeque<String>)> {
     let mut list = Vec::new();
     for key in files("kanallar") {
-        let Some(id) = v1_record_number(&key) else {
+        let Some(id) = platform::keys::parse_room_record(&key) else {
             continue;
         };
         let lines: VecDeque<String> = read(&key)
@@ -500,7 +462,7 @@ pub fn load_channel_history() -> Vec<(RoomKey, VecDeque<String>)> {
             .filter(|l| !l.trim().is_empty())
             .map(|l| l.to_string())
             .collect();
-        list.push((RoomKey::discord(id), lines));
+        list.push((id, lines));
     }
     list
 }
@@ -509,33 +471,32 @@ pub fn load_channel_history() -> Vec<(RoomKey, VecDeque<String>)> {
 
 /// Lists keys under a folder prefix, most recently modified first.
 fn files(folder: &str) -> Vec<String> {
+    match files_database(db(), folder) {
+        Ok(keys) => keys,
+        Err(error) => {
+            log::error!("couldn't list {folder}: {error}");
+            Vec::new()
+        }
+    }
+}
+
+fn files_database(database: &Database, folder: &str) -> Result<Vec<String>, BotError> {
     let prefix = format!("{folder}/");
-    let (Ok(txn),) = (db().begin_read(),) else {
-        return Vec::new();
-    };
-    let (Ok(content), Ok(modified)) = (txn.open_table(CONTENT), txn.open_table(MODIFIED)) else {
-        return Vec::new();
-    };
-    let Ok(range) = content.range(prefix.as_str()..) else {
-        return Vec::new();
-    };
+    let txn = database.begin_read()?;
+    let content = txn.open_table(CONTENT)?;
+    let modified = txn.open_table(MODIFIED)?;
     let mut list: Vec<(u64, String)> = Vec::new();
-    for entry in range {
-        let Ok((key, _)) = entry else { continue };
+    for entry in content.range(prefix.as_str()..)? {
+        let (key, _) = entry?;
         let key = key.value();
         if !key.starts_with(prefix.as_str()) {
-            break; // keys are sorted; once the prefix stops matching, we're past this folder
+            break;
         }
-        let when = modified
-            .get(key)
-            .ok()
-            .flatten()
-            .map(|g| g.value())
-            .unwrap_or(0);
+        let when = modified.get(key)?.map(|value| value.value()).unwrap_or(0);
         list.push((when, key.to_string()));
     }
     list.sort_by_key(|(when, _)| std::cmp::Reverse(*when));
-    list.into_iter().map(|(_, key)| key).collect()
+    Ok(list.into_iter().map(|(_, key)| key).collect())
 }
 
 fn stem(key: &str) -> &str {
@@ -595,14 +556,29 @@ fn person_header(text: &str) -> PersonHeader {
 
 // regenerates and returns INDEX.md: the "what I know" list sent with every reply
 pub fn refresh_index() -> String {
+    match refresh_index_result() {
+        Ok(index) => index,
+        Err(error) => {
+            log::error!("couldn't refresh INDEX.md: {error}");
+            read("INDEX.md")
+        }
+    }
+}
+
+/// Regenerates the derived index without swallowing database failures.
+pub fn refresh_index_result() -> Result<String, BotError> {
+    refresh_index_database(db_result()?)
+}
+
+fn refresh_index_database(database: &Database) -> Result<String, BotError> {
     use std::fmt::Write as _;
     let mut output = String::from("## Kişiler\n");
-    for key in files("kisiler").into_iter().take(INDEX_PEOPLE) {
-        // key tail is id-based; old slug-keyed records (id can't be parsed) are skipped
-        if v1_record_number(&key).is_none() {
-            continue;
-        }
-        let header = person_header(&read(&key));
+    for key in files_database(database, "kisiler")?
+        .into_iter()
+        .filter(|key| platform::keys::parse_person_record(key).is_some())
+        .take(INDEX_PEOPLE)
+    {
+        let header = person_header(&read_database(database, &key)?.unwrap_or_default());
         if header.name.is_empty() {
             continue;
         }
@@ -616,9 +592,9 @@ pub fn refresh_index() -> String {
         output.push('\n');
     }
     output.push_str("\n## Konular\n");
-    for key in files("konular").into_iter().take(30) {
+    for key in files_database(database, "konular")?.into_iter().take(30) {
         // a single read: the name and latest note both come from the same content
-        let content = read(&key);
+        let content = read_database(database, &key)?.unwrap_or_default();
         let name = content
             .lines()
             .next()
@@ -633,12 +609,16 @@ pub fn refresh_index() -> String {
         let _ = writeln!(output, "- {name} · son: {latest}");
     }
     output.push_str("\n## Olaylar\n");
-    for key in files("olaylar").into_iter().take(3) {
-        let n = read(&key).lines().filter(|l| l.starts_with("- ")).count();
+    for key in files_database(database, "olaylar")?.into_iter().take(3) {
+        let n = read_database(database, &key)?
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.starts_with("- "))
+            .count();
         let _ = writeln!(output, "- {} · {n} kayıt", stem(&key));
     }
-    write("INDEX.md", &output);
-    output
+    write_database(database, "INDEX.md", &output, now_unix() as u64)?;
+    Ok(output)
 }
 
 // ---------- retrieval ----------
@@ -711,14 +691,7 @@ pub fn retrieve(
         let Some(id) = name_to_id.get(&name.to_lowercase()) else {
             continue;
         };
-        let path = match v1_person_path(id) {
-            Ok(path) => path,
-            Err(error) => {
-                log::error!("can't retrieve {id} from v1 person storage: {error}");
-                continue;
-            }
-        };
-        let content = read(&path);
+        let content = read(&platform::keys::person_record(id));
         if !content.is_empty() {
             sections.push(trim(&content, 1200));
         }
@@ -794,6 +767,9 @@ pub fn retrieve(
 pub fn over_limit() -> Vec<(&'static str, String)> {
     let mut list = Vec::new();
     for key in files("kisiler") {
+        if platform::keys::parse_person_record(&key).is_none() {
+            continue;
+        }
         if read(&key).len() > PERSON_LIMIT {
             list.push(("kisi", key));
         }
@@ -820,15 +796,15 @@ pub(crate) mod test {
     // just extended to "the whole database is shared, not just one file". `Once` (not a
     // `DB.get().is_none()` check) matters here: cargo test runs these in parallel threads,
     // and a check-then-act race let two threads both call `Database::create` on the same
-    // path at once, which redb's file locking turned into a spurious "memory::init wasn't
-    // called" failure for whichever thread lost the race.
+    // path at once, which redb's file locking turned into a spurious initialization
+    // failure for whichever thread lost the race.
     static INIT: std::sync::Once = std::sync::Once::new();
     pub(crate) fn ensure_test_db() {
         INIT.call_once(|| {
             let path =
                 std::env::temp_dir().join(format!("discord-bot-test-{}.redb", std::process::id()));
             let _ = fs::remove_file(&path);
-            init(&path);
+            init_result(&path).expect("initialize isolated test memory database");
         });
     }
 
@@ -946,15 +922,142 @@ pub(crate) mod test {
         assert!(content.contains("ikinci not"));
     }
 
-    /// Verifies `write_with_mtime` stores the given timestamp (not "now") and that
-    /// `record_count` reflects it — the two primitives `migrate::run` is built on.
+    /// Verifies the Result APIs preserve timestamps and distinguish missing records.
     #[test]
     fn write_with_mtime_round_trips() {
         ensure_test_db();
-        let before = record_count();
-        write_with_mtime("test/mtime.md", "içerik", 12345);
+        let before = record_count_result().unwrap();
+        write_with_mtime_result("test/mtime.md", "içerik", 12345).unwrap();
         assert_eq!(read("test/mtime.md"), "içerik");
-        assert!(record_count() > before);
+        assert!(record_count_result().unwrap() > before);
+        assert_eq!(read_result("test/mtime-missing.md").unwrap(), None);
+        write_result("test/mtime-empty.md", "").unwrap();
+        assert_eq!(
+            read_result("test/mtime-empty.md").unwrap(),
+            Some(String::new())
+        );
+        let txn = db().begin_read().unwrap();
+        let modified = txn.open_table(MODIFIED).unwrap();
+        assert_eq!(
+            modified.get("test/mtime.md").unwrap().unwrap().value(),
+            12345
+        );
+    }
+
+    #[test]
+    fn canonical_person_summaries_index_and_retrieve_preserve_identity_and_order() {
+        ensure_test_db();
+        let discord = UserKey::discord(8_800_000_000_000_000_041);
+        let telegram: UserKey = "telegram:user:8800000000000000041".parse().unwrap();
+        let discord_path = platform::keys::person_record(&discord);
+        let telegram_path = platform::keys::person_record(&telegram);
+        let old_body = "# canonical-discord-summary\nid: 41\npuan: +2\nnot: discord-only-fact\n";
+        let telegram_body = "# canonical-telegram-summary\nid: discord:user:41\npuan: -2\nnot: telegram-only-fact\n";
+        write_with_mtime_result(&discord_path, old_body, u64::MAX - 3).unwrap();
+        write_with_mtime_result(&telegram_path, telegram_body, u64::MAX - 2).unwrap();
+        write_with_mtime_result(
+            "kisiler/8800000000000000041.md",
+            "# numeric-runtime-alias-must-not-appear\n",
+            u64::MAX,
+        )
+        .unwrap();
+        write_with_mtime_result(
+            "kisiler/canonical-summary-unknown-slug.md",
+            "# unknown-runtime-alias-must-not-appear\n",
+            u64::MAX - 1,
+        )
+        .unwrap();
+
+        let summaries: Vec<Person> = person_summaries()
+            .into_iter()
+            .filter(|person| person.id == discord || person.id == telegram)
+            .collect();
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].id, telegram);
+        assert_eq!(summaries[1].id, discord);
+        assert_eq!(read_person(&discord).id, discord);
+        assert_eq!(read_person(&telegram).id, telegram);
+        assert_eq!(
+            read_result(&discord_path).unwrap().as_deref(),
+            Some(old_body)
+        );
+        assert_eq!(
+            read_result(&telegram_path).unwrap().as_deref(),
+            Some(telegram_body)
+        );
+
+        let index = refresh_index_result().unwrap();
+        assert!(index.contains("canonical-discord-summary"));
+        assert!(index.contains("canonical-telegram-summary"));
+        assert!(
+            index.find("canonical-telegram-summary").unwrap()
+                < index.find("canonical-discord-summary").unwrap()
+        );
+        assert!(!index.contains("numeric-runtime-alias-must-not-appear"));
+        assert!(!index.contains("unknown-runtime-alias-must-not-appear"));
+        let names = std::collections::HashMap::from([
+            ("discord-speaker".to_string(), discord.clone()),
+            ("telegram-speaker".to_string(), telegram.clone()),
+        ]);
+        let discord_context = retrieve(
+            &["discord-speaker".into()],
+            &names,
+            &[],
+            &VecDeque::new(),
+            0,
+        );
+        assert!(discord_context.contains("discord-only-fact"));
+        assert!(!discord_context.contains("telegram-only-fact"));
+        let telegram_context = retrieve(
+            &["telegram-speaker".into()],
+            &names,
+            &[],
+            &VecDeque::new(),
+            0,
+        );
+        assert!(telegram_context.contains("telegram-only-fact"));
+        assert!(!telegram_context.contains("discord-only-fact"));
+
+        let person = read_person(&discord);
+        write_person(&person).unwrap();
+        assert!(read_result(&discord_path)
+            .unwrap()
+            .unwrap()
+            .contains("id: discord:user:8800000000000000041\n"));
+    }
+
+    #[test]
+    fn canonical_room_history_uses_typed_keys_only() {
+        ensure_test_db();
+        let discord = RoomKey::discord(8_800_000_000_000_000_042);
+        let telegram: RoomKey = "telegram:room:-8800000000000000042".parse().unwrap();
+        write_result(
+            &platform::keys::room_record(&discord),
+            "discord-first\n\ndiscord-second\n",
+        )
+        .unwrap();
+        write_result(
+            &platform::keys::room_record(&telegram),
+            "telegram-first\ntelegram-second\n",
+        )
+        .unwrap();
+        write_result("kanallar/8800000000000000042.md", "numeric-room-alias\n").unwrap();
+        let histories = load_channel_history();
+        assert_eq!(
+            histories.iter().find(|(key, _)| key == &discord).unwrap().1,
+            VecDeque::from(["discord-first".to_string(), "discord-second".to_string()])
+        );
+        assert_eq!(
+            histories
+                .iter()
+                .find(|(key, _)| key == &telegram)
+                .unwrap()
+                .1,
+            VecDeque::from(["telegram-first".to_string(), "telegram-second".to_string()])
+        );
+        assert!(!histories
+            .iter()
+            .any(|(_, lines)| lines.iter().any(|line| line == "numeric-room-alias")));
     }
 
     /// Verifies `retrieve` pulls in history lines matching the keywords/name and excludes unrelated ones.

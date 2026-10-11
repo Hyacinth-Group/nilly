@@ -102,10 +102,7 @@ fn channel_notes(state: &mut State, channel: &RoomKey, lines: impl IntoIterator<
         }
         content.push_str(line);
     }
-    // Step 2 migrates persisted room paths atomically; terminal rooms stay memory-only.
-    if let Ok(path) = memory::v1_room_path(channel) {
-        memory::write(&path, &content);
-    }
+    memory::write(&platform::keys::room_record(channel), &content);
 }
 
 /// Returns the last `n` raw message lines in chronological order.

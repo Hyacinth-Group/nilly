@@ -14,8 +14,8 @@ use super::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// One migrated record: its database key, content, and source file's real mtime (unix
-/// seconds, `0` if it couldn't be read). Produced by `collect` below.
+/// One source record: its database key, content, and exact source file mtime in Unix
+/// seconds. Unreadable files or timestamps fail the import rather than inventing data.
 struct Record {
     key: String,
     content: String,
@@ -46,7 +46,7 @@ pub fn run(args: &[String]) -> Result<(), BotError> {
         i += 1;
     }
 
-    let records = collect(&from, &from, "arsiv");
+    let records = normalize_records(collect(&from, &from, "arsiv")?)?;
     let (kisi, konu, olay, tekil) = counts(&records);
     println!(
         "{} altında bulundu: {kisi} kişi, {konu} konu, {olay} ay (olaylar), {tekil} tekil kayıt — toplam {}",
@@ -63,9 +63,11 @@ pub fn run(args: &[String]) -> Result<(), BotError> {
         return Ok(());
     }
 
-    memory::init(&to);
-    let existing = memory::record_count();
-    if existing > 0 && !force {
+    memory::init_result(&to)?;
+    let existing = memory::record_count_result()?;
+    // Startup rebuilds the derived index even on a fresh database.
+    let generated_index = u64::from(memory::read_result("INDEX.md")?.is_some());
+    if existing > generated_index && !force {
         return Err(format!(
             "{} zaten {existing} kayıt içeriyor; üzerine yazmak için --force ekle",
             to.display()
@@ -74,8 +76,9 @@ pub fn run(args: &[String]) -> Result<(), BotError> {
     }
 
     for r in &records {
-        memory::write_with_mtime(&r.key, &r.content, r.modified);
+        memory::write_with_mtime_result(&r.key, &r.content, r.modified)?;
     }
+    memory::refresh_index_result()?;
 
     println!(
         "tamamlandı: {} kayıt {} içine yazıldı",
@@ -89,45 +92,69 @@ pub fn run(args: &[String]) -> Result<(), BotError> {
 /// Recursively collects markdown records with `/`-joined keys relative to `base`.
 /// Skips `skip_top_level` only directly under `base`, so same-named person/topic
 /// files are still included.
-fn collect(dir: &Path, base: &Path, skip_top_level: &str) -> Vec<Record> {
+fn collect(dir: &Path, base: &Path, skip_top_level: &str) -> Result<Vec<Record>, BotError> {
     let mut out = Vec::new();
-    let Ok(entries) = fs::read_dir(dir) else {
-        return out;
-    };
-    for entry in entries.flatten() {
+    let entries = fs::read_dir(dir)?;
+    for entry in entries {
+        let entry = entry?;
         let path = entry.path();
-        if path.is_dir() {
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
             if dir == base && path.file_name().and_then(|n| n.to_str()) == Some(skip_top_level) {
-                continue; // durum/arsiv/: never migrated, see memory.rs's module doc
+                continue; // historical archives are not active lookup data
             }
-            out.extend(collect(&path, base, skip_top_level));
+            out.extend(collect(&path, base, skip_top_level)?);
             continue;
         }
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
             continue;
         }
-        let Ok(rel) = path.strip_prefix(base) else {
-            continue;
-        };
+        let rel = path.strip_prefix(base)?;
         let key = rel
             .components()
-            .map(|c| c.as_os_str().to_string_lossy())
-            .collect::<Vec<_>>()
+            .map(|c| c.as_os_str().to_str().ok_or("import filename is not UTF-8"))
+            .collect::<Result<Vec<_>, _>>()?
             .join("/");
-        let content = fs::read_to_string(&path).unwrap_or_default();
-        let modified = fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+        let content = fs::read_to_string(&path)?;
+        let modified = fs::metadata(&path)?
+            .modified()?
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
         out.push(Record {
             key,
             content,
             modified,
         });
     }
-    out
+    Ok(out)
+}
+
+/// Normalize the complete input set before opening or writing the destination.
+/// Two historical spellings (or a historical and canonical file) must not overwrite each other.
+fn normalize_records(records: Vec<Record>) -> Result<Vec<Record>, BotError> {
+    let mut seen = std::collections::BTreeMap::new();
+    let mut normalized = Vec::with_capacity(records.len());
+    for record in records {
+        let key = memory_migration::normalize_legacy_record_key(&record.key);
+        if let Some(previous) = seen.insert(key.clone(), record.key.clone()) {
+            return Err(format!(
+                "import destination collision: {previous} and {} -> {key}",
+                record.key
+            )
+            .into());
+        }
+        let content = if key == "taranan.md" {
+            memory_migration::normalize_legacy_scan_text(&record.content)
+        } else {
+            record.content
+        };
+        normalized.push(Record {
+            key,
+            content,
+            modified: record.modified,
+        });
+    }
+    Ok(normalized)
 }
 
 fn counts(records: &[Record]) -> (usize, usize, usize, usize) {
@@ -180,7 +207,7 @@ mod test {
         fs::write(root.join("arsiv/kisiler/1.md"), "eski hal").unwrap();
         fs::write(root.join("not-markdown.txt"), "atlanmalı").unwrap();
 
-        let records = collect(&root, &root, "arsiv");
+        let records = collect(&root, &root, "arsiv").unwrap();
         let keys: Vec<&str> = records.iter().map(|r| r.key.as_str()).collect();
 
         assert!(keys.contains(&"profil.md"));
@@ -197,5 +224,76 @@ mod test {
         assert_eq!(tekil, 2); // profil.md + model.md
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn import_normalizes_identity_records_and_preserves_everything_else() {
+        let record = |key: &str, content: &str, modified| Record {
+            key: key.to_owned(),
+            content: content.to_owned(),
+            modified,
+        };
+        let records = normalize_records(vec![
+            record("kisiler/42.md", "person bytes\r\n", 123),
+            record("kanallar/7.md", "room bytes\n", 456),
+            record("taranan.md", "9\nbad\ntelegram:space:-100\n", 789),
+            record("kisiler/unknown.md", "unknown", 10),
+            record("profil.md", "profile", 11),
+            record("kisiler/telegram:user:42.md", "other platform", 12),
+        ])
+        .unwrap();
+        assert_eq!(records.len(), 6);
+        assert_eq!(records[0].key, "kisiler/discord:user:42.md");
+        assert_eq!(records[0].content, "person bytes\r\n");
+        assert_eq!(records[0].modified, 123);
+        assert_eq!(records[1].key, "kanallar/discord:room:7.md");
+        assert_eq!(records[1].content, "room bytes\n");
+        assert_eq!(records[1].modified, 456);
+        assert_eq!(
+            records[2].content,
+            "discord:space:9\nbad\ntelegram:space:-100\n"
+        );
+        assert_eq!(records[2].modified, 789);
+        assert_eq!(records[3].key, "kisiler/unknown.md");
+        assert_eq!(records[3].content, "unknown");
+        assert_eq!(records[4].key, "profil.md");
+        assert_eq!(records[5].key, "kisiler/telegram:user:42.md");
+    }
+
+    #[test]
+    fn import_rejects_all_canonical_collisions_before_writing() {
+        for (first, second) in [
+            ("kisiler/42.md", "kisiler/discord:user:42.md"),
+            ("kisiler/42.md", "kisiler/042.md"),
+            ("kanallar/7.md", "kanallar/discord:room:7.md"),
+            ("profil.md", "profil.md"),
+        ] {
+            let records = [first, second]
+                .into_iter()
+                .map(|key| Record {
+                    key: key.to_owned(),
+                    content: "untouched".to_owned(),
+                    modified: 22,
+                })
+                .collect();
+            assert!(normalize_records(records).is_err());
+        }
+    }
+
+    #[test]
+    fn unreadable_source_fails_instead_of_importing_empty_content() {
+        let root = std::env::temp_dir().join(format!(
+            "discord-bot-invalid-import-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("profil.md"), [0xff, 0xfe]).unwrap();
+        assert!(collect(&root, &root, "arsiv").is_err());
+        assert!(collect(&root.join("missing"), &root, "arsiv").is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 }

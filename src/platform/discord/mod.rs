@@ -1,8 +1,12 @@
 //! Discord-native decoding and the temporary outbound ID conversion edge.
 pub(crate) mod events;
 
-use super::types::{KeyError, MessageKey, RoomKey, SpaceKey, UserKey};
-use serenity::all::{ChannelId, GuildId, MessageId, UserId};
+#[cfg(test)]
+use super::types::SpaceKey;
+use super::types::{KeyError, MessageKey, RoomKey, UserKey};
+#[cfg(test)]
+use serenity::all::GuildId;
+use serenity::all::{ChannelId, MessageId, UserId};
 
 fn native_id(value: &str, prefix: &str) -> Result<u64, KeyError> {
     let component = value.strip_prefix(prefix).ok_or(KeyError)?;
@@ -22,6 +26,7 @@ pub(crate) fn native_room(key: &RoomKey) -> Result<ChannelId, KeyError> {
 pub(crate) fn native_message(key: &MessageKey) -> Result<MessageId, KeyError> {
     native_id(key.as_str(), "discord:message:").map(MessageId::new)
 }
+#[cfg(test)]
 pub(crate) fn native_space(key: &SpaceKey) -> Result<GuildId, KeyError> {
     native_id(key.as_str(), "discord:space:").map(GuildId::new)
 }

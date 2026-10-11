@@ -81,7 +81,7 @@ impl Bot {
         // that used to be its own directory tree is now key prefixes inside hafiza.redb
         std::fs::create_dir_all(PathBuf::from(STATE_DIR).join("arsiv"))?;
         std::fs::create_dir_all(IMAGE_DIR)?;
-        memory::init(&PathBuf::from(STATE_DIR).join("hafiza.redb"));
+        memory::init_result(&PathBuf::from(STATE_DIR).join("hafiza.redb"))?;
 
         let mut state = State::load();
         sleep::update(&mut state);
