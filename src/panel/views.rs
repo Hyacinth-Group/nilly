@@ -150,6 +150,16 @@ pub struct Form {
 }
 
 #[derive(Clone, Debug, Default)]
+pub struct PlatformCard {
+    pub name: &'static str,
+    pub title: String,
+    pub description: String,
+    pub badge: String,
+    pub href: String,
+    pub selected: bool,
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct Section {
     pub id: String,
     pub title: String,
@@ -157,6 +167,7 @@ pub struct Section {
     pub items: Vec<Item>,
     pub forms: Vec<Form>,
     pub advanced: bool,
+    pub platform_cards: Vec<PlatformCard>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -241,6 +252,7 @@ struct Chrome {
     skip: &'static str,
     navigation: &'static str,
     language: &'static str,
+    language_apply: &'static str,
     english: &'static str,
     turkish: &'static str,
     configured: &'static str,
@@ -293,6 +305,7 @@ pub fn render(page: &Page) -> Result<String, ViewError> {
         skip: t("panel.skip")?,
         navigation: t("panel.navigation")?,
         language: t("panel.language")?,
+        language_apply: t("panel.language.apply")?,
         english: t("panel.language.en")?,
         turkish: t("panel.language.tr")?,
         configured: t("panel.field.configured")?,
@@ -348,6 +361,9 @@ fn validate_urls(page: &Page) -> Result<(), ViewError> {
         local(&step.href)?;
     }
     for section in &page.sections {
+        for card in &section.platform_cards {
+            local(&card.href)?;
+        }
         for item in &section.items {
             if item.href.is_empty() || item.href.starts_with('/') {
                 local(&item.href)?;

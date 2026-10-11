@@ -2,11 +2,9 @@
 
 This bot keeps conversation notes and uses them alongside a fixed persona in later replies. You do not need to write code. Start the package from Terminal or PowerShell, then connect your accounts and configure the bot in your browser.
 
-Choose **Discord**, **Telegram**, **Slack** or **Matrix** for the connection you
-want. The numbered Discord walkthrough below retains Discord's intents and
-invitation steps; other users follow their platform sections, then the same
-installation/start commands. The five-step browser wizard remains Discord-only;
-other platforms use the CLI or protected Settings followed by a process restart.
+Choose **Discord**, **Telegram**, **Slack** or **Matrix** in step 2 of browser setup. Telegram is recommended for beginners: the wizard tests your BotFather-issued token with Telegram `getMe`, reports the verified bot identity and warns if privacy may block ordinary group-message visibility. Slack tests the `xoxb-` bot token with `auth.test` and checks the `xapp-` app-level token with `apps.connections.open` (`connections:write`); this validates credentials and the returned WebSocket URL but does not open a persistent connection. Download the local Slack app manifest to create the app. Matrix checks `whoami` with the bearer access token and confirms its user matches `MATRIX_USER`; wizard login uses a token, while the existing CLI/Settings password alternative remains supported. Matrix rooms are plaintext-only; encrypted content is never decrypted. These tests are credential checks, not proof of gateway/room health, permissions, provider credit or successful replies. Telegram, Slack and Matrix room access is default-deny. See each platform section below before inviting/joining.
+
+For an existing installation, open **Settings** and expand the credential-test card for the platform you want to add. Enter its credentials and choose **Test credentials** before saving/restarting; blank fields use the saved effective configuration, including read-only environment values. Tests neither save configuration nor alter setup drafts, and successful authentication is not proof of live room access or message delivery. Matrix browser tests use an access token only; Settings and headless CLI still accept a saved password for runtime login.
 
 ## Telegram setup
 
@@ -23,30 +21,25 @@ other platforms use the CLI or protected Settings followed by a process restart.
    reaction updates; sending reactions is limited to the chat's allowed emoji.
 4. Obtain a model key (step 2 below), install Docker or a release binary, and
    start the package as described in step 5. The panel opens on port **8787**
-   before credentials are required. Open the printed setup link and complete
-   **Claim and protect**, then visit **Settings** instead of the Discord wizard.
-   In **Platform**, save the BotFather token and approved Telegram rooms; also
-   configure the provider/model credentials and language. Telegram Settings do
-   not run a `getMe` credential test. For terminal-only setup, use
-   [Headless CLI setup](#headless-cli-setup), select `telegram` at the first
-   prompt and paste the BotFather token when requested. No Discord account or
-   token is needed for Telegram alone.
-5. Set `OWNER_KEY` in **Settings → Privacy** as
-   `telegram:user:<your numeric user ID>`, for example `telegram:user:42`; this
-   is not `@username` or the group's ID. You can skip it, in which case Telegram
-   administration is denied. Set approved `TELEGRAM_ROOMS` in
-   **Settings → Platform** (or answer the CLI prompt) as comma-separated native
-   **negative** group IDs or canonical keys, such as
-   `-100123,telegram:room:-456`. **Blank denies every room**; merely adding the
-   bot does not approve it.
-6. Save Settings and **restart the process** to activate the configuration
-   (`docker compose restart bot` for Docker, or stop and restart the binary).
-   Telegram alone starts without a Discord token; both tokens can be configured
-   to run both platforms together. CLI users launch with the same commands
-   below. Open a private chat with the bot and press **Start** before requesting
-   administrative results, which are delivered privately. In an approved group
-   send `/status` (`/durum` for Turkish). Check the privacy/history/nickname
-   notices in that result and any limited-visibility warning on Overview.
+   before credentials are required. Open the printed setup link, choose
+   **Telegram** in wizard step 2 and complete the steps. Enter the BotFather
+   token; **Test** calls `getMe`, reports the verified bot identity and warns
+   if privacy may prevent ordinary group-message visibility. Configure the
+   provider/model and language, then explicitly approve Telegram rooms.
+   Blank approval denies every room. No Discord account or token is needed for
+   Telegram alone.
+5. Set `OWNER_KEY` in **Privacy** as `telegram:user:<your numeric user ID>`,
+   for example `telegram:user:42`; this is not `@username` or the group's ID.
+   You can skip it, in which case Telegram administration is denied. For
+   ordinary group visibility, use BotFather `/setprivacy` → **Disable**, then
+   remove and re-add the bot to existing groups; alternatively make it a group
+   administrator.
+6. Finish setup to start the runtime without restarting the process. To add
+   Telegram to an existing installation later, save it under **Settings** and
+   restart (`docker compose restart bot`). Open a private chat with the bot and
+   press **Start** before requesting administrative results, which are delivered
+   privately. In an approved group send `/status` (`/durum` for Turkish).
+   Credential authentication does not prove room visibility or live health.
 
 To find IDs without forwarding conversations to a third-party ID bot, inspect a
 Bot API `getUpdates` response privately before starting this runner (`from.id`
@@ -154,7 +147,7 @@ All enabled platforms share notes. Source-qualified IDs keep different people's 
 
 ### 4. Configure and start
 
-Install Docker using [step 4 below](#4-install-docker), then follow the download/start commands in [step 5](#5-download-and-start-the-bot). The panel opens on port **8787** before platform credentials are required. Complete **Claim and protect**, then open protected **Settings**, not **Connect Discord**. In **Platform**, save both Slack tokens, native approved channel IDs and the history tier; configure provider/model credentials and language, and set the qualified owner in **Privacy**. Save and **restart the process** (`docker compose restart bot` for Docker). Slack Settings do not perform a live Slack credential test or start a connection without restarting.
+Install Docker using [step 4 below](#4-install-docker), then follow the download/start commands in [step 5](#5-download-and-start-the-bot). The panel opens on port **8787** before platform credentials are required. Complete **Claim and protect**, choose Slack in wizard step 2, then provide both tokens, native approved channel IDs and the history tier. The wizard checks `auth.test` with `SLACK_BOT_TOKEN` and calls `apps.connections.open` with the `SLACK_APP_TOKEN` (`connections:write`); it validates the tokens and WebSocket URL but does not open a persistent Socket Mode connection or prove channel access/live workspace health. Configure provider/model credentials, language and the qualified owner. Download the [local Slack app manifest](slack-app-manifest.yml) and follow the app setup steps above. Blank channel approval denies all Slack rooms. Finish to start the runtime without restarting. To add Slack later in Settings, save and restart the process (`docker compose restart bot`).
 
 For terminal-only setup, follow [Headless CLI setup](#headless-cli-setup), including its Docker command that writes `config/.env`. With a downloaded release binary, run:
 
@@ -174,7 +167,7 @@ Choose **`slack`** at the new platform question. Enter alone chooses Discord and
 | Owner identity | `slack:user:<workspace ID>:<member ID>`, or Enter for no owner (Slack administration, including `status`, is then denied). |
 | UTC offset | Hours from UTC for the sleep schedule, such as `3`, `-5`, or `5.5`. |
 
-The resulting `.env` is Slack-only: it does not require or write `DISCORD_TOKEN`. The wizard does not contact Slack or prove token validity. Piped input is not hidden. New Slack prompts have English/Turkish translations; `BOT_LANG=tr` selects Turkish prompts when launching the wizard. The selected language is saved for subsequent bot runs. Protect `.env` (Unix mode `600`; on Windows restrict folder access).
+The resulting `.env` is Slack-only: it does not require or write `DISCORD_TOKEN`. The CLI wizard does not contact Slack or prove token validity. Piped input is not hidden. New Slack prompts have English/Turkish translations; `BOT_LANG=tr` selects Turkish prompts when launching the CLI wizard. The selected language is saved for subsequent bot runs. Protect `.env` (Unix mode `600`; on Windows restrict folder access).
 
 Start with `discord-bot`, `cargo run --release`, or `docker compose up -d`, depending on installation. **As the configured `OWNER_KEY` owner**, in an invited, allowlisted channel, send **`!status`** or mention the bot followed by **`status`**. An unset owner means this administration check is denied; ordinary chat does not require an owner. Do not use `/status` in Slack: no Slack slash commands are registered. Administration goes through the shared service and returns **private ephemeral messages** (`chat.postEphemeral`), not public status cards or a direct-message fallback.
 
@@ -220,10 +213,10 @@ forwarding, a tunnel, or a public webhook. Keep the computer on and connected.
    `Authorization: Bearer ...` header on a Matrix client API request. Copy only
    the token, never the `Bearer ` prefix. Treat it as the account's password:
    do not paste it in chat, screenshots, issue reports or source control.
-4. Password login is also supported: choose `password` in the wizard if your
-   homeserver supports password login. For SSO-only accounts, obtain an access
-   token from a signed-in client instead. Revoke a leaked token/session in your
-   Matrix client's session settings; change a leaked password too.
+4. Password login is supported in Settings and the headless CLI when your
+   homeserver supports it, but browser credential tests require an access token.
+   For SSO-only accounts, obtain a token from a signed-in client instead. Revoke
+   a leaked token/session in your client's session settings; change a leaked password too.
 
 Keep your **owner** account separate. Find its full user ID, for example
 `@owner:matrix.org`; the wizard needs this to approve invitations and commands.
@@ -265,15 +258,7 @@ Default release builds and the Docker image include Matrix; a binary built with
 `--no-default-features` does not offer Matrix in CLI init and rejects configured
 Matrix settings explicitly rather than silently ignoring them.
 
-Install and start using [step 5 below](#5-download-and-start-the-bot). The panel
-opens on port **8787** before platform credential validation. Complete **Claim
-and protect**, then open protected **Settings**, not the Discord-only browser
-wizard. In **Platform**, save the homeserver URL, full bot user ID, access token
-or password, and optional room IDs. Configure provider/model credentials and
-language, and set `OWNER_KEY` in **Privacy**, for example
-`matrix:user:%40owner%3Amatrix.org`. Save and **restart the process**
-(`docker compose restart bot` for Docker). Matrix Settings do not run a live
-homeserver credential test or activate a connection without restarting.
+Install and start using [step 5 below](#5-download-and-start-the-bot). The panel opens on port **8787** before platform credential validation. Complete **Claim and protect**, choose Matrix in wizard step 2, then provide the homeserver URL, full bot user ID, access token and optional room IDs. Its bearer-token `whoami` test checks that the returned user matches `MATRIX_USER`; this authenticates the account but does not prove room access or successful replies. The wizard accepts an access token; the CLI and protected Settings retain the password-login alternative. Matrix supports plaintext rooms only—encrypted rooms and attachments have no decryption or plaintext fallback. Blank room approval does not approve already-joined rooms; explicitly allowlist rooms or use owner-approved invitations. Configure provider/model credentials and language, and set `OWNER_KEY` in **Privacy**. Finish to start the runtime without restarting. To add Matrix later in Settings, save and restart (`docker compose restart bot`).
 
 For terminal-only setup, follow [Headless CLI setup](#headless-cli-setup);
 its Docker command writes `config/.env`. With a release binary run
@@ -467,23 +452,19 @@ docker compose logs bot
 
 The panel starts before checking the bot's credentials, so a new installation does not need an existing `.env`. Open the printed `http://localhost:8787/setup#token=...` link within **15 minutes**. Treat it as a password: do not share it or the log containing it. The claim token is consumed when claimed, before you save a password. If it expires, or you lose that setup session before saving a password, run `docker compose restart bot` and use the new link. Once the password is saved, use it to log in; restarts no longer print a claim link.
 
-### The five browser steps for Discord
+### Five browser setup steps
 
-1. **Claim and protect.** Use the one-use link and set an administrator password of at least **12 characters**. Save it in a password manager. The panel administrator password is separate from your platform token and optional bot owner identity.
-2. **Connect Discord.** Paste the token from step 1 and test it. Setup checks Discord's API for the actual application identity; the invite is generated from that verified ID, not decoded from the token. A successful test is not yet a gateway connection.
-3. **Choose AI.** Select `openrouter` or `mistral`, paste its key, and enter a model ID. To start free on OpenRouter, explicitly choose a current `:free` model; leaving **Model** blank uses a paid default. The key test makes authenticated **GET** requests only, not a paid completion. It does not prove that the model can produce a reply or that you have sufficient credit.
-4. **Make it fit.** Choose `en` (English) or `tr` (Turkish), your UTC offset (for example `3` or `5.5`), optional Discord owner ID, and news settings. **Set access before starting:** fill `GUILD_ID` with your server ID and `CHANNELS` with channel IDs, comma-separated for several channels. With Developer Mode enabled, right-click a server or channel to copy its ID. Blank values mean **all accessible servers/channels**, including the first history scan.
-5. **Invite and start.** Open **Add to server**, choose your server, and approve Discord's prompts. The invite requests bot and slash-command scopes with permission mask `67226688`, not Administrator access. Confirm **Message Content Intent** and **Server Members Intent** are enabled in the Developer Portal, then finish setup to start the bot.
+1. **Claim and protect.** Use the one-use link and set an administrator password of at least **12 characters**. Save it in a password manager. The panel administrator password is separate from every platform token and optional bot owner identity.
+2. **Choose and connect a platform.** Select Discord, Telegram, Slack or Matrix and enter that platform's credentials. The tests call Discord's authenticated application API, Telegram `getMe`, Slack `auth.test` plus an app-level Socket Mode token check, or Matrix `whoami`. These tests verify credentials/identity only—not live gateway or room health, room visibility, permissions or successful replies. For Slack, download [`slack-app-manifest.yml`](slack-app-manifest.yml) to create the app. Matrix supports plaintext rooms only; encrypted content is not decrypted.
+3. **Choose AI.** Select `openrouter` or `mistral`, paste its key, and enter a model ID. To start free on OpenRouter, explicitly choose a current `:free` model; leaving **Model** blank uses a paid default. Provider credential checks make authenticated GET requests only, not a paid completion. They do not prove that the model can produce a reply or that you have sufficient credit.
+4. **Make it fit.** Choose `en` (English) or `tr` (Turkish), UTC offset (for example `3` or `5.5`), optional owner identity, news settings and platform-specific access controls. Discord's blank `GUILD_ID` / `CHANNELS` allows every accessible server/channel. Telegram `TELEGRAM_ROOMS`, Slack `SLACK_CHANNELS`, and Matrix `MATRIX_ROOMS` are default-deny: explicitly approve rooms only after considering member privacy.
+5. **Review and start.** Complete the selected platform's required invite/room setup and finish. First setup saves the private configuration and starts the selected runtime **without restarting the process**. Adding another platform later in protected Settings requires saving and restarting (`docker compose restart bot` for Docker, or stop and restart the binary).
 
-Credential tests do not save your keys to disk. Finish saves the private `config/.env` and starts the Discord runtime **without restarting the process**. Once its password has been saved, the administrator account survives an interrupted setup; log in to resume, rather than trying to reclaim it. Unfinished credential drafts are session-local, expire 15 minutes after creation or the latest successful credential test, and do not survive logout or process restart.
+Credential tests do not save pasted keys to disk or prove that the bot is live, can read a room, or can answer. The administrator account survives interrupted setup; log in to resume rather than trying to reclaim it. Unfinished credential drafts are session-local, expire 15 minutes after creation or the latest successful credential test, and do not survive logout or process restart.
 
-Keep `config/.env` private: it contains plaintext tokens and keys. Browser saves replace the file atomically and preserve unrelated settings/comments; they do not encrypt it. Never upload it or share it in a screenshot. On Windows restrict folder access in **Properties → Security**. Rotate a leaked Discord token in Developer Portal, a leaked Telegram token with BotFather, leaked Slack tokens in Slack app management, a leaked Matrix token/session in the client (and change leaked passwords), and a leaked model key in its provider account.
+Keep `config/.env` private: it contains plaintext tokens and keys. Browser saves replace the file atomically and preserve unrelated settings/comments; they do not encrypt it. Never upload it or share it in a screenshot. On Windows restrict folder access in **Properties → Security**. Rotate leaked platform credentials in the corresponding platform account and model keys with their provider.
 
-Keep Docker Desktop running. Panel health is separate from platform connection
-health: a successful Discord token test is not proof that privileged intents,
-channel permissions or the gateway connection work. Telegram, Slack and Matrix's
-protected Settings paths require a restart and do not offer the Discord wizard's
-credential test.
+Keep Docker Desktop running. Panel health is separate from connection health: a successful credential test is not proof that a gateway, room permissions or model replies work.
 
 For a release binary, run it from its private data folder and open the printed browser link; it writes `.env` there. Keep the terminal open. An existing valid configuration starts its configured platform connections automatically alongside the panel. [Headless CLI setup](#headless-cli-setup) remains available if you do not want browser administration.
 

@@ -1,9 +1,11 @@
 use super::routes::{
-    admin, button, field, form, html, lang, mutation, page, section, t, WebError, WebResult,
+    admin, button, field, form, html, lang, mutation, page, platform_credentials, section, t,
+    WebError, WebResult,
 };
 use super::views::{Button, Choice, Field, Item, Language};
 use super::{auth, setup, App};
-use crate::config::{Config, FieldKind, FieldView, Patch, PatchValue, Source};
+use crate::config::{Config, ConfigError, FieldKind, FieldView, Patch, PatchValue, Source};
+use crate::platform::types::PlatformKind;
 use axum::extract::{ConnectInfo, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Redirect, Response};
@@ -273,19 +275,49 @@ pub(super) async fn view(
     }
     let mut tests = section(language, "panel.settings.tests");
     tests.description = t(language, "panel.settings.tests_help");
-    tests.forms.push(form(
-        "settings-platform-test",
-        "/ui/settings/test-platform",
-        &info.csrf,
-        vec![field(
-            language,
-            "DISCORD_TOKEN",
-            "panel.settings.DISCORD_TOKEN.label",
-            "password",
-            "",
-        )],
-        vec![button(language, "panel.action.test_platform")],
-    ));
+    page.sections.push(tests);
+    for platform in [
+        PlatformKind::Discord,
+        PlatformKind::Telegram,
+        PlatformKind::Slack,
+        PlatformKind::Matrix,
+    ] {
+        let name = platform.as_str();
+        let mut card = section(language, &format!("panel.settings.test.{name}"));
+        card.id = format!("settings-{name}-test-card");
+        card.advanced = true;
+        card.description = t(language, &format!("panel.settings.test.{name}_help"));
+        let fields = platform_credentials(platform)
+            .iter()
+            .filter_map(|key| views.iter().find(|view| view.spec.key == *key))
+            .map(|view| {
+                let mut probe = input(language, view);
+                if !view.read_only {
+                    probe.value.clear();
+                }
+                probe.help = format!(
+                    "{} {}",
+                    t(
+                        language,
+                        &format!("panel.setup.field.{}.help", view.spec.key)
+                    ),
+                    t(language, "panel.settings.test.blank_saved")
+                );
+                probe
+            })
+            .collect();
+        let mut probe = form(
+            &format!("settings-{name}-test"),
+            "/ui/settings/test-platform",
+            &info.csrf,
+            fields,
+            vec![button(language, "panel.action.test_platform")],
+        );
+        probe.hidden.push(("platform".into(), name.into()));
+        card.forms.push(probe);
+        page.sections.push(card);
+    }
+    let mut tests = section(language, "panel.action.test_provider");
     let mut provider = field(language, "PROVIDER", "panel.label.provider", "select", "");
     provider.choices = ["", "openrouter", "mistral"]
         .into_iter()
@@ -424,6 +456,45 @@ async fn saved_config(app: Arc<App>) -> WebResult<Config> {
         .map_err(|_| WebError::validation())?
 }
 
+pub(super) fn platform_probe_values(
+    config: &Config,
+    platform: PlatformKind,
+    input: &HashMap<String, String>,
+) -> WebResult<HashMap<String, String>> {
+    let keys = platform_credentials(platform);
+    if keys.is_empty() {
+        return Err(WebError::validation());
+    }
+    let fields = config.fields();
+    keys.iter()
+        .map(|key| {
+            let view = fields
+                .iter()
+                .find(|view| view.spec.key == *key)
+                .ok_or_else(WebError::validation)?;
+            let supplied = input.get(*key).filter(|value| !value.is_empty());
+            if view.read_only
+                && supplied
+                    .is_some_and(|value| view.spec.secret || value.as_str() != config.get(key))
+            {
+                return Err(WebError::config(ConfigError::Field {
+                    key: (*key).into(),
+                    code: "panel.config.read_only",
+                }));
+            }
+            let value = supplied.map_or_else(|| config.get(key), String::as_str);
+            let value = crate::config::validate_value(key, value).map_err(WebError::config)?;
+            if value.is_empty() {
+                return Err(WebError::config(ConfigError::Field {
+                    key: (*key).into(),
+                    code: "panel.config.required",
+                }));
+            }
+            Ok(((*key).into(), value))
+        })
+        .collect()
+}
+
 async fn check_platform(
     app: Arc<App>,
     headers: &HeaderMap,
@@ -437,18 +508,21 @@ async fn check_platform(
         .clone()
         .try_acquire_owned()
         .map_err(|_| auth::AuthError::Busy)?;
+    let platform = input
+        .get("platform")
+        .ok_or_else(WebError::validation)
+        .and_then(|value| setup::parse_platform(value).map_err(|_| WebError::validation()))?;
     let config = saved_config(app).await?;
-    let token = input
-        .get("DISCORD_TOKEN")
-        .filter(|value| !value.is_empty())
-        .map_or_else(|| config.get("DISCORD_TOKEN"), String::as_str);
-    setup::test_platform(token).await.map_err(|_| {
-        WebError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "platform_test_failed",
-            "panel.error.test",
-        )
-    })
+    let credentials = platform_probe_values(&config, platform, input)?;
+    setup::test_chat_platform(platform, &credentials)
+        .await
+        .map_err(|_| {
+            WebError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "platform_test_failed",
+                "panel.error.test",
+            )
+        })
 }
 
 async fn check_provider(
@@ -497,14 +571,32 @@ async fn check_provider(
 fn tested(language: Language, application: Option<setup::Application>) -> WebResult<Response> {
     let mut page = page(language, "panel.title.settings", "settings")?;
     page.authenticated = true;
-    page.notice = t(language, "panel.settings.test_passed");
+    page.notice = t(
+        language,
+        if application.is_some() {
+            "panel.settings.test.platform_passed"
+        } else {
+            "panel.settings.test_passed"
+        },
+    );
     let mut result = section(language, "panel.settings.tests");
     if let Some(application) = application {
+        result.description = t(language, "panel.settings.test.not_live");
         result.items.push(Item {
-            label: t(language, "panel.label.application"),
+            label: t(
+                language,
+                &format!("panel.setup.{}.name", application.platform.as_str()),
+            ),
             value: format!("{} · {}", application.name, application.id),
             ..Default::default()
         });
+        if let Some(workspace) = application.workspace {
+            result.items.push(Item {
+                label: t(language, "panel.settings.test.workspace"),
+                value: workspace,
+                ..Default::default()
+            });
+        }
     }
     result.items.push(Item {
         value: t(language, "panel.action.back"),
@@ -540,8 +632,16 @@ pub(super) async fn platform_api(
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(input): Json<HashMap<String, String>>,
-) -> WebResult<Json<setup::Application>> {
-    Ok(Json(check_platform(app, &headers, peer, &input).await?))
+) -> WebResult<Json<Value>> {
+    let application = check_platform(app, &headers, peer, &input).await?;
+    Ok(Json(json!({
+        "verified": true,
+        "live_ready": false,
+        "platform": application.platform,
+        "id": application.id,
+        "name": application.name,
+        "workspace": application.workspace,
+    })))
 }
 pub(super) async fn provider_api(
     State(app): State<Arc<App>>,

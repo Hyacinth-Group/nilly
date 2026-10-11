@@ -38,9 +38,7 @@ The setup defaults are **paid** models. An OpenRouter example verified in the li
 
 ## Quick start — Docker
 
-You need a Discord bot token, a model API key, and running [Docker](https://docs.docker.com/get-started/get-docker/). This setup requires copying commands into Terminal or PowerShell. The [step-by-step guide](docs/setup-guide.md) explains Discord account setup and includes Windows commands.
-
-In [Developer Portal](https://discord.com/developers/applications) → **Bot → Privileged Gateway Intents**, enable **Message Content Intent** and **Server Members Intent**, not Presence Intent. Keep keys private.
+You need credentials for the chat platform you choose in setup, a model API key, and running [Docker](https://docs.docker.com/get-started/get-docker/). This setup requires copying commands into Terminal or PowerShell. The [step-by-step guide](docs/setup-guide.md) explains each platform and includes Windows commands. If choosing Discord, enable **Message Content Intent** and **Server Members Intent** under Developer Portal → **Bot → Privileged Gateway Intents**; do not enable Presence Intent. Keep keys private.
 
 For macOS/Linux:
 
@@ -64,7 +62,7 @@ docker compose up -d
 docker compose logs bot
 ```
 
-Open the one-use `http://localhost:8787/setup#token=…` link printed in the logs; it expires after **15 minutes**. Follow the five steps: set a panel password of at least **12 characters** → verify Discord token → verify provider key → configure language/timezone, owner, access restrictions and news → invite and start. Once saved, the panel password survives interrupted setup; log in to resume. Setup starts the bot without a process restart. Credential tests verify Discord application identity and provider authentication; they **do not make a paid completion** or prove privileged intents, model compatibility or gateway readiness.
+Open the one-use `http://localhost:8787/setup#token=…` link printed in the logs; it expires after **15 minutes**. Step 2 lets you choose **Discord, Telegram, Slack, or Matrix**. Telegram is a recommended beginner route: the wizard tests your BotFather-issued token with Telegram `getMe`, reports the verified bot identity, and warns when privacy may prevent ordinary group visibility; disable privacy with `/setprivacy` if needed. Slack tests the `xoxb-` bot token with `auth.test` and checks the `xapp-` app-level token with `apps.connections.open` (`connections:write`), validating credentials/WebSocket URL but not opening a persistent Socket Mode connection. Download the local [`slack-app-manifest.yml`](docs/slack-app-manifest.yml) to create the app. Matrix checks `whoami` against the bearer token and configured user ID, and supports plaintext rooms only—encrypted content is not decrypted. Telegram, Slack and Matrix room access is default-deny: explicitly approve rooms whose members have consented to shared-memory/model processing. First setup starts the runtime without restarting; adding another platform later in Settings requires saving and restarting. Credential tests do not prove live gateway/room health, permissions, provider credit or successful replies; they do not make a paid completion. Keep all platform tokens and model keys private.
 
 Run **`/status`** (`/durum` in Turkish) in Discord to confirm it works, then try mentioning it. Ordinary chat may be ignored, and the bot sleeps. Keep Docker running; use `docker compose logs -f` for errors.
 
@@ -74,9 +72,11 @@ Prefer another route? [Release binary (terminal required)](docs/setup-guide.md#d
 
 ## Panel boundaries and recovery
 
-The embedded panel provides setup/repair, runtime and gateway status, per-conversation mood, validated settings with write-only secrets, live logs, account management and help. Memory/personality editors, action buttons and the dedicated usage page are **disabled** pending shared core APIs. Overview shows process-local call/token counters, not a measured running cost.
+The panel provides setup/repair, runtime and connection status, per-conversation mood, validated settings with write-only secrets, live logs, account management, help, memory/personality editors, administration actions, and usage reporting. Overview counters are process-local; monetary cost is shown only if reported by the provider.
 
-Settings saves require a restart (`docker compose restart bot`); a stored `model.md` override still takes precedence. Environment values supplied at process startup override the config file and are read-only in the panel. Live logs are a bounded, redacted recent buffer, **not a durable audit trail**; they can still contain private conversation text.
+First setup starts the selected platform runtime without a process restart. Saving an additional platform later in Settings requires a restart (`docker compose restart bot`); the stored `model.md` override still takes precedence. Environment values supplied at process startup override the config file and are read-only in the panel. Live logs are a bounded, redacted recent buffer, **not a durable audit trail**; they can still contain private conversation text.
+
+Settings has separate collapsed credential-test cards for Discord, Telegram, Slack and Matrix, followed by the provider test. Test supplied credentials before saving a later platform addition, or leave fields blank to test the saved effective configuration. Tests do not save settings, change wizard drafts or prove live connection/room health. Matrix browser tests require an access token; saved password login remains available in Settings and the CLI.
 
 Use localhost or an SSH tunnel/VPN, not a public port. An HTTPS reverse proxy requires an explicit `PANEL_PUBLIC_URL` and preserved Host/Origin headers; forwarded headers are not trusted authority. See the [setup guide](docs/setup-guide.md).
 

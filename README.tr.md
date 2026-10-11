@@ -38,9 +38,7 @@ Kurulumun varsayılan modelleri **ücretlidir**. 11 Ekim 2026'da canlı OpenRout
 
 ## Hızlı başlangıç — Docker
 
-Discord bot tokenı, model API anahtarı ve çalışan [Docker](https://docs.docker.com/get-started/get-docker/) gerekir. Kurulum, Terminal veya PowerShell'e komut kopyalamayı gerektirir. [Adım adım rehber](docs/setup-guide.md), Discord ayarlarını ve Windows komutlarını açıklar.
-
-[Developer Portal](https://discord.com/developers/applications) → **Bot → Privileged Gateway Intents** altında **Message Content Intent** ve **Server Members Intent** açın; Presence Intent açmayın. Anahtarları gizli tutun.
+Kurulumda seçeceğiniz platformun kimlik bilgileri, bir model API anahtarı ve çalışan [Docker](https://docs.docker.com/get-started/get-docker/) gerekir. Kurulum Terminal veya PowerShell'e komut kopyalamayı gerektirir. [Adım adım rehber](docs/setup-guide.md) platformları ve Windows komutlarını açıklar. Discord seçiyorsanız Developer Portal → **Bot → Privileged Gateway Intents** altında **Message Content Intent** ve **Server Members Intent** açın; Presence Intent açmayın. Anahtarları gizli tutun.
 
 macOS/Linux için:
 
@@ -64,7 +62,7 @@ docker compose up -d
 docker compose logs bot
 ```
 
-Loglarda yazdırılan tek kullanımlık `http://localhost:8787/setup#token=…` bağlantısını açın; **15 dakika** sonra geçersiz olur. Beş adımı izleyin: en az **12 karakterli** panel parolası belirle → Discord tokenını doğrula → sağlayıcı anahtarını doğrula → dil/saat dilimi, sahip, erişim kısıtları ve haberleri ayarla → davet et ve başlat. Kaydedilen panel parolası kurulum yarım kalsa da korunur; giriş yaparak devam edin. Kurulum botu süreç yeniden başlatılmadan çalıştırır. Anahtar testleri Discord uygulama kimliğini ve sağlayıcı kimlik doğrulamasını kontrol eder; **ücretli completion çağrısı yapmaz**, ayrıcalıklı intentleri, model uyumluluğunu veya gateway bağlantısını kanıtlamaz.
+Loglarda yazdırılan tek kullanımlık `http://localhost:8787/setup#token=…` bağlantısını açın; **15 dakika** sonra geçersiz olur. İkinci adımda **Discord, Telegram, Slack veya Matrix** seçin. Yeni başlayanlara Telegram önerilir: sihirbaz BotFather'dan alınan tokenı Telegram `getMe` ile test eder, doğrulanan bot kimliğini gösterir ve gizlilik sıradan grup görünürlüğünü engelleyebilecekse uyarır. Slack, `xoxb-` bot tokenını `auth.test` ile; `xapp-` uygulama tokenını `apps.connections.open` (`connections:write`) ile kontrol eder. Kimlik bilgileri/WebSocket URL'si doğrulanır, kalıcı Socket Mode bağlantısı açılmaz. Uygulamayı oluşturmak için yerel [`slack-app-manifest.yml`](docs/slack-app-manifest.yml) dosyasını indirin. Matrix, bearer tokenı ve yapılandırılmış kullanıcı kimliğini `whoami` ile denetler; yalnızca düz metin odaları desteklenir, şifreli içerik çözülmez. Telegram, Slack ve Matrix odalarına erişim varsayılan olarak reddedilir: yalnız ortak hafıza/model işlemeyi kabul eden üyelerin odalarını açıkça onaylayın. İlk kurulum çalışma zamanını yeniden başlatmadan başlatır; daha sonra Settings'ten platform eklemek kaydetme ve yeniden başlatma gerektirir. Kimlik testleri canlı gateway/oda sağlığını, izinleri, sağlayıcı kredilerini veya başarılı yanıtları kanıtlamaz; ücretli completion yapmaz. Platform tokenlarını ve model anahtarlarını gizli tutun.
 
 Discord'da **`/status`** (Türkçe için `BOT_LANG=tr` seçtiyseniz `/durum`) çalıştırarak doğrulayın, ardından botu etiketlemeyi deneyin. Normal sohbetlere cevap vermeyebilir; geceleri uyur. Docker'ı açık tutun; hatalar için `docker compose logs -f` kullanın.
 
@@ -74,9 +72,11 @@ Başka yol mu tercih ediyorsunuz? [Hazır binary (terminal gerekir)](docs/setup-
 
 ## Panel sınırları ve parola kurtarma
 
-Gömülü panel kurulum/onarım, çalışma ve gateway durumu, konuşma bazında ruh hali, doğrulanan ve anahtarları geri göstermeyen ayarlar, canlı loglar, hesap yönetimi ve yardım sunar. Hafıza/kişilik editörleri, eylem düğmeleri ve ayrı kullanım sayfası ortak çekirdek API'leri tamamlanana kadar **kapalıdır**. Genel bakış süreç içi çağrı/token sayaçlarını gösterir; ölçülmüş çalıştırma maliyeti göstermez.
+Panel; kurulum/onarıma, çalışma ve bağlantı durumuna, konuşma bazında ruh haline, anahtarları geri göstermeyen doğrulanmış ayarlara, canlı loglara, hesap yönetimine, yardıma, hafıza/kişilik düzenleyicilerine, yönetim eylemlerine ve kullanım raporlamasına sahiptir. Genel bakış sayaçları süreç içidir; parasal maliyet yalnız sağlayıcı bildirirse gösterilir.
 
-Kaydedilen ayarlar yeniden başlatma gerektirir (`docker compose restart bot`); hafızadaki `model.md` model tercihi öncelikli olmaya devam eder. Süreç başlangıcında verilen ortam değişkenleri yapılandırma dosyasına göre önceliklidir ve panelde salt okunurdur. Canlı loglar sınırlı, hassas değerleri maskelenmiş bir yakın geçmiş tamponudur; **kalıcı denetim kaydı değildir** ve yine de özel sohbet metni içerebilir.
+İlk kurulum çalışma zamanını yeniden başlatmadan başlatır. Daha sonra Settings içinden yeni bir platform eklemek için kaydedip süreci yeniden başlatın (`docker compose restart bot`); `model.md` içindeki kayıtlı tercih önceliğini korur. Süreç başlangıcında verilen ortam değerleri yapılandırma dosyasına önceliklidir ve panelde salt okunurdur. Canlı loglar sınırlı, hassas değerleri maskelenmiş bir yakın geçmiş tamponudur; **kalıcı denetim kaydı değildir** ve yine de özel sohbet metni içerebilir.
+
+Settings içinde Discord, Telegram, Slack ve Matrix için ayrı, başlangıçta kapalı kimlik bilgisi test kartları, ardından sağlayıcı testi bulunur. Yeni platformun bilgilerini kaydetmeden test edin; alanları boş bırakırsanız kayıtlı etkin yapılandırma kullanılır. Testler ayarları kaydetmez, sihirbaz taslaklarını değiştirmez ve canlı bağlantı/oda sağlığını kanıtlamaz. Matrix tarayıcı testleri erişim tokenı ister; Settings ve CLI üzerinden parola ile giriş desteği korunur.
 
 Genel internete açık port yerine localhost veya SSH tüneli/VPN kullanın. HTTPS ters proxy için açıkça `PANEL_PUBLIC_URL` ayarlanmalı ve Host/Origin başlıkları korunmalıdır; forwarded başlıkları güvenilir kaynak sayılmaz. Ayrıntılar [kurulum rehberinde](docs/setup-guide.md).
 

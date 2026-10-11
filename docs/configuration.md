@@ -32,14 +32,29 @@ Start the package and open its printed `http://localhost:8787/setup#token=...` l
 | `PANEL_CONFIG_PATH` | no | editable dotenv path, default `.env`; Compose sets `/data/config/.env` |
 | `PANEL_PUBLIC_URL` | no | explicit public HTTPS origin when using a correctly configured reverse proxy |
 
-Settings uses typed validation and atomic file replacement, preserving unrelated settings/comments. Token/key fields are write-only: blank keeps the saved value; use the explicit clear control to remove it. External process environment values take precedence over file values and appear read-only. Compose must mount the writable `config` **directory**, not a single dotenv file, and should not keep `env_file` injection for browser-editable fields. Save and restart to activate changes. Do not expose port 8787 publicly; use an [SSH tunnel](setup-guide.md#accessing-a-remote-server). The fixed `discord-bot-data` volume requires explicit [migration](setup-guide.md#existing-compose-installations) from older project-prefixed volumes.
+Settings uses typed validation and atomic file replacement, preserving unrelated settings/comments. Token/key fields are write-only: blank keeps the saved value; use the explicit clear control to remove it. External process environment values take precedence over file values and appear read-only. Compose must mount the writable `config` **directory**, not a single dotenv file, and should not keep `env_file` injection for browser-editable fields. First setup starts the runtime without a process restart; saving a later platform addition in Settings requires a restart (`docker compose restart bot`). Do not expose port 8787 publicly; use an [SSH tunnel](setup-guide.md#accessing-a-remote-server). The fixed `discord-bot-data` volume requires explicit [migration](setup-guide.md#existing-compose-installations) from older project-prefixed volumes.
+
+Separate collapsed Settings test cards select Discord, Telegram, Slack or Matrix explicitly, followed by the provider test. They test only the selected platform's required credentials; supplied nonblank fields are used without saving, while blank fields use saved effective values. Environment-managed fields cannot be replaced by a probe. You can test a later platform addition before saving/restarting without changing wizard drafts.
 
 Both headless and panel runtime startup derive all configured platform
 connections from the same immutable typed settings snapshot. Secrets remain
 write-only in Settings: saved plaintext tokens/passwords are not returned in
-HTML, configuration APIs or logs. The five-step browser wizard is
-**Discord-only**; Telegram, Slack and Matrix use protected Settings plus a
-process restart, or CLI init.
+HTML, configuration APIs or logs. Step 2 of the five-step browser wizard lets you
+choose Discord, Telegram, Slack or Matrix. Credential tests check identity or
+authentication only; they do not prove live room/gateway health, permissions,
+provider credit or successful replies. Telegram checks `getMe`, reports the
+verified bot identity and warns when account privacy may prevent ordinary group
+visibility. Slack checks `auth.test` with `SLACK_BOT_TOKEN` and calls
+`apps.connections.open` with the app-level token and `connections:write` scope,
+validating credentials and the returned WebSocket URL without opening a
+persistent Socket Mode connection. Matrix browser tests (wizard and Settings)
+check `whoami` with the bearer access token and verify that the returned user
+matches `MATRIX_USER`; they do not test or replace a saved password. Runtime
+password login remains available through Settings and CLI configuration.
+Matrix setup supports plaintext rooms only.
+Explicit room approval is default-deny for Telegram, Slack and Matrix. First
+setup starts the runtime in-process; adding another platform later through
+Settings requires saving and restarting.
 
 `STEALTH` is not human impersonation and does not remove Discord's bot identity. Leave it off to use slash-command verification and management. Changing it requires a restart; old slash registrations are not removed by this mode.
 
@@ -47,17 +62,17 @@ Set room restrictions **before first launch**. Discord reads ordinary messages a
 
 ## Telegram
 
-The headless wizard offers `discord` (default), `telegram`, `slack` and, when compiled with its feature, `matrix`. Telegram-only output
-contains `TELEGRAM_TOKEN`, `TELEGRAM_ROOMS` and optional `OWNER_KEY`; no
-`DISCORD_TOKEN` is required. The initial five-step browser wizard remains
-**Discord-only**. Telegram users complete **Claim and protect**, then visit
-**Settings → Platform** for the Telegram token and room allowlist, configure the
-provider/model credentials, set the qualified owner in **Privacy**, save, and
-**restart the process**. Telegram Settings do not perform a `getMe` credential
-test or start a connection live. Alternatively create the Telegram configuration
-with CLI init before launching the panel. Both tokens may be set to connect both
-networks to the same brain. Approve only rooms whose members trust this shared
-memory boundary.
+The wizard offers Telegram as the recommended beginner route. Its `getMe` test
+verifies the BotFather token, reports the verified bot identity, and warns if
+the account's privacy setting may prevent ordinary group-message visibility.
+This is not proof of room access or a live connection. To receive ordinary group
+messages, disable privacy with BotFather `/setprivacy` → **Disable**, then
+remove and re-add the bot to existing groups; alternatively make it a group
+administrator. Configure approved rooms explicitly: blank `TELEGRAM_ROOMS`
+denies every room. First setup starts the runtime without a restart; adding
+Telegram later in Settings requires a restart. Both tokens may be set to connect
+both networks to the same brain. Approve only rooms whose members trust this
+shared memory boundary.
 
 ```dotenv
 TELEGRAM_TOKEN=<private token from BotFather>
@@ -142,9 +157,20 @@ and [privacy mode](https://core.telegram.org/bots/features#privacy-mode).
 
 ## Slack and simultaneous platforms
 
-Run `discord-bot init` and choose `slack` to create a Slack-only `.env`; Enter at the platform question preserves the Discord setup path. Slack prompts hide both tokens in an interactive terminal. Piped input is not hidden. The wizard collects channel IDs and a qualified owner identity; it does not contact Slack or verify credentials. See the [manifest and installation steps](setup-guide.md#slack-socket-mode).
+Run `discord-bot init` and choose `slack` for terminal setup; the browser wizard
+also supports Slack. Slack prompts hide both tokens in an interactive terminal.
+Piped input is not hidden. The wizard checks `auth.test` and the app-level
+Socket Mode token; this is credential authentication, not proof of a live
+workspace connection, channel visibility or successful replies. See the
+[manifest and installation steps](setup-guide.md#slack-socket-mode); download the
+local [`slack-app-manifest.yml`](slack-app-manifest.yml) to create the app.
 
-The five-step browser wizard remains **Discord-only**. For Slack, complete **Claim and protect**, then use protected **Settings → Platform** for both tokens, native channel approval and the history tier. Configure the provider/model credentials and language, set the qualified owner in **Privacy**, save and **restart the process**. Settings does not perform a live Slack credential test or start Slack without restarting. Both Slack tokens are required together: a partial pair is rejected even if Discord or Telegram is also configured.
+The browser wizard asks for both tokens, native channel approval and history
+tier, then provider/model credentials, language and qualified owner. Both Slack
+tokens are required together: a partial pair is rejected even if Discord or
+Telegram is also configured. Slack room approval is default-deny: blank
+`SLACK_CHANNELS` approves no rooms. First setup starts the runtime without a
+restart; adding Slack later in Settings requires saving and restarting.
 
 Configure `DISCORD_TOKEN`, `TELEGRAM_TOKEN` and/or the Matrix settings alongside both Slack tokens to run several platforms simultaneously in one process. The wizard configures one platform per run; add other platforms through protected Settings or edit the private file rather than rerunning `init --force`. `GUILD_ID`/`CHANNELS` never substitute for another platform's room approval; each adapter keeps its own authorization boundary.
 
@@ -163,11 +189,18 @@ works. CLI init offers Matrix only when compiled with the feature; a build
 without it reports nonblank Matrix configuration as an explicit configuration
 error, never silently ignoring it. Discord remains the CLI wizard default.
 
-The panel still starts **before** platform credential validation. Matrix users
-complete **Claim and protect**, then use protected **Settings → Platform** for
-native SDK settings, **Privacy** for the qualified owner, and provider/model
-settings. Save and **restart the process**; neither Settings nor CLI init
-performs a live Matrix authentication test. Interactive CLI token/password input
+The panel starts **before** platform credential validation. In step 2 of the
+browser wizard choose Matrix; its `whoami` test uses the bearer access token and
+checks that the returned user matches `MATRIX_USER`. This authenticates the
+account but does not prove room access or successful conversation. The wizard
+accepts an access token; the existing CLI/Settings password-login alternative
+remains supported. Matrix supports plaintext rooms only: encrypted rooms and
+attachments are unsupported, with no decryption or plaintext fallback. Configure
+the homeserver, full bot user ID, access token, explicit room IDs, qualified
+owner and provider/model settings. Blank `MATRIX_ROOMS` approves no already
+joined rooms; only explicit allowlisting or owner-approved invitations grant
+access. First setup starts the runtime without a restart; adding Matrix later in
+Settings requires saving and restarting. Interactive CLI token/password input
 uses hidden `rpassword` entry; piped input is not hidden. CLI answers use the
 same typed patch/save path as Settings.
 

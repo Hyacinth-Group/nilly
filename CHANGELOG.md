@@ -9,7 +9,7 @@ Notable changes are recorded here in [Keep a Changelog](https://keepachangelog.c
 - Discord/Telegram/Slack/Matrix CLI setup selection, bilingual onboarding and honest platform capability/history/privacy notices.
 - Telegram safe media resolution/local uploads, native topic/reply routing, chat-allowed emoji reactions and a durable redb polling cursor; offline coverage and an ignored opt-in `getMe` probe.
 - Slack Socket Mode adapter with explicitly approved `SLACK_CHANNELS`, workspace-qualified identities, thread-aware replies, native private-file resolution, bounded history and supported Slack reactions.
-- Slack-only wizard setup with hidden `xapp-`/`xoxb-` tokens, qualified `OWNER_KEY`, bilingual Slack UI, exact app manifest and beginner installation/privacy/rate-limit guidance; Discord setup remains the default.
+- Five-step browser setup now selects Discord, Telegram, Slack or Matrix, tests credentials (`getMe`, Slack `auth.test`/`apps.connections.open`, Matrix `whoami`), and starts first setup without a restart; later platform additions through Settings require restart.
 - Concurrent configured platform connections sharing the brain, with private Slack text-administration replies and no Slack slash-command registration.
 - Offline Slack wizard/manifest coverage and opt-in ignored environment-gated live-test documentation; no live-workspace verification is implied.
 - Default-enabled, removable `matrix` feature using native `matrix-sdk` 0.19.1 for plaintext sync, explicit room approval, owner-only prefix administration and stable persisted session/device state; source MSRV 1.96.
@@ -25,7 +25,9 @@ Notable changes are recorded here in [Keep a Changelog](https://keepachangelog.c
 - Shorter bilingual READMEs explain the memory mechanism, collection scope, external processing, and unmeasured running cost.
 - Contributor and reference documentation describe current behavior rather than development sessions.
 - Setup hides credentials on a terminal, explains paid defaults, and ends with numbered verification steps.
-- CLI setup uses typed secret encoding and atomic config patches; the five-step browser wizard remains Discord-only, with Telegram/Slack/Matrix configured through protected Settings and a restart.
+- CLI setup uses typed secret encoding and atomic config patches. Browser step 2 selects Discord, Telegram, Slack or Matrix; Telegram is recommended for beginners, and Telegram/Slack/Matrix room access is default-deny. Credential tests are not proof of live platform health.
+- Browser platform selection uses a balanced desktop card grid, full-width readable beginner instructions and secondary help links; credential testing remains the primary action. Native language changes preserve the platform choice, while mobile navigation and checkbox labels offer 44-pixel touch targets.
+- Settings offers separate collapsed Discord/Telegram/Slack/Matrix credential tests before the provider test, using supplied or saved effective values without saving or changing wizard drafts. Later additions can be tested before save/restart; Matrix browser tests require an access token and preserve saved runtime passwords. Probes are not live-health checks.
 - Compose uses the stable saved-data volume name `discord-bot-data`.
 
 ### Removed

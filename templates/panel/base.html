@@ -33,11 +33,12 @@
       <form method="get" class="language-form">
         <label for="ui-language">{{ chrome.language }}</label>
         {% for step in page.steps %}{% if step.current %}<input type="hidden" name="step" value="{{ loop.index }}">{% endif %}{% endfor %}
+        {% for section in page.sections %}{% for platform in section.platform_cards %}{% if platform.selected %}<input type="hidden" name="platform" value="{{ platform.name }}">{% endif %}{% endfor %}{% endfor %}
         <select id="ui-language" name="lang" data-language-select>
           <option value="en"{% if page.language.code() == "en" %} selected{% endif %}>{{ chrome.english }}</option>
           <option value="tr"{% if page.language.code() == "tr" %} selected{% endif %}>{{ chrome.turkish }}</option>
         </select>
-        <button type="submit" class="button button-small">{{ chrome.language }}</button>
+        <button type="submit" class="button button-small">{{ chrome.language_apply }}</button>
       </form>
     </header>
     <main id="main" tabindex="-1" data-poll-url="{{ page.poll_url }}" data-refresh-error="{{ chrome.refresh_error }}">
@@ -62,10 +63,21 @@
       {% for section in page.sections %}
         {% if section.advanced %}<details class="card" id="{{ section.id }}"><summary>{{ section.title }}</summary><div class="details-content">{% else %}<section class="card" id="{{ section.id }}"><h2>{{ section.title }}</h2>{% endif %}
         {% if !section.description.is_empty() %}<p class="section-description">{{ section.description }}</p>{% endif %}
+        {% if !section.platform_cards.is_empty() %}
+        <div class="platform-picker">
+          {% for platform in section.platform_cards %}
+          <a class="platform-card{% if platform.selected %} platform-card-selected{% endif %}" href="{{ platform.href }}"{% if platform.selected %} aria-current="true"{% endif %}>
+            {% if !platform.badge.is_empty() %}<span class="platform-badge">{{ platform.badge }}</span>{% endif %}
+            <strong>{{ platform.title }}</strong>
+            <span>{{ platform.description }}</span>
+          </a>
+          {% endfor %}
+        </div>
+        {% endif %}
         {% if !section.items.is_empty() %}
-        <dl class="facts">
+        <dl class="facts{% if !section.platform_cards.is_empty() %} setup-instructions{% endif %}">
           {% for item in section.items %}
-          <div class="fact"><dt>{{ item.label }}</dt><dd>{% if !item.href.is_empty() %}<a class="button{% if item.active %} button-current{% endif %}" href="{{ item.href }}" rel="noreferrer"{% if item.active %} aria-current="page"{% endif %}>{{ item.value }}</a>{% else %}<span{% if !item.key.is_empty() %} data-status-key="{{ item.key }}"{% endif %}>{{ item.value }}</span>{% endif %}{% if item.progress_max > 0 %}<progress value="{{ item.progress_value }}" max="{{ item.progress_max }}" data-progress-key="{{ item.progress_key() }}" data-progress-max-key="{{ item.progress_max_key() }}" aria-label="{{ item.label }}"></progress>{% endif %}{% if !item.detail.is_empty() %}<small>{{ item.detail }}</small>{% endif %}</dd></div>
+          <div class="fact"><dt>{{ item.label }}</dt><dd>{% if !item.href.is_empty() %}<a class="button{% if !section.platform_cards.is_empty() %} button-secondary{% endif %}{% if item.active %} button-current{% endif %}" href="{{ item.href }}" rel="noreferrer"{% if item.active %} aria-current="page"{% endif %}>{{ item.value }}</a>{% else %}<span{% if !item.key.is_empty() %} data-status-key="{{ item.key }}"{% endif %}>{{ item.value }}</span>{% endif %}{% if item.progress_max > 0 %}<progress value="{{ item.progress_value }}" max="{{ item.progress_max }}" data-progress-key="{{ item.progress_key() }}" data-progress-max-key="{{ item.progress_max_key() }}" aria-label="{{ item.label }}"></progress>{% endif %}{% if !item.detail.is_empty() %}<small>{{ item.detail }}</small>{% endif %}</dd></div>
           {% endfor %}
         </dl>
         {% endif %}
@@ -75,7 +87,7 @@
           <input type="hidden" name="lang" value="{{ page.language.code() }}">
           {% for hidden in form.hidden %}<input type="hidden" name="{{ hidden.0 }}" value="{{ hidden.1 }}">{% endfor %}
           {% for field in form.fields %}
-          <div class="field{% if !field.error.is_empty() %} field-invalid{% endif %}">
+          <div class="field{% if field.kind == "checkbox" %} field-checkbox{% endif %}{% if !field.error.is_empty() %} field-invalid{% endif %}">
             <label for="{{ form.id }}-{{ field.name }}">{{ field.label }}</label>
             {% if field.kind == "select" %}
             <select id="{{ form.id }}-{{ field.name }}" name="{{ field.name }}" aria-describedby="{{ form.id }}-{{ field.name }}-help {{ form.id }}-{{ field.name }}-error"{% if field.required %} required{% endif %}{% if field.read_only %} disabled{% endif %}{% if !field.error.is_empty() %} aria-invalid="true"{% endif %}>

@@ -2,6 +2,7 @@ use super::{
     actions, auth, dashboard, memory, personality, settings, setup, usage, views, App, Lifecycle,
 };
 use crate::config::{Patch, PatchValue};
+use crate::platform::types::PlatformKind;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
@@ -249,6 +250,7 @@ pub fn router(app: Arc<App>) -> Router {
         )
         .route("/", get(dashboard::overview))
         .route("/setup", get(setup_page))
+        .route("/setup/slack-app-manifest.yml", get(slack_manifest))
         .route("/login", get(login_page))
         .route("/settings", get(settings::view))
         .route("/logs", get(logs_page))
@@ -464,6 +466,109 @@ async fn login_page(
     }
 }
 
+pub(super) fn platform_credentials(platform: PlatformKind) -> &'static [&'static str] {
+    match platform {
+        PlatformKind::Discord => &["DISCORD_TOKEN"],
+        PlatformKind::Telegram => &["TELEGRAM_TOKEN"],
+        PlatformKind::Slack => &["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"],
+        PlatformKind::Matrix => &["MATRIX_HOMESERVER", "MATRIX_USER", "MATRIX_ACCESS_TOKEN"],
+        PlatformKind::Terminal => &[],
+    }
+}
+
+pub(super) fn fit_fields(platform: PlatformKind) -> &'static [&'static str] {
+    match platform {
+        PlatformKind::Discord => &[
+            "BOT_LANG",
+            "TZ_OFFSET",
+            "OWNER_KEY",
+            "GUILD_ID",
+            "CHANNELS",
+            "NEWS_CHANNEL",
+            "NEWS_RSS",
+        ],
+        PlatformKind::Telegram => &[
+            "BOT_LANG",
+            "TZ_OFFSET",
+            "OWNER_KEY",
+            "TELEGRAM_ROOMS",
+            "NEWS_RSS",
+        ],
+        PlatformKind::Slack => &[
+            "BOT_LANG",
+            "TZ_OFFSET",
+            "OWNER_KEY",
+            "SLACK_CHANNELS",
+            "NEWS_RSS",
+        ],
+        PlatformKind::Matrix => &[
+            "BOT_LANG",
+            "TZ_OFFSET",
+            "OWNER_KEY",
+            "MATRIX_ROOMS",
+            "NEWS_RSS",
+        ],
+        PlatformKind::Terminal => &[],
+    }
+}
+
+pub(super) fn select_platform(draft: &mut setup::Draft, platform: PlatformKind) {
+    if draft.selected_platform != platform {
+        draft.selected_platform = platform;
+        draft.platform_attempt += 1;
+        draft.application = None;
+        draft.fit_completed = false;
+    }
+}
+
+pub(super) fn reserve_platform(
+    draft: &mut setup::Draft,
+    platform: PlatformKind,
+) -> ([u8; 16], u64) {
+    select_platform(draft, platform);
+    draft.platform_attempt += 1;
+    draft.application = None;
+    draft.fit_completed = false;
+    (draft.platform_nonce, draft.platform_attempt)
+}
+
+pub(super) fn publish_platform(
+    draft: &mut setup::Draft,
+    attempt: ([u8; 16], u64),
+    application: setup::Application,
+    credentials: HashMap<String, String>,
+) -> WebResult<()> {
+    if draft.expires <= Instant::now()
+        || (draft.platform_nonce, draft.platform_attempt) != attempt
+        || draft.selected_platform != application.platform
+    {
+        return Err(WebError::new(
+            StatusCode::CONFLICT,
+            "stale_platform_test",
+            "panel.setup.stale_test",
+        ));
+    }
+    draft.values.extend(credentials);
+    draft.application = Some(application);
+    draft.expires = Instant::now() + std::time::Duration::from_secs(900);
+    Ok(())
+}
+
+async fn slack_manifest(State(app): State<Arc<App>>, headers: HeaderMap) -> WebResult<Response> {
+    admin(&app, &headers)?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/yaml; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"slack-app-manifest.yml\"",
+            ),
+        ],
+        include_str!("../../docs/slack-app-manifest.yml"),
+    )
+        .into_response())
+}
+
 async fn setup_page(
     State(app): State<Arc<App>>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -475,6 +580,11 @@ async fn setup_page(
         return Ok(Redirect::to("/login").into_response());
     }
     let lang = lang(&query);
+    let requested_platform = query
+        .get("platform")
+        .map(|platform| setup::parse_platform(platform))
+        .transpose()
+        .map_err(|_| WebError::validation())?;
     let mut page = page(lang, "panel.title.setup", "")?;
     page.authenticated = info.scope == auth::SessionScope::Admin;
     let mut step = query
@@ -496,6 +606,10 @@ async fn setup_page(
         let draft = drafts
             .entry(draft_key(&token))
             .or_insert_with(|| setup::Draft::new(&config));
+        if requested_platform.is_some() {
+            // Choosing a card only renders its form. CSRF-protected POST owns draft changes.
+            step = 2;
+        }
         step = step.min(draft.step());
     }
     page.setup_steps(step).map_err(|_| WebError::validation())?;
@@ -526,34 +640,121 @@ async fn setup_page(
             vec![button(lang, "panel.action.continue")],
         ));
     } else {
-        let values = {
-            let config = app.config.lock();
-            let mut drafts = app.drafts.lock();
-            drafts.retain(|_, draft| draft.expires > Instant::now());
+        let (values, selected_platform, application) = {
+            let drafts = app.drafts.lock();
             let draft = drafts
-                .entry(draft_key(&token))
-                .or_insert_with(|| setup::Draft::new(&config));
-            draft.values.clone()
+                .get(&draft_key(&token))
+                .ok_or_else(WebError::validation)?;
+            (
+                draft.values.clone(),
+                requested_platform.unwrap_or(draft.selected_platform),
+                draft.application.clone(),
+            )
         };
         let get = |key: &str| values.get(key).map_or("", String::as_str);
+        let config_fields = app.config.lock().fields();
         match step {
             2 => {
                 card.description = t(lang, "panel.setup.platform");
-                let mut input = field(
+                card.platform_cards = [
+                    PlatformKind::Telegram,
+                    PlatformKind::Discord,
+                    PlatformKind::Slack,
+                    PlatformKind::Matrix,
+                ]
+                .into_iter()
+                .map(|platform| views::PlatformCard {
+                    name: platform.as_str(),
+                    title: t(lang, &format!("panel.setup.{}.name", platform.as_str())),
+                    description: t(lang, &format!("panel.setup.{}.card", platform.as_str())),
+                    badge: if platform == PlatformKind::Telegram {
+                        t(lang, "panel.setup.recommended")
+                    } else {
+                        String::new()
+                    },
+                    href: format!(
+                        "/setup?step=2&platform={}&lang={}",
+                        platform.as_str(),
+                        lang.code()
+                    ),
+                    selected: platform == selected_platform,
+                })
+                .collect();
+                card.items.push(item(
                     lang,
-                    "DISCORD_TOKEN",
-                    "panel.settings.DISCORD_TOKEN.label",
-                    "password",
+                    "panel.setup.instructions",
+                    t(
+                        lang,
+                        &format!("panel.setup.{}.credentials", selected_platform.as_str()),
+                    ),
                     "",
-                );
-                input.help = t(lang, "panel.setup.keep_secret");
-                card.forms.push(form(
+                ));
+                if selected_platform == PlatformKind::Slack {
+                    card.items.push(Item {
+                        value: t(lang, "panel.setup.slack.manifest"),
+                        href: "/setup/slack-app-manifest.yml".into(),
+                        ..Default::default()
+                    });
+                    card.items.push(Item {
+                        value: t(lang, "panel.setup.slack.create_app"),
+                        href: "https://api.slack.com/apps".into(),
+                        ..Default::default()
+                    });
+                } else if selected_platform == PlatformKind::Telegram {
+                    card.items.push(Item {
+                        value: t(lang, "panel.setup.telegram.botfather"),
+                        href: "https://t.me/BotFather".into(),
+                        ..Default::default()
+                    });
+                } else if selected_platform == PlatformKind::Discord {
+                    card.items.push(Item {
+                        value: t(lang, "panel.setup.discord.portal"),
+                        href: "https://discord.com/developers/applications".into(),
+                        ..Default::default()
+                    });
+                }
+                let fields = platform_credentials(selected_platform)
+                    .iter()
+                    .map(|key| {
+                        let secret = !matches!(*key, "MATRIX_HOMESERVER" | "MATRIX_USER");
+                        let mut input = field(
+                            lang,
+                            key,
+                            &format!("panel.setup.field.{key}.label"),
+                            if secret { "password" } else { "text" },
+                            if secret { "" } else { get(key) },
+                        );
+                        input.help = t(lang, &format!("panel.setup.field.{key}.help"));
+                        input.read_only = config_fields
+                            .iter()
+                            .any(|view| view.spec.key == *key && view.read_only);
+                        if secret {
+                            input.help.push('\n');
+                            input.help.push_str(&t(lang, "panel.setup.keep_secret"));
+                            input.autocomplete = "off".into();
+                            input.configured = t(
+                                lang,
+                                if get(key).is_empty() {
+                                    "panel.settings.empty"
+                                } else {
+                                    "panel.settings.configured"
+                                },
+                            );
+                        }
+                        input
+                    })
+                    .collect();
+                let mut credentials = form(
                     "platform-form",
                     "/ui/setup/platform",
                     &info.csrf,
-                    vec![input],
+                    fields,
                     vec![button(lang, "panel.action.test_platform")],
-                ));
+                );
+                credentials
+                    .hidden
+                    .push(("platform".into(), selected_platform.as_str().into()));
+                card.forms.push(credentials);
             }
             3 => {
                 card.description = t(lang, "panel.setup.provider");
@@ -564,6 +765,9 @@ async fn setup_page(
                     "select",
                     get("PROVIDER"),
                 );
+                provider.read_only = config_fields
+                    .iter()
+                    .any(|view| view.spec.key == "PROVIDER" && view.read_only);
                 provider.choices = ["openrouter", "mistral"]
                     .into_iter()
                     .map(|value| views::Choice {
@@ -572,8 +776,22 @@ async fn setup_page(
                         selected: get("PROVIDER") == value,
                     })
                     .collect();
-                let model = field(lang, "MODEL", "panel.label.model", "text", get("MODEL"));
-                let key = field(lang, "key", "panel.label.provider_key", "password", "");
+                let mut model = field(lang, "MODEL", "panel.label.model", "text", get("MODEL"));
+                model.read_only = config_fields
+                    .iter()
+                    .any(|view| view.spec.key == "MODEL" && view.read_only);
+                let mut key = field(lang, "key", "panel.label.provider_key", "password", "");
+                let key_name = if get("PROVIDER") == "mistral" {
+                    "MISTRAL_KEY"
+                } else {
+                    "OPENROUTER_KEY"
+                };
+                // The generic key must accept a newly selected provider without JavaScript.
+                key.read_only = provider.read_only
+                    && config_fields
+                        .iter()
+                        .any(|view| view.spec.key == key_name && view.read_only);
+                key.help = t(lang, "panel.setup.keep_secret");
                 card.forms.push(form(
                     "provider-form",
                     "/ui/setup/provider",
@@ -585,23 +803,25 @@ async fn setup_page(
             4 => {
                 card.description = t(lang, "panel.setup.fit");
                 let mut fields = Vec::new();
-                for key in [
-                    "BOT_LANG",
-                    "TZ_OFFSET",
-                    "OWNER_ID",
-                    "GUILD_ID",
-                    "CHANNELS",
-                    "NEWS_CHANNEL",
-                    "NEWS_RSS",
-                ] {
+                for &key in fit_fields(selected_platform) {
                     let mut input = field(
                         lang,
                         key,
-                        &format!("panel.settings.{key}.label"),
+                        &format!("panel.setup.field.{key}.label"),
                         "text",
                         get(key),
                     );
-                    input.help = t(lang, &format!("panel.settings.{key}.help"));
+                    input.help = t(lang, &format!("panel.setup.field.{key}.help"));
+                    input.read_only = config_fields
+                        .iter()
+                        .any(|view| view.spec.key == key && view.read_only);
+                    if key == "OWNER_KEY" {
+                        input.help.push('\n');
+                        input.help.push_str(&t(
+                            lang,
+                            &format!("panel.setup.{}.owner", selected_platform.as_str()),
+                        ));
+                    }
                     if key == "BOT_LANG" {
                         input.kind = "select".into();
                         input.choices = ["en", "tr"]
@@ -631,32 +851,73 @@ async fn setup_page(
                 ));
             }
             _ => {
-                card.description = t(lang, "panel.setup.invite");
-                let application = {
-                    app.drafts
-                        .lock()
-                        .get(&draft_key(&token))
-                        .and_then(|draft| draft.application.clone())
-                };
+                card.description = t(
+                    lang,
+                    &format!("panel.setup.{}.invite", selected_platform.as_str()),
+                );
                 if let Some(application) = application {
-                    card.items
-                        .push(item(lang, "panel.label.application", application.name, ""));
-                    card.items.push(Item {
-                        label: t(lang, "panel.label.invite"),
-                        value: t(lang, "panel.action.invite"),
-                        href: application.invite_url,
-                        ..Default::default()
-                    });
+                    card.items.push(item(
+                        lang,
+                        "panel.label.application",
+                        application.name,
+                        &application.id,
+                    ));
+                    if let Some(workspace) = application.workspace {
+                        card.items
+                            .push(item(lang, "panel.setup.slack.workspace", workspace, ""));
+                    }
+                    if !application.invite_url.is_empty() {
+                        card.items.push(Item {
+                            label: t(lang, "panel.label.invite"),
+                            value: t(
+                                lang,
+                                &format!("panel.setup.{}.add", selected_platform.as_str()),
+                            ),
+                            href: application.invite_url,
+                            ..Default::default()
+                        });
+                    }
+                    if selected_platform == PlatformKind::Telegram {
+                        card.items.push(item(
+                            lang,
+                            "panel.setup.telegram.privacy_label",
+                            t(
+                                lang,
+                                match application.privacy_mode {
+                                    Some(true) => "panel.setup.telegram.privacy_on",
+                                    Some(false) => "panel.setup.telegram.privacy_off",
+                                    None => "panel.setup.telegram.privacy_unknown",
+                                },
+                            ),
+                            "",
+                        ));
+                    }
+                    card.items.push(item(
+                        lang,
+                        "panel.setup.verified_label",
+                        t(lang, "panel.setup.not_ready"),
+                        "",
+                    ));
                 } else {
                     page.error = t(lang, "panel.error.test");
                 }
-                let mut intents = field(lang, "intents", "panel.setup.intents", "checkbox", "on");
-                intents.required = true;
+                let mut access = field(
+                    lang,
+                    "access_confirmed",
+                    "panel.setup.access_confirmed",
+                    "checkbox",
+                    "on",
+                );
+                access.help = t(
+                    lang,
+                    &format!("panel.setup.{}.acknowledge", selected_platform.as_str()),
+                );
+                access.required = true;
                 card.forms.push(form(
                     "complete-form",
                     "/ui/setup/complete",
                     &info.csrf,
-                    vec![intents],
+                    vec![access],
                     vec![button(lang, "panel.action.start")],
                 ));
             }
@@ -666,6 +927,14 @@ async fn setup_page(
         card.items.push(Item {
             value: t(lang, "panel.action.back"),
             href: format!("/setup?step={}&lang={}", step - 1, lang.code()),
+            ..Default::default()
+        });
+    }
+    if info.scope == auth::SessionScope::Admin {
+        card.items.push(Item {
+            value: t(lang, "panel.setup.more_platforms"),
+            detail: t(lang, "panel.setup.more_platforms_help"),
+            href: format!("/settings?lang={}", lang.code()),
             ..Default::default()
         });
     }
@@ -862,40 +1131,58 @@ async fn test_platform(
         .clone()
         .try_acquire_owned()
         .map_err(|_| auth::AuthError::Busy)?;
-    let supplied = input
-        .get("DISCORD_TOKEN")
-        .filter(|value| !value.is_empty())
-        .cloned();
-    let token = {
+    let (platform, attempt, credentials) = {
         let config = app.config.lock();
         let mut drafts = app.drafts.lock();
         drafts.retain(|_, draft| draft.expires > Instant::now());
         let draft = drafts
             .entry(draft_key(&session))
             .or_insert_with(|| setup::Draft::new(&config));
-        supplied.unwrap_or_else(|| {
-            draft
-                .values
-                .get("DISCORD_TOKEN")
-                .cloned()
-                .unwrap_or_default()
-        })
+        let platform = input
+            .get("platform")
+            .map(|value| setup::parse_platform(value))
+            .transpose()
+            .map_err(|_| WebError::validation())?
+            .unwrap_or(draft.selected_platform);
+        let attempt = reserve_platform(draft, platform);
+        let config_fields = config.fields();
+        let credentials: HashMap<String, String> = platform_credentials(platform)
+            .iter()
+            .map(|key| {
+                let supplied = input.get(*key).filter(|value| !value.is_empty());
+                if config_fields
+                    .iter()
+                    .any(|view| view.spec.key == *key && view.read_only)
+                {
+                    if supplied.is_some_and(|value| value != config.get(key)) {
+                        return Err(WebError::validation());
+                    }
+                    return Ok(((*key).to_owned(), config.get(key).to_owned()));
+                }
+                let value = supplied
+                    .or_else(|| draft.values.get(*key))
+                    .cloned()
+                    .unwrap_or_default();
+                Ok(((*key).to_owned(), value))
+            })
+            .collect::<WebResult<_>>()?;
+        (platform, attempt, credentials)
     };
-    let application = setup::test_platform(&token).await.map_err(|_| {
-        WebError::new(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "platform_test_failed",
-            "panel.error.test",
-        )
-    })?;
+    let application = setup::test_chat_platform(platform, &credentials)
+        .await
+        .map_err(|_| {
+            WebError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "platform_test_failed",
+                "panel.error.test",
+            )
+        })?;
     {
         let mut drafts = app.drafts.lock();
         let draft = drafts
             .get_mut(&draft_key(&session))
             .ok_or_else(WebError::validation)?;
-        draft.values.insert("DISCORD_TOKEN".into(), token);
-        draft.application = Some(application.clone());
-        draft.expires = Instant::now() + std::time::Duration::from_secs(900);
+        publish_platform(draft, attempt, application.clone(), credentials)?;
     }
     Ok(application)
 }
@@ -906,7 +1193,10 @@ async fn ui_platform(
     Form(input): Form<HashMap<String, String>>,
 ) -> WebResult<Redirect> {
     test_platform(&app, &headers, peer, &input).await?;
-    Ok(Redirect::to("/setup?step=3"))
+    Ok(Redirect::to(&format!(
+        "/setup?step=3&lang={}",
+        lang(&input).code()
+    )))
 }
 async fn api_platform(
     State(app): State<Arc<App>>,
@@ -935,6 +1225,11 @@ async fn test_provider(
         let draft = drafts
             .entry(draft_key(&session))
             .or_insert_with(|| setup::Draft::new(&config));
+        if draft.expires <= Instant::now() || draft.step() < 3 {
+            return Err(WebError::validation());
+        }
+        draft.provider_verified = false;
+        draft.fit_completed = false;
         let provider = input
             .get("PROVIDER")
             .cloned()
@@ -944,6 +1239,23 @@ async fn test_provider(
         } else {
             "OPENROUTER_KEY"
         };
+        let config_fields = config.fields();
+        for (config_key, form_key) in [
+            ("PROVIDER", "PROVIDER"),
+            (key_name, "key"),
+            ("MODEL", "MODEL"),
+        ] {
+            if config_fields
+                .iter()
+                .any(|view| view.spec.key == config_key && view.read_only)
+                && input
+                    .get(form_key)
+                    .filter(|value| !value.is_empty())
+                    .is_some_and(|value| value != config.get(config_key))
+            {
+                return Err(WebError::validation());
+            }
+        }
         let key = input
             .get("key")
             .filter(|value| !value.is_empty())
@@ -999,7 +1311,10 @@ async fn ui_provider(
     Form(input): Form<HashMap<String, String>>,
 ) -> WebResult<Redirect> {
     test_provider(&app, &headers, peer, &input).await?;
-    Ok(Redirect::to("/setup?step=4"))
+    Ok(Redirect::to(&format!(
+        "/setup?step=4&lang={}",
+        lang(&input).code()
+    )))
 }
 async fn api_provider(
     State(app): State<Arc<App>>,
@@ -1016,33 +1331,38 @@ async fn ui_fit(
     Form(input): Form<HashMap<String, String>>,
 ) -> WebResult<Redirect> {
     let session = mutation(&app, &headers, input.get("csrf").map_or("", String::as_str))?;
+    let config_fields = app.config.lock().fields();
+    let mut drafts = app.drafts.lock();
+    let draft = drafts
+        .get_mut(&draft_key(&session))
+        .filter(|draft| draft.expires > Instant::now() && draft.step() >= 4)
+        .ok_or_else(WebError::validation)?;
+    draft.fit_completed = false;
     let mut values = HashMap::new();
-    for key in [
-        "BOT_LANG",
-        "TZ_OFFSET",
-        "OWNER_ID",
-        "GUILD_ID",
-        "CHANNELS",
-        "NEWS_CHANNEL",
-        "NEWS_RSS",
-    ] {
+    for &key in fit_fields(draft.selected_platform) {
         if let Some(value) = input.get(key) {
+            if let Some(view) = config_fields
+                .iter()
+                .find(|view| view.spec.key == key && view.read_only)
+            {
+                if value != view.effective.value.as_deref().unwrap_or("") {
+                    return Err(WebError::validation());
+                }
+                continue;
+            }
             values.insert(
                 key.to_owned(),
                 crate::config::validate_value(key, value).map_err(|_| WebError::validation())?,
             );
         }
     }
-    let mut drafts = app.drafts.lock();
-    let draft = drafts
-        .get_mut(&draft_key(&session))
-        .filter(|draft| {
-            draft.expires > Instant::now() && draft.application.is_some() && draft.provider_verified
-        })
-        .ok_or_else(WebError::validation)?;
+    // Only the selected platform's access keys are accepted; other connections stay intact.
     draft.values.extend(values);
     draft.fit_completed = true;
-    Ok(Redirect::to("/setup?step=5"))
+    Ok(Redirect::to(&format!(
+        "/setup?step=5&lang={}",
+        lang(&input).code()
+    )))
 }
 async fn complete(
     app: Arc<App>,
@@ -1050,26 +1370,45 @@ async fn complete(
     input: HashMap<String, String>,
 ) -> WebResult<()> {
     let session = mutation(&app, headers, input.get("csrf").map_or("", String::as_str))?;
-    if input.get("intents").map(String::as_str) != Some("on") {
+    if input.get("access_confirmed").map(String::as_str) != Some("on") {
         return Err(WebError::validation());
     }
-    let (values, revision) = {
+    let (patch, revision) = {
         let drafts = app.drafts.lock();
         let draft = drafts
             .get(&draft_key(&session))
-            .filter(|draft| {
-                draft.expires > Instant::now()
-                    && draft.application.is_some()
-                    && draft.provider_verified
-                    && draft.fit_completed
-            })
+            .filter(|draft| draft.expires > Instant::now() && draft.step() == 5)
             .ok_or_else(WebError::validation)?;
-        (draft.values.clone(), draft.revision.clone())
+        let platform = draft.selected_platform;
+        let provider_key = if draft
+            .values
+            .get("PROVIDER")
+            .is_some_and(|value| value == "mistral")
+        {
+            "MISTRAL_KEY"
+        } else {
+            "OPENROUTER_KEY"
+        };
+        let patch: Patch = draft
+            .values
+            .iter()
+            .filter(|(key, _)| {
+                platform_credentials(platform).contains(&key.as_str())
+                    || fit_fields(platform).contains(&key.as_str())
+                    || matches!(key.as_str(), "PROVIDER" | "MODEL")
+                    || key.as_str() == provider_key
+            })
+            .map(|(key, value)| {
+                (
+                    key.clone(),
+                    PatchValue::Replace {
+                        value: value.clone(),
+                    },
+                )
+            })
+            .collect();
+        (patch, draft.revision.clone())
     };
-    let patch: Patch = values
-        .into_iter()
-        .map(|(key, value)| (key, PatchValue::Replace { value }))
-        .collect();
     let permit = app
         .tests
         .clone()
@@ -1107,15 +1446,13 @@ async fn complete(
             ));
         }
         let mut config = app_save.config.lock();
-        let patch: Patch = patch
-            .into_iter()
-            .filter(|(key, _)| {
-                !config
-                    .fields()
-                    .iter()
-                    .any(|field| field.spec.key == key && field.read_only)
-            })
-            .collect();
+        let fields = config.fields();
+        let mut patch = patch;
+        patch.retain(|key, _| {
+            !fields
+                .iter()
+                .any(|field| field.spec.key == key && field.read_only)
+        });
         let candidate = config
             .validate_patch(&patch)
             .map_err(|_| WebError::validation())?;
@@ -1159,8 +1496,9 @@ async fn ui_complete(
     headers: HeaderMap,
     Form(input): Form<HashMap<String, String>>,
 ) -> WebResult<Redirect> {
+    let language = lang(&input);
     complete(app, &headers, input).await?;
-    Ok(Redirect::to("/"))
+    Ok(Redirect::to(&format!("/?lang={}", language.code())))
 }
 async fn api_complete(
     State(app): State<Arc<App>>,
