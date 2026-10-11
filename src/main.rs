@@ -88,22 +88,34 @@ async fn main() -> Result<(), BotError> {
         bot.chat_cli().await;
         return Ok(());
     }
-    let token = match setting("DISCORD_TOKEN") {
-        Ok(token) => token,
-        Err(_) => {
-            eprintln!("DISCORD_TOKEN is missing. Run `discord-bot init` (or `cargo run -- init`) to create .env.");
-            std::process::exit(1);
-        }
-    };
-    let bot = Bot::setup()?;
-
-    platform::runtime::run(
-        bot,
-        vec![platform::runtime::ConnectionConfig::Discord {
+    let mut connections = Vec::new();
+    if let Ok(token) = setting("DISCORD_TOKEN") {
+        connections.push(platform::runtime::ConnectionConfig::Discord {
             connection: ConnectionId::new("discord-default"),
             token,
-        }],
-    )
-    .await
+        });
+    }
+    match (setting("SLACK_APP_TOKEN"), setting("SLACK_BOT_TOKEN")) {
+        (Ok(app_token), Ok(bot_token)) => {
+            connections.push(platform::runtime::ConnectionConfig::Slack {
+                connection: ConnectionId::new("slack-default"),
+                app_token,
+                bot_token,
+            })
+        }
+        (Err(_), Err(_)) => {}
+        _ => {
+            return Err(platform::PlatformError::Transport(
+                strings::t("startup.slack_token_pair").into(),
+            )
+            .into())
+        }
+    }
+    if connections.is_empty() {
+        eprintln!("{}", strings::t("startup.no_platform"));
+        std::process::exit(1);
+    }
+    let bot = Bot::setup()?;
+    platform::runtime::run(bot, connections).await
 }
 include!("bot/tests/tests.rs");

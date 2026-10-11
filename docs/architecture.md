@@ -1,17 +1,17 @@
 # Architecture
 
-Discord events enter the chat engine. Replies combine the core persona, evolving notes, retrieved memory, and the current task. Finished chats are queued for background memory analysis. This changes reply context, not model weights; there is no fixed 12-message conversation limit.
+Platform events enter the chat engine through the shared v2-core boundary. Discord and Slack Socket Mode are enabled transports; configured connections can run simultaneously. Replies combine the core persona, evolving notes, retrieved memory, and the current task. Finished chats are queued for background memory analysis. This changes reply context, not model weights; there is no fixed 12-message conversation limit.
 
 ## Data boundaries
 
 ```mermaid
 flowchart TD
-    Discord[Discord events / accessible history] --> Chat[Chat engine]
+    Platforms[Discord / approved Slack events and bounded history] --> Chat[Chat engine]
     Clock[Sleep and growth stages] --> Chat
     Chat --> Model[OpenRouter / Mistral / configured endpoint]
     Model --> Reply[Replies / silence / reactions]
-    Reply --> Discord
-    Discord --> Agents[Background analysis]
+    Reply --> Platforms
+    Platforms --> Agents[Background analysis]
     Web[News / page reading] --> Agents
     Agents --> Model
     Agents --> Memory[Local redb records]
@@ -20,7 +20,7 @@ flowchart TD
     Memory --> Archive[Local overflow archive]
 ```
 
-Selected messages, saved notes, and optionally images leave the host for model processing. A first scan reads up to 14 days of accessible text history, subject to configured scope and permissions. Observation continues while asleep. Firecrawl receives URLs/search queries when configured. [Privacy and retention](setup-guide.md#privacy) are deployment concerns, not properties supplied by redb.
+Selected messages, saved notes, and optionally images leave the host for model processing. Discord's first scan reads up to 14 days of accessible text history, subject to configured scope and permissions. Slack history is bounded, membership-sensitive and rate-limited; missing/blank `SLACK_CHANNELS` denies all learning. Observation continues while asleep. All connections share the brain: source-qualified IDs prevent collisions, not cross-channel information flow. Only trusted approved rooms should be included. Firecrawl receives URLs/search queries when configured. [Privacy and retention](setup-guide.md#privacy) and [Slack onboarding](setup-guide.md#slack-socket-mode) are deployment concerns, not properties supplied by redb.
 
 ## Source layout
 
@@ -35,6 +35,7 @@ Selected messages, saved notes, and optionally images leave the host for model p
 | `src/bot/cycle/` | background loops, memory queues and actions |
 | `src/command.rs`, `src/command/` | shared typed actions, validation and administrative read models |
 | `src/platform/discord/` | native gateway, SDK transport, slash registration, UI cards/modals and renderer |
+| `src/platform/slack/` | Socket Mode runner, Web API transport, normalized event decoder and Slack-safe text renderer |
 | `src/agents.rs`, `src/agenda.rs` | analysis and web/news work |
 | `src/memory.rs`, `src/migrate.rs` | redb records, retrieval, summarization/archive support and legacy import |
 | `src/growth.rs`, `src/sleep.rs`, `src/travel.rs` | growth stages, clock/sleep, Turkish calendar |
@@ -93,8 +94,8 @@ personality decisions. Shared ingress types are `IncomingMessage`, `ReactionEven
 `ChatEvent`, and `EventEnvelope`; account identity is connection-local.
 `ConversationKey` includes optional topic/thread scope for adapter routing.
 Explicit native conversions remain inside Discord transport/UI boundaries.
-Memory has completed its canonical schema-v2 cutover. Discord is the only enabled
-runtime transport; the interface does not advertise unimplemented networks.
+Memory has completed its canonical schema-v2 cutover. Discord and Slack keep native
+protocol details in their adapters, rather than leaking them into the shared engine.
 
 Capabilities describe usable room permissions: ordinary-message visibility,
 history/decryption, replies/threads, sending/reactions/edits/deletes/typing,
@@ -107,6 +108,71 @@ selection, safe content, welcome and reply-user mentions, custom emoji labels,
 thought/stealth rendering, slash registration and private UI builder semantics.
 They are not live Discord network probes. Persisted settings-button `kapali`
 remains distinct from slash option `kapat`; existing Discord quirks are retained.
+
+### Slack Socket Mode boundary
+
+`src/platform/slack/runner.rs` opens Socket Mode with the separate app-level
+`SLACK_APP_TOKEN` (`xapp-`, `connections:write`), acknowledges envelopes and routes
+normalized events into shared ingress. Web API calls use `SLACK_BOT_TOKEN`
+(`xoxb-`); authentication obtains the workspace/account identity. Both tokens are
+required together. Installation permissions come from
+[`slack-app-manifest.yml`](slack-app-manifest.yml), with channel events and no
+direct-message subscriptions or slash commands.
+
+`events.rs` preserves timestamps as text identities and converts timestamp
+fractions to milliseconds without floating-point rounding. Slack users are
+workspace-qualified (`slack:user:<team>:<user>`); rooms likewise include the team
+and native channel. Structured mentions, thread/reply scope, edits/deletes,
+member joins, reactions, and native file identities cross the boundary without
+Slack SDK types or authenticated URLs. User display-name lookup can enrich ID
+fallbacks without changing durable identity.
+
+`transport.rs` makes thin JSON Web API requests with **`reqwest =0.12.28`** and
+handles Slack API failures, HTTP rate limits and `Retry-After` as platform errors.
+Socket Mode uses **`tokio-tungstenite =0.30.0`**, with
+**`futures-util =0.3.34`** for stream/sink operations. Room membership and explicit
+`SLACK_CHANNELS` approval bound collection. Short cache locks and the history
+reservation gate are released before sleep/network awaits; the rate gate
+reserves time, not ownership of a network request.
+`SLACK_HISTORY_TIER` defaults to `internal` (at least one-second spacing,
+at most 100 messages/page); `restricted` selects at least 60-second spacing
+and at most 15 messages/page for commercial non-Marketplace apps. HTTP 429
+`Retry-After` updates the gate in either mode; requests are not automatically
+retried.
+
+The deliberately narrow client avoids coupling the core to a broad Slack SDK's
+types and dependency/API churn. The alternative evaluated was
+[`slack-morphism 2.31.0`](https://docs.rs/slack-morphism/2.31.0/slack_morphism/).
+Its optional integrations include axum/hyper and Socket Mode WebSocket support.
+Those integrations are useful for
+other deployments but unnecessary for this adapter. Pinning the direct
+[`tokio-tungstenite 0.30.0`](https://docs.rs/tokio-tungstenite/0.30.0/tokio_tungstenite/)
+dependency keeps upgrades deliberate. This is a
+maintenance choice, not a claim that slack-morphism is broken or that either
+client was live-verified.
+
+Slack advertises no typing indicator or per-channel nickname capability and
+does not mutate the account profile as a fallback. Known Unicode reactions map
+to Slack emoji names; native custom names pass through, and unknown Unicode is
+explicitly unsupported. Own-message edits/deletes, thread-aware output, bounded
+history and authenticated native-file resolution use the shared transport
+contract. `render.rs` keeps raw chunks within 3,900 Unicode scalars and splits
+escaping expansion to a 4,000-scalar rendered target.
+
+Text administration (`!status` / `@bot status`) enters `AdminService`; results
+use recipient-only `chat.postEphemeral`, never public or DM fallback. Qualified
+`OWNER_KEY` supplies owner policy. `IMAGE_ANALYSIS=off` prevents private-file
+image analysis; enabling it permits selected image bytes to leave for the
+configured model service.
+
+Offline wizard tests cover Slack-only `.env` generation while retaining Discord
+setup. A `serde_yaml` parsing test checks the manifest's exact bot scopes/events,
+Socket Mode flag, and absence of slash commands/user scopes. Deliberately ignored
+live tests run only with real Slack token environment variables and optional
+`SLACK_TEST_CHANNEL`: `cargo test --locked slack:: -- --ignored`. Such a command
+is not a live-verification claim; the integration owner's fake-token release
+smoke verifies startup/failure handling separately.
+
 
 ### Fallible memory API
 
@@ -134,6 +200,8 @@ return-position `impl Future + Send` operations: `send`, `edit`, `delete`,
 `react`, `typing`, `set_nickname`, `fetch_history`, `list_rooms`, and
 `resolve_media`. `Adapter` match-delegates to concrete implementations, producing
 statically generated futures rather than boxed hot-path trait objects.
+The Slack concrete variant has one boxed allocation per configured connection to
+keep the `Adapter` enum compact; operations do not box or dynamically dispatch futures.
 
 `OutgoingMessage<'a>` borrows text through `Cow`, carries structured default-deny
 mention/reply policies, attachment sources and optional card/thought presentation.

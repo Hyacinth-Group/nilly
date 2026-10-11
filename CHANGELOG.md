@@ -4,6 +4,12 @@ Notable changes are recorded here in [Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Added
+- Slack Socket Mode adapter with explicitly approved `SLACK_CHANNELS`, workspace-qualified identities, thread-aware replies, native private-file resolution, bounded history and supported Slack reactions.
+- Slack-only wizard setup with hidden `xapp-`/`xoxb-` tokens, qualified `OWNER_KEY`, bilingual Slack UI, exact app manifest and beginner installation/privacy/rate-limit guidance; Discord setup remains the default.
+- Concurrent Discord/Slack connections sharing the brain, with private Slack text-administration replies and no Slack slash-command registration.
+- Offline Slack wizard/manifest coverage and opt-in ignored environment-gated live-test documentation; no live-workspace verification is implied.
+
 ### Changed
 - Default prompts identify the bot honestly and omit a fictional university biography and fixed political identity.
 - Shorter bilingual READMEs explain the memory mechanism, collection scope, external processing, and unmeasured running cost.

@@ -181,5 +181,16 @@
   "admin.error.reason.bounds": "izin verilen sınırların dışında",
   "admin.error.reason.choice": "bilinmeyen seçim",
   "admin.error.reason.default": "varsayılan değer eksik",
-  "admin.error.reason.arguments": "çok fazla argüman"
+  "admin.error.reason.arguments": "çok fazla argüman",
+  "init.platform": "Platform [discord/slack] (Enter = discord): ",
+  "init.secret.hidden": "giriş gizli",
+  "init.secret.piped": "borudan giriş",
+  "init.slack.app_token": "Slack uygulama düzeyi token (zorunlu xapp-; Basic Information -> App-Level Tokens -> connections:write; {secret_hint}): ",
+  "init.slack.bot_token": "Slack bot token (zorunlu xoxb-; OAuth & Permissions -> Install to Workspace; {secret_hint}): ",
+  "init.slack.channels": "Onaylı Slack kanal kimlikleri (virgülle ayrılmış C…/G… kimlikleri, kanal adları değil; Enter = hiçbir kanaldan öğrenme): ",
+  "init.slack.owner": "Sahibin nitelikli Slack kimliği (isteğe bağlı; slack:user:T_WORKSPACE_ID:U_USER_ID; Enter = sahip yok, status dahil Slack yönetimi reddedilir): ",
+  "startup.no_platform": "Platform token ayarlanmamış. .env oluşturmak için `discord-bot init` çalıştır.",
+  "startup.slack_token_pair": "Slack için hem SLACK_APP_TOKEN hem de SLACK_BOT_TOKEN gerekir.",
+  "slack.nickname.unsupported": "Slack kanal takma adlarını değiştiremez; kişiliğin adı bot hafızasında kalır.",
+  "init.slack.next_steps": "1. https://api.slack.com/apps adresinde docs/slack-app-manifest.yml ile uygulama oluştur. Socket Mode açık kalsın; bot izinlerini ve olay aboneliklerini kontrol et.\n2. Uygulamayı çalışma alanına kur (izinler değişince yeniden kur). connections:write izniyle ayrı bir xapp- uygulama düzeyi token oluştur; bu izni bot izinlerine ekleme.\n3. /invite @bot ile botu onaylı her genel veya özel kanala davet et. Başlatmadan önce SLACK_CHANNELS değerine yerel kanal kimliklerini yaz; boşsa öğrenme yok. Paylaşılan hafızaya yalnız güvenilir ve onaylı kanalları dahil et.\n4. Başlat: discord-bot (ikili), cargo run --release (kaynak) veya docker compose up -d (Docker). OWNER_KEY ile tanımlanan sahip olarak onaylı kanalda !status veya @bot status gönder (/status değil); boş OWNER_KEY Slack yönetimini reddeder. Yanıtlar yalnız sana görünen geçici mesajlardır. Sınırlar ve gizlilik: docs/setup-guide.md#slack-socket-mode."
 }

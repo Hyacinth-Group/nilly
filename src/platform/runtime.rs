@@ -51,6 +51,11 @@ pub enum ConnectionConfig {
         connection: ConnectionId,
         token: String,
     },
+    Slack {
+        connection: ConnectionId,
+        app_token: String,
+        bot_token: String,
+    },
 }
 struct SeenEvents {
     set: HashSet<(ConnectionId, EventKey)>,
@@ -88,24 +93,48 @@ pub(crate) async fn run(bot: Arc<Bot>, configs: Vec<ConnectionConfig>) -> Result
     let mut runners = JoinSet::new();
     let mut ids = HashSet::new();
     for config in &configs {
-        let ConnectionConfig::Discord { connection, .. } = config;
+        let (connection, platform) = match config {
+            ConnectionConfig::Discord { connection, .. } => (connection, PlatformKind::Discord),
+            ConnectionConfig::Slack { connection, .. } => (connection, PlatformKind::Slack),
+        };
         if !ids.insert(connection.clone()) {
             return Err(PlatformError::Transport("duplicate configured connection".into()).into());
         }
         bot.adapters
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .configure(connection, PlatformKind::Discord)?;
+            .configure(connection, platform)?;
     }
     for config in configs {
-        let ConnectionConfig::Discord { connection, token } = config;
+        let connection = match &config {
+            ConnectionConfig::Discord { connection, .. }
+            | ConnectionConfig::Slack { connection, .. } => connection.clone(),
+        };
         let bot = bot.clone();
         let ingress = ingress.clone();
         let shutdown = shutdown_rx.clone();
         runners.spawn(async move {
-            let result =
-                super::discord::runner::run(bot, connection.clone(), token, ingress, shutdown)
-                    .await;
+            let result = match config {
+                ConnectionConfig::Discord { token, .. } => {
+                    super::discord::runner::run(bot, connection.clone(), token, ingress, shutdown)
+                        .await
+                }
+                ConnectionConfig::Slack {
+                    app_token,
+                    bot_token,
+                    ..
+                } => {
+                    super::slack::runner::run(
+                        bot,
+                        connection.clone(),
+                        app_token,
+                        bot_token,
+                        ingress,
+                        shutdown,
+                    )
+                    .await
+                }
+            };
             (connection, result)
         });
     }

@@ -181,5 +181,16 @@
   "admin.error.reason.bounds": "outside permitted bounds",
   "admin.error.reason.choice": "unknown choice",
   "admin.error.reason.default": "missing default",
-  "admin.error.reason.arguments": "too many arguments"
+  "admin.error.reason.arguments": "too many arguments",
+  "init.platform": "Platform [discord/slack] (Enter = discord): ",
+  "init.secret.hidden": "input hidden",
+  "init.secret.piped": "piped input",
+  "init.slack.app_token": "Slack app-level token (required xapp-; Basic Information -> App-Level Tokens -> connections:write; {secret_hint}): ",
+  "init.slack.bot_token": "Slack bot token (required xoxb-; OAuth & Permissions -> Install to Workspace; {secret_hint}): ",
+  "init.slack.channels": "Approved Slack channel IDs (comma-separated C…/G… IDs, not names; Enter = deny all learning): ",
+  "init.slack.owner": "Owner's qualified Slack identity (optional; slack:user:T_WORKSPACE_ID:U_USER_ID; Enter = no owner, Slack administration including status denied): ",
+  "startup.no_platform": "No platform tokens configured. Run `discord-bot init` to create .env.",
+  "startup.slack_token_pair": "Slack requires both SLACK_APP_TOKEN and SLACK_BOT_TOKEN.",
+  "slack.nickname.unsupported": "Slack cannot change channel nicknames; the personality name stays in bot memory.",
+  "init.slack.next_steps": "1. Create an app from docs/slack-app-manifest.yml at https://api.slack.com/apps. Keep Socket Mode enabled; check the bot scopes and event subscriptions.\n2. Install the app to your workspace (reinstall after permission changes). Create a separate xapp- app-level token with connections:write; never put that scope in bot scopes.\n3. Invite the bot to each approved public or private channel with /invite @bot. Set SLACK_CHANNELS to their native IDs before starting; empty means no learning. Only trusted, approved channels belong in the shared brain.\n4. Start: discord-bot (binary), cargo run --release (source), or docker compose up -d (Docker). As the configured OWNER_KEY owner, send !status or @bot status in an approved channel (not /status); blank OWNER_KEY denies Slack administration. Replies are private ephemeral messages. See docs/setup-guide.md#slack-socket-mode for limits and privacy."
 }

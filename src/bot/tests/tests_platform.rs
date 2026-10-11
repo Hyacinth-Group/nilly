@@ -135,9 +135,10 @@
         };
         bot.message_created(&connection, message.clone()).await;
         let (adapter, _) = bot.transport(&room.conversation()).unwrap();
-        match adapter.as_ref() {
-            platform::Adapter::Discord(adapter) => assert_eq!(adapter.media_resolution_count(), 0),
-        }
+        let platform::Adapter::Discord(adapter) = adapter.as_ref() else {
+            panic!("expected Discord fixture adapter");
+        };
+        assert_eq!(adapter.media_resolution_count(), 0);
         {
             let state = bot.state();
             assert_eq!(state.recent_messages.back().unwrap(), "Ada: look");
