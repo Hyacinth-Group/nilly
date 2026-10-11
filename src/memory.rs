@@ -61,7 +61,14 @@ pub fn init_result(path: &Path) -> Result<(), BotError> {
     if DB.get().is_some() {
         return Ok(());
     }
-    let database = Database::create(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let database = Database::builder().create_file(options.open(path)?)?;
     let txn = database.begin_write()?;
     {
         txn.open_table(CONTENT)?;

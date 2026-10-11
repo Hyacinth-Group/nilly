@@ -61,8 +61,7 @@ pub async fn entry() -> Result<bool, BotError> {
         if std::env::args().nth(2).as_deref() != Some("reset-password") {
             return Err("usage: discord-bot panel reset-password".into());
         }
-        let directory = PathBuf::from(crate::STATE_DIR);
-        std::fs::create_dir_all(&directory)?;
+        let directory = state_directory()?;
         crate::memory::init_result(&directory.join("hafiza.redb"))?;
         let auth = auth::AuthService::new().await?;
         let password = auth.reset_password().await?;
@@ -84,6 +83,24 @@ pub async fn entry() -> Result<bool, BotError> {
     Ok(true)
 }
 
+fn state_directory() -> Result<PathBuf, BotError> {
+    let directory = PathBuf::from(crate::STATE_DIR);
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&directory)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(directory)
+}
+
 async fn run(config: config::Config) -> Result<(), BotError> {
     let bind = config.get("PANEL_BIND").to_string();
     let port: u16 = config.get("PANEL_PORT").parse()?;
@@ -99,13 +116,7 @@ async fn run(config: config::Config) -> Result<(), BotError> {
         eprintln!("WARNING: panel listens on a non-loopback address. Publish only to localhost or use a private tunnel. Public access requires a reviewed HTTPS proxy.");
     }
     let listener = tokio::net::TcpListener::bind((bind.as_str(), port)).await?;
-    let directory = PathBuf::from(crate::STATE_DIR);
-    std::fs::create_dir_all(&directory)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))?;
-    }
+    let directory = state_directory()?;
     crate::memory::init_result(&directory.join("hafiza.redb"))?;
     let auth = auth::AuthService::new().await?;
     if let Some(token) = auth.renew_claim()? {
@@ -229,19 +240,4 @@ async fn runtime_owner(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn setup_can_start_once_and_errors_are_recoverable() {
-        let mut state = Lifecycle::Unconfigured;
-        assert!(state.start().is_ok());
-        assert_eq!(state, Lifecycle::ConfiguredStarting);
-        assert!(state.start().is_err());
-        state = Lifecycle::Running;
-        assert!(state.start().is_err());
-        state = Lifecycle::ConfigurationError;
-        assert!(state.start().is_ok());
-        state = Lifecycle::Stopping;
-        assert!(state.start().is_err());
-    }
-}
+mod tests;

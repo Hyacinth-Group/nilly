@@ -371,6 +371,14 @@ impl AuthService {
         Self::from_store(Store::Shared(crate::memory::db())).await
     }
 
+    #[cfg(test)]
+    pub(super) async fn isolated(path: &std::path::Path) -> Result<Self, AuthError> {
+        Self::from_store(Store::Test(Arc::new(
+            Database::create(path).map_err(storage)?,
+        )))
+        .await
+    }
+
     async fn from_store(store: Store) -> Result<Self, AuthError> {
         let load_store = store.clone();
         let hash = tokio::task::spawn_blocking(move || load_hash(load_store.db()))
@@ -1078,6 +1086,36 @@ mod tests {
         assert!(matches!(
             service.preauth(peer()),
             Err(AuthError::SessionLimit)
+        ));
+    }
+
+    #[tokio::test]
+    async fn passive_authorization_does_not_extend_idle_expiry() {
+        let (service, _directory) = service().await;
+        let admin = admin(&service).await;
+        let touched = Instant::now() - Duration::from_secs(10);
+        service
+            .state()
+            .unwrap()
+            .sessions
+            .get_mut(&digest(admin.token.as_bytes()))
+            .unwrap()
+            .touched = touched;
+        service.require_admin_passive(&admin.token).unwrap();
+        assert_eq!(
+            service.state().unwrap().sessions[&digest(admin.token.as_bytes())].touched,
+            touched
+        );
+        service
+            .state()
+            .unwrap()
+            .sessions
+            .get_mut(&digest(admin.token.as_bytes()))
+            .unwrap()
+            .touched = Instant::now() - IDLE_TTL;
+        assert!(matches!(
+            service.require_admin_passive(&admin.token),
+            Err(AuthError::Required)
         ));
     }
 
