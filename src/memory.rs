@@ -392,60 +392,74 @@ pub fn add_event(channel: &str, event: &str) {
     );
 }
 
-// summaries for the modal display (most recently changed first)
+/// Administrative readers propagate access failures instead of presenting empty memory.
+pub fn person_summaries_result() -> Result<Vec<Person>, BotError> {
+    person_summaries_database(db_result()?)
+}
 
-/// Omits records without a canonical user key or a non-empty name.
-pub fn person_summaries() -> Vec<Person> {
-    let mut list = Vec::new();
-    for key in files("kisiler") {
+fn person_summaries_database(database: &Database) -> Result<Vec<Person>, BotError> {
+    let mut people = Vec::new();
+    for key in files_database(database, "kisiler")? {
         let Some(id) = platform::keys::parse_person_record(&key) else {
             continue;
         };
-        let person = Person::parse(&id, &read(&key));
-        if person.name.is_empty() {
-            continue;
+        let content = read_database(database, &key)?.unwrap_or_default();
+        let person = Person::parse(&id, &content);
+        if !person.name.is_empty() {
+            people.push(person);
         }
-        list.push(person);
     }
-    list
+    Ok(people)
 }
 
-// (topic name, latest note)
-/// Returns at most 30 topics with their latest notes.
-pub fn topic_summaries() -> Vec<(String, String)> {
-    files("konular")
+pub fn topic_summaries_result() -> Result<Vec<(String, String)>, BotError> {
+    topic_summaries_database(db_result()?)
+}
+
+fn topic_summaries_database(database: &Database) -> Result<Vec<(String, String)>, BotError> {
+    files_database(database, "konular")?
         .into_iter()
         .take(30)
         .map(|key| {
-            let content = read(&key);
+            let content = read_database(database, &key)?.unwrap_or_default();
             let latest = content
                 .lines()
                 .rev()
-                .find(|l| l.starts_with("- "))
-                .map(|l| l.trim_start_matches("- ").to_string())
+                .find(|line| line.starts_with("- "))
+                .map(|line| line.trim_start_matches("- ").to_string())
                 .unwrap_or_default();
-            let name = first_line(&content);
-            (name, latest)
+            Ok((first_line(&content), latest))
         })
         .collect()
 }
 
-// event records for the last `month_count` months: (month, "- " lines); newest month first.
-// looking only at the current month gave an empty view at the start of a new month
-pub fn event_months(month_count: usize) -> Vec<(String, Vec<String>)> {
-    files("olaylar")
+pub fn event_months_result(month_count: usize) -> Result<Vec<(String, Vec<String>)>, BotError> {
+    event_months_database(db_result()?, month_count)
+}
+
+fn event_months_database(
+    database: &Database,
+    month_count: usize,
+) -> Result<Vec<(String, Vec<String>)>, BotError> {
+    files_database(database, "olaylar")?
         .into_iter()
         .take(month_count)
         .map(|key| {
-            let month = stem(&key).to_string();
-            let lines: Vec<String> = read(&key)
+            let content = read_database(database, &key)?.unwrap_or_default();
+            let lines = content
                 .lines()
-                .filter(|l| l.starts_with("- "))
-                .map(|l| l.to_string())
+                .filter(|line| line.starts_with("- "))
+                .map(str::to_string)
                 .collect();
-            (month, lines)
+            Ok((stem(&key).to_string(), lines))
         })
         .collect()
+}
+
+pub fn read_person_result(id: &UserKey) -> Result<Person, BotError> {
+    let key = platform::keys::person_record(id);
+    let content = read_result(&key)?.unwrap_or_default();
+    Ok(Person::parse(id, &content))
 }
 
 // ---------- channel history ----------
@@ -945,6 +959,76 @@ pub(crate) mod test {
     }
 
     #[test]
+    fn administrative_summaries_propagate_database_table_failures() {
+        let path =
+            std::env::temp_dir().join(format!("admin-summary-error-{}.redb", std::process::id()));
+        let _ = fs::remove_file(&path);
+        let database = Database::create(&path).unwrap();
+        assert!(person_summaries_database(&database).is_err());
+        assert!(topic_summaries_database(&database).is_err());
+        assert!(event_months_database(&database, 3).is_err());
+        drop(database);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn administrative_summaries_preserve_identity_order_and_limits() {
+        let path =
+            std::env::temp_dir().join(format!("admin-summary-fixture-{}.redb", std::process::id()));
+        let _ = fs::remove_file(&path);
+        let database = Database::create(&path).unwrap();
+        let older = UserKey::discord(41);
+        let newer: UserKey = "telegram:user:41".parse().unwrap();
+        write_database(
+            &database,
+            &platform::keys::person_record(&older),
+            "# older\npuan: +2\n",
+            1,
+        )
+        .unwrap();
+        write_database(
+            &database,
+            &platform::keys::person_record(&newer),
+            "# newer\npuan: -2\n",
+            2,
+        )
+        .unwrap();
+        write_database(&database, "kisiler/41.md", "# unqualified\n", 3).unwrap();
+        let people = person_summaries_database(&database).unwrap();
+        assert_eq!(people.len(), 2);
+        assert_eq!(people[0].id, newer);
+        assert_eq!(people[1].id, older);
+        for index in 0..31 {
+            write_database(
+                &database,
+                &format!("konular/topic-{index}.md"),
+                &format!("# topic-{index}\n- first\n- latest-{index}\n"),
+                index,
+            )
+            .unwrap();
+        }
+        let topics = topic_summaries_database(&database).unwrap();
+        assert_eq!(topics.len(), 30);
+        assert_eq!(topics[0], ("topic-30".into(), "latest-30".into()));
+        assert_eq!(topics[29], ("topic-1".into(), "latest-1".into()));
+        for index in 1..=4 {
+            write_database(
+                &database,
+                &format!("olaylar/2026-0{index}.md"),
+                &format!("# month\nignored\n- entry-{index}\n"),
+                index,
+            )
+            .unwrap();
+        }
+        let events = event_months_database(&database, 3).unwrap();
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0], ("2026-04".into(), vec!["- entry-4".into()]));
+        assert_eq!(events[2], ("2026-02".into(), vec!["- entry-2".into()]));
+        drop(database);
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn canonical_person_summaries_index_and_retrieve_preserve_identity_and_order() {
         ensure_test_db();
         let discord = UserKey::discord(8_800_000_000_000_000_041);
@@ -968,7 +1052,8 @@ pub(crate) mod test {
         )
         .unwrap();
 
-        let summaries: Vec<Person> = person_summaries()
+        let summaries: Vec<Person> = person_summaries_result()
+            .unwrap()
             .into_iter()
             .filter(|person| person.id == discord || person.id == telegram)
             .collect();

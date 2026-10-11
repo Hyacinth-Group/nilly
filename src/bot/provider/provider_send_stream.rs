@@ -4,7 +4,6 @@ impl Bot {
     /// A stream read failure propagates only if no usable content was produced.
     async fn send_stream(
         &self,
-        _ctx: &Context,
         channel: &RoomKey,
         mut reader: StreamReader,
         context: StreamContext<'_>,

@@ -5,13 +5,14 @@
 // `BOT_LANG` (lang.rs).
 
 use super::*;
+use crate::command::read_models::{MetricsView, MindView, PersonView, SettingsView, StatusView};
+use crate::command::ThinkingSetting;
 
 const MODAL_LIMIT: usize = 4000; // discord TextInput value upper bound
 const FIELD_LIMIT: usize = 1024; // discord embed field value upper bound
 const LABEL_LIMIT: usize = 45; // modal title/label, select-menu option label
 const DESCRIPTION_LIMIT: usize = 100; // select-menu option description
 const PERSON_MENU_LIMIT: usize = 25; // discord select-menu option upper bound
-const TRIM_NOTE: &str = "\n… (sığmadı, kırpıldı)";
 
 // component ids
 pub const MIND_PERSON_PICK: &str = "mind_person_pick";
@@ -57,14 +58,15 @@ fn fit_to_limit(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
         return text.to_string();
     }
+    let trim_note = strings::t("modal.trim_note");
     let mut s: String = text
         .chars()
-        .take(limit - TRIM_NOTE.chars().count())
+        .take(limit - trim_note.chars().count())
         .collect();
     if let Some(end) = s.rfind(['\n', ' ']) {
         s.truncate(end);
     }
-    s.push_str(TRIM_NOTE);
+    s.push_str(trim_note);
     s
 }
 
@@ -88,23 +90,17 @@ fn month_name(month: &str) -> String {
 }
 
 // categories sorted by total tokens: "sohbet: 120 giriş + 80 çıkış · ..."
-fn token_breakdown(metrics: &Metrics) -> String {
-    use std::fmt::Write as _;
-    let mut sorted: Vec<(&'static str, &Usage)> = metrics
-        .categories
-        .iter()
-        .map(|(tag, k)| (*tag, k))
-        .collect();
-    sorted.sort_by_key(|(_, k)| std::cmp::Reverse(k.prompt_tokens + k.completion_tokens));
+fn token_breakdown(metrics: &MetricsView) -> String {
     let mut lines = String::new();
-    for (i, (tag, k)) in sorted.iter().enumerate() {
+    for (i, k) in metrics.categories.iter().enumerate() {
         if i > 0 {
             lines.push_str(" · ");
         }
-        let _ = write!(
-            lines,
-            "{tag}: {} giriş + {} çıkış",
-            k.prompt_tokens, k.completion_tokens
+        lines.push_str(
+            &strings::t("common.token_breakdown_template")
+                .replace("{tag}", &k.tag)
+                .replace("{input}", &k.prompt_tokens.to_string())
+                .replace("{output}", &k.completion_tokens.to_string()),
         );
     }
     lines
@@ -112,7 +108,7 @@ fn token_breakdown(metrics: &Metrics) -> String {
 
 // "{calls} çağrı · {input} giriş ({cache} önbellek) + {output} çıkış", the token summary
 // line shared by /durum and /zihin's bot-summary modal.
-fn token_summary(metrics: &Metrics) -> String {
+fn token_summary(metrics: &MetricsView) -> String {
     strings::t("common.token_template")
         .replace("{calls}", &metrics.calls.to_string())
         .replace("{input}", &metrics.input_tokens.to_string())
@@ -120,27 +116,22 @@ fn token_summary(metrics: &Metrics) -> String {
         .replace("{output}", &metrics.output_tokens.to_string())
 }
 
-fn awake_word(state: &State) -> &'static str {
-    if sleep::is_awake(state) {
+fn awake_word(state: &StatusView) -> &'static str {
+    if state.awake {
         strings::t("common.awake")
     } else {
         strings::t("common.asleep")
     }
 }
 
-fn travel_word() -> String {
-    travel::now()
-        .map(|s| s.place.to_string())
-        .unwrap_or_else(|| strings::t("common.no_travel").to_string())
-}
-
 // ---------- /zihin: embed card + menu/buttons ----------
 
 // the mind card: three columns (people / topics / events) + counters in the footer
-pub fn mind_embeds(state: &State) -> Vec<CreateEmbed> {
-    let people = memory::person_summaries();
-    let topics = memory::topic_summaries();
-    let events = memory::event_months(3);
+pub fn mind_embeds(view: &MindView) -> Vec<CreateEmbed> {
+    let state = &view.status;
+    let people = &view.people;
+    let topics = &view.topics;
+    let events = &view.events;
     let event_count: usize = events.iter().map(|(_, s)| s.len()).sum();
 
     let mut people_lines = String::new();
@@ -156,7 +147,7 @@ pub fn mind_embeds(state: &State) -> Vec<CreateEmbed> {
     for (name, latest) in topics.iter().take(8) {
         topic_lines += &format!("**{name}**");
         if !latest.is_empty() {
-            topic_lines += &format!(" · son: {latest}");
+            topic_lines += &strings::t("mind.topic_latest").replace("{latest}", latest);
         }
         topic_lines.push('\n');
     }
@@ -189,16 +180,15 @@ pub fn mind_embeds(state: &State) -> Vec<CreateEmbed> {
         }
     }
 
-    let growth = &state.growth;
     vec![CreateEmbed::new()
         .title(strings::t("mind.title"))
         .color(COLOR_MIND)
         .description(
             strings::t("mind.description")
-                .replace("{stage}", growth::stage(growth).name)
-                .replace("{day}", &(growth::days(growth) + 1).to_string())
+                .replace("{stage}", &state.stage)
+                .replace("{day}", &state.day.to_string())
                 .replace("{model}", &state.model)
-                .replace("{thinking}", state.thinking_mode.label()),
+                .replace("{thinking}", &state.thinking_label),
         )
         .field(
             strings::t("mind.people_field").replace("{count}", &people.len().to_string()),
@@ -217,8 +207,8 @@ pub fn mind_embeds(state: &State) -> Vec<CreateEmbed> {
         )
         .footer(CreateEmbedFooter::new(
             strings::t("mind.footer")
-                .replace("{name}", &state.bot_name)
-                .replace("{date}", &memory::date()),
+                .replace("{name}", &view.bot_name)
+                .replace("{date}", &view.date),
         ))]
 }
 
@@ -245,9 +235,9 @@ fn dash_if_empty(s: &str) -> String {
 
 // person detail menu: most recently changed, label name + score, description holds tags/note
 /// Offers at most `PERSON_MENU_LIMIT` people.
-fn person_options() -> Vec<CreateSelectMenuOption> {
-    memory::person_summaries()
-        .into_iter()
+fn person_options(people: &[PersonView]) -> Vec<CreateSelectMenuOption> {
+    people
+        .iter()
         .take(PERSON_MENU_LIMIT)
         .map(|p| {
             let mut description: Vec<String> = Vec::new();
@@ -274,9 +264,9 @@ fn person_options() -> Vec<CreateSelectMenuOption> {
         .collect()
 }
 
-pub fn mind_components() -> Vec<CreateActionRow> {
+pub fn mind_components(view: &MindView) -> Vec<CreateActionRow> {
     let mut rows: Vec<CreateActionRow> = Vec::new();
-    let options = person_options();
+    let options = person_options(&view.people);
     if !options.is_empty() {
         rows.push(CreateActionRow::SelectMenu(
             CreateSelectMenu::new(MIND_PERSON_PICK, CreateSelectMenuKind::String { options })
@@ -297,11 +287,11 @@ pub fn mind_components() -> Vec<CreateActionRow> {
     rows
 }
 
-pub fn mind_message(state: &State) -> CreateInteractionResponseMessage {
+pub fn mind_message_view(view: &MindView) -> CreateInteractionResponseMessage {
     CreateInteractionResponseMessage::new()
         .ephemeral(true)
-        .embeds(mind_embeds(state))
-        .components(mind_components())
+        .embeds(mind_embeds(view))
+        .components(mind_components(view))
 }
 
 // ---------- detail modals: each topic in its own labeled field ----------
@@ -346,8 +336,8 @@ fn build_modal(title: &str, custom_id: &str, sections: Vec<Section>) -> CreateMo
 }
 
 // person card: identity / impression / tags / facts / recent events in separate fields
-pub fn person_modal(id: &UserKey) -> CreateModal {
-    let p = memory::read_person(id);
+pub fn person_modal(p: &PersonView) -> CreateModal {
+    let id = &p.id;
     // Keep Discord's visible ID and modal ID unchanged; selectors carry domain keys.
     let display_id = match platform::discord::native_user(id) {
         Ok(native) => native.to_string(),
@@ -360,7 +350,9 @@ pub fn person_modal(id: &UserKey) -> CreateModal {
     };
     let mut sections: Vec<Section> = Vec::new();
 
-    let mut identity = format!("{}\nid: {}", p.name, display_id);
+    let mut identity = strings::t("person.identity_template")
+        .replace("{name}", &p.name)
+        .replace("{id}", &display_id);
     if !p.username.is_empty() {
         identity += &strings::t("person.username_line").replace("{username}", &p.username);
     }
@@ -423,8 +415,7 @@ pub fn person_modal(id: &UserKey) -> CreateModal {
 }
 
 // topics: most recently changed with their notes, the rest as a plain name list
-pub fn topics_modal() -> CreateModal {
-    let topics = memory::topic_summaries();
+pub fn topics_modal(topics: &[(String, String)]) -> CreateModal {
     let mut sections: Vec<Section> = Vec::new();
     let recent: Vec<String> = topics
         .iter()
@@ -456,9 +447,9 @@ pub fn topics_modal() -> CreateModal {
 }
 
 // events: one field per month, each month's most recent entries
-pub fn events_modal() -> CreateModal {
+pub fn events_modal(events: &[(String, Vec<String>)]) -> CreateModal {
     let mut sections: Vec<Section> = Vec::new();
-    for (month, lines) in memory::event_months(3) {
+    for (month, lines) in events {
         if lines.is_empty() {
             continue;
         }
@@ -469,7 +460,7 @@ pub fn events_modal() -> CreateModal {
             .map(|s| s.as_str())
             .collect();
         sections.push(Section::new(
-            month_name(&month),
+            month_name(month),
             format!("events_{month}"),
             shown.join("\n"),
         ));
@@ -478,18 +469,17 @@ pub fn events_modal() -> CreateModal {
 }
 
 // bot summary: status / tokens / myself / agenda in separate fields
-pub fn summary_modal(state: &State) -> CreateModal {
-    let growth = &state.growth;
+pub fn summary_modal(state: &StatusView) -> CreateModal {
     let metrics = &state.metrics;
     let status = strings::t("summary.status_template")
-        .replace("{stage}", growth::stage(growth).name)
-        .replace("{day}", &(growth::days(growth) + 1).to_string())
-        .replace("{chats}", &growth.chats.to_string())
-        .replace("{messages}", &growth.messages.to_string())
+        .replace("{stage}", &state.stage)
+        .replace("{day}", &state.day.to_string())
+        .replace("{chats}", &state.chats.to_string())
+        .replace("{messages}", &state.messages.to_string())
         .replace("{model}", &state.model)
         .replace("{sleep}", awake_word(state))
-        .replace("{thinking}", state.thinking_mode.label())
-        .replace("{travel}", &travel_word());
+        .replace("{thinking}", &state.thinking_label)
+        .replace("{travel}", &state.travel);
     let mut token_text = token_summary(metrics);
     if !metrics.categories.is_empty() {
         token_text +=
@@ -523,20 +513,19 @@ pub fn summary_modal(state: &State) -> CreateModal {
 
 // ---------- /durum and /yardim ----------
 
-pub fn status_message(state: &State) -> CreateInteractionResponseMessage {
+pub fn status_message_view(state: &StatusView) -> CreateInteractionResponseMessage {
     let metrics = &state.metrics;
-    let growth = &state.growth;
     let mut embed = CreateEmbed::new()
         .title(strings::t("status.title"))
         .color(COLOR_STATUS)
         .field(
             strings::t("status.general_label"),
             strings::t("status.general_template")
-                .replace("{version}", &version_text())
-                .replace("{stage}", growth::stage(growth).name)
-                .replace("{day}", &(growth::days(growth) + 1).to_string())
-                .replace("{chats}", &growth.chats.to_string())
-                .replace("{messages}", &growth.messages.to_string())
+                .replace("{version}", &state.version)
+                .replace("{stage}", &state.stage)
+                .replace("{day}", &state.day.to_string())
+                .replace("{chats}", &state.chats.to_string())
+                .replace("{messages}", &state.messages.to_string())
                 .replace("{model}", &state.model),
             true,
         )
@@ -544,7 +533,7 @@ pub fn status_message(state: &State) -> CreateInteractionResponseMessage {
             strings::t("status.state_label"),
             strings::t("status.state_template")
                 .replace("{sleep}", awake_word(state))
-                .replace("{thinking}", state.thinking_mode.label())
+                .replace("{thinking}", &state.thinking_label)
                 .replace(
                     "{debug}",
                     if state.debug {
@@ -553,7 +542,7 @@ pub fn status_message(state: &State) -> CreateInteractionResponseMessage {
                         strings::t("common.debug_off")
                     },
                 )
-                .replace("{travel}", &travel_word()),
+                .replace("{travel}", &state.travel),
             true,
         )
         .field(
@@ -591,9 +580,10 @@ pub fn help_message() -> CreateInteractionResponseMessage {
 
 // ---------- settings panel (buttons) ----------
 
-pub fn settings_embed(state: &State) -> CreateEmbed {
-    let sleep_status = if sleep::is_awake(state) {
-        if state.forced_awake_until > now_unix() {
+pub fn settings_embed(view: &SettingsView) -> CreateEmbed {
+    let state = &view.status;
+    let sleep_status = if state.awake {
+        if state.forced_awake {
             strings::t("settings.awake_forced")
         } else {
             strings::t("common.awake")
@@ -606,9 +596,9 @@ pub fn settings_embed(state: &State) -> CreateEmbed {
         .color(COLOR_SETTINGS)
         .description(
             strings::t("settings.description_template")
-                .replace("{version}", &version_text())
+                .replace("{version}", &state.version)
                 .replace("{model}", &state.model)
-                .replace("{thinking}", state.thinking_mode.label())
+                .replace("{thinking}", &state.thinking_label)
                 .replace(
                     "{debug}",
                     if state.debug {
@@ -618,35 +608,36 @@ pub fn settings_embed(state: &State) -> CreateEmbed {
                     },
                 )
                 .replace("{sleep}", sleep_status)
-                .replace("{travel}", &travel_word()),
+                .replace("{travel}", &state.travel),
         )
         .footer(CreateEmbedFooter::new(strings::t("settings.footer")))
 }
 
 /// Highlights the current thinking mode and offers debug/wake/sleep controls.
-pub fn settings_components(state: &State) -> Vec<CreateActionRow> {
+pub fn settings_components(view: &SettingsView) -> Vec<CreateActionRow> {
+    let state = &view.status;
     // same words as /dusunme's own choice labels (cmd.dusunme.choice.*), not
     // ThinkingMode::label() — that returns the descriptive form ("gizli"/"kapalı") used in
     // status text, not the imperative command-argument form these buttons show
     let modes = [
-        (ThinkingMode::Show, "cmd.dusunme.choice.goster"),
-        (ThinkingMode::Hide, "cmd.dusunme.choice.gizle"),
-        (ThinkingMode::Silent, "cmd.dusunme.choice.sessiz"),
-        (ThinkingMode::Off, "cmd.dusunme.choice.kapat"),
+        (ThinkingSetting::Show, "cmd.dusunme.choice.goster"),
+        (ThinkingSetting::Hide, "cmd.dusunme.choice.gizle"),
+        (ThinkingSetting::Silent, "cmd.dusunme.choice.sessiz"),
+        (ThinkingSetting::Off, "cmd.dusunme.choice.kapat"),
     ];
     let thinking_buttons: Vec<CreateButton> = modes
         .iter()
         .map(|(mode, key)| {
             CreateButton::new(format!("{SETTING_THINKING}{}", mode.file_value()))
                 .label(strings::t("settings.mode_button").replace("{mode}", strings::t(key)))
-                .style(if *mode == state.thinking_mode {
+                .style(if *mode == state.thinking {
                     ButtonStyle::Primary
                 } else {
                     ButtonStyle::Secondary
                 })
         })
         .collect();
-    let awake = sleep::is_awake(state);
+    let awake = state.awake;
     vec![
         CreateActionRow::Buttons(thinking_buttons),
         CreateActionRow::Buttons(vec![
@@ -674,11 +665,14 @@ pub fn settings_components(state: &State) -> Vec<CreateActionRow> {
 }
 
 // /ayarlar (ephemeral) and the in-place refresh after a button press (UpdateMessage) share this body
-pub fn settings_message(state: &State, ephemeral: bool) -> CreateInteractionResponseMessage {
+pub fn settings_message_view(
+    view: &SettingsView,
+    ephemeral: bool,
+) -> CreateInteractionResponseMessage {
     CreateInteractionResponseMessage::new()
         .ephemeral(ephemeral)
-        .embed(settings_embed(state))
-        .components(settings_components(state))
+        .embed(settings_embed(view))
+        .components(settings_components(view))
 }
 
 // ---------- slash registration ----------
@@ -687,16 +681,26 @@ pub fn settings_message(state: &State, ephemeral: bool) -> CreateInteractionResp
 // guild command shows up instantly, a global command is delayed. The list comes from
 // command.rs's definitions() table — a single source, never kept in two places by hand.
 pub async fn register_commands(http: &Http, guild: GuildId) -> Result<(), BotError> {
-    let commands: Vec<CreateCommand> = command::definitions()
-        .iter()
-        .map(|k| {
-            CreateCommand::new(k.name)
-                .description(k.description)
-                .set_options((k.options)())
-        })
-        .collect();
+    let commands = platform::discord::commands::registrations();
     guild.set_commands(http, commands).await?;
     Ok(())
+}
+
+// Baseline native fixtures retain their original State-based builder entrypoints.
+// Runtime UI consumes only the shared service's snapshots.
+#[cfg(test)]
+fn status_message(state: &State) -> CreateInteractionResponseMessage {
+    status_message_view(&command::read_models::status_from_state(state))
+}
+
+#[cfg(test)]
+fn mind_message(state: &State) -> CreateInteractionResponseMessage {
+    mind_message_view(&command::read_models::mind_from_state(state).unwrap())
+}
+
+#[cfg(test)]
+fn settings_message(state: &State, ephemeral: bool) -> CreateInteractionResponseMessage {
+    settings_message_view(&command::read_models::settings_from_state(state), ephemeral)
 }
 #[cfg(test)]
 mod test {
@@ -764,7 +768,7 @@ mod test {
                 ..Default::default()
             },
         );
-        let result = token_breakdown(&metrics);
+        let result = token_breakdown(&command::read_models::metrics_from_metrics(&metrics));
         // the larger category comes first
         assert!(result.find("many").unwrap() < result.find("few").unwrap());
     }
@@ -846,7 +850,7 @@ mod test {
             body["embeds"][0]["fields"][3],
             json!({
                 "name": strings::t("status.kirilim_label"),
-                "value": token_breakdown(&state.metrics),
+                "value": token_breakdown(&command::read_models::metrics_from_metrics(&state.metrics)),
                 "inline": false,
             }),
         );

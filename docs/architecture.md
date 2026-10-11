@@ -157,3 +157,33 @@ returns shared handles before awaits. `snapshot() -> Vec<ConnectionSnapshot>`
 provides connection status, account identity and room capabilities for local
 administration. No SDK client is exposed in the snapshot. Credentials are not
 durable identities, and duplicate bindings across connections are rejected.
+
+### Shared typed administration
+
+The crate-local `command::AdminService::new(&Bot)` executes
+`execute(&Actor, &ActionTarget, ActionArgs) -> Result<ActionResult, ActionError>`
+as a native async function, with no Serenity context or manufactured interaction.
+`Actor::User(UserKey)` identifies a platform account; `Actor::LocalOperator`
+denotes an already-authenticated local panel operator. The latter is an explicit
+trust boundary, not a synthetic Discord owner account.
+
+`ActionTarget` carries optional connection and normalized room metadata (including
+space/thread). Shared-brain reads/settings can run without a room; conversational
+actions require a usable route. `ActionArgs` represents all sixteen actions:
+status, help, mind, settings, reset, news, problem, wander, prank, hack, agents,
+wake, sleep, thinking, model and debug. Results are structured read models or
+localized acknowledgments, separate from transport presentation.
+
+One schema supplies stable ActionIds, localized names/descriptions, typed options,
+defaults, bounds, choices and permission/defer rules. Discord builds its original
+native registration from that schema and converts real slash/button events.
+Slow work is acknowledged before awaiting the shared executor; responses retain
+their private embeds, in-place setting updates and display-only modal behavior.
+The explicit-prefix parser and plain renderer share that schema but do not enable
+Discord text administration or publish private memory/thoughts as a fallback.
+
+Legacy Discord administration permissions remain unchanged, with exact qualified
+owner gating for model setters. Other connections deny administration until an
+explicit qualified administrator set is supplied through
+`ConnectionRegistry::set_admin_users`; token changes/reconnects preserve policy.
+`authorize` compares full source-qualified identity, never numeric ID or name.

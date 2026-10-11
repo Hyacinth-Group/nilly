@@ -1,7 +1,7 @@
 impl Bot {
     // handles the asleep/awake transition; on waking, replies to mentions received while asleep
     /// Does nothing if this tick has no sleep-state transition.
-    async fn sleep_transition(&self, ctx: &Context) {
+    async fn sleep_transition(&self) {
         let (pending, just_woke) = {
             let mut state = self.state();
             let awake = sleep::is_awake(&state);
@@ -47,7 +47,7 @@ impl Bot {
                 )
                 .await
             {
-                Ok(c) => match self.send_lines(ctx, channel, &c, None, None, None).await {
+                Ok(c) => match self.send_lines(channel, &c, None, None, None).await {
                     Some(p) => {
                         start_chat(&mut self.state(), channel, Some(p));
                     }
@@ -75,12 +75,12 @@ impl Bot {
                 .collect()
         };
         if !night.is_empty() {
-            self.evaluate_waking(ctx, &night).await;
+            self.evaluate_waking(&night).await;
         }
     }
 
     // picks out what actually concerns the bot from what was written overnight; replies with a morning line if it clears the threshold
-    async fn evaluate_waking(&self, ctx: &Context, night: &[String]) {
+    async fn evaluate_waking(&self, night: &[String]) {
         let night_text = night.join("\n");
         let instruction = {
             let state = self.state();
@@ -130,7 +130,7 @@ impl Bot {
             )
             .await
         {
-            Ok(c) => match self.send_lines(ctx, &channel, &c, None, None, None).await {
+            Ok(c) => match self.send_lines(&channel, &c, None, None, None).await {
                 Some(p) => {
                     start_chat(&mut self.state(), &channel, Some(p));
                 }

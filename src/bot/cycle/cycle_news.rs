@@ -50,10 +50,10 @@ async fn news_cycle(bot: Arc<Bot>, ctx: Context) {
         let stash = bot.state().stashed_news.take();
         match stash {
             Some(item) => {
-                bot.send_news(&ctx, &channel, item).await;
+                bot.send_news(&channel, item).await;
             }
             None => {
-                bot.post_news(&ctx, &channel).await;
+                bot.post_news(&channel).await;
             }
         }
     }
@@ -61,14 +61,14 @@ async fn news_cycle(bot: Arc<Bot>, ctx: Context) {
 
 impl Bot {
     // posts a small, made-up but believable software gripe, asking "how do I fix this"
-    async fn post_problem(&self, ctx: &Context, channel: &RoomKey) {
+    async fn post_problem(&self, channel: &RoomKey) {
         let recent = recent_messages(&self.state(), 30);
         match self
             .generate(&[user(recent)], prompts::current().problem, Some(160), "sorun")
             .await
         {
             Ok(line) => match self
-                .send_lines(ctx, channel, &line, None, None, None)
+                .send_lines(channel, &line, None, None, None)
                 .await
             {
                 Some(p) => {
@@ -82,7 +82,7 @@ impl Bot {
 
     // picks a news item and posts it to the channel, opening a chat that waits for comments
     /// Returns whether a news item was posted.
-    async fn post_news(&self, ctx: &Context, channel: &RoomKey) -> bool {
+    async fn post_news(&self, channel: &RoomKey) -> bool {
         let item = match self.news_agent().await {
             Ok(item) => item,
             Err(e) => {
@@ -90,12 +90,12 @@ impl Bot {
                 return false;
             }
         };
-        self.send_news(ctx, channel, item).await
+        self.send_news(channel, item).await
     }
 
     // shares an already-picked news item: both this turn's pick and the one stashed while asleep go through here
     /// Returns `false` if the intro call fails or the model stays silent.
-    async fn send_news(&self, ctx: &Context, channel: &RoomKey, item: agents::News) -> bool {
+    async fn send_news(&self, channel: &RoomKey, item: agents::News) -> bool {
         let link = if item.url.starts_with("https://") || item.url.starts_with("http://") {
             item.url.clone()
         } else {
@@ -118,13 +118,13 @@ impl Bot {
         };
         // the intro goes out line by line, the link follows as its own message (that's how people post links too)
         let Some(posted) = self
-            .send_lines(ctx, channel, &intro, None, None, None)
+            .send_lines(channel, &intro, None, None, None)
             .await
         else {
             log::debug!("news: model stayed silent for the intro, news item skipped");
             return false;
         };
-        self.send(ctx, channel, &link, None, None, None).await;
+        self.send(channel, &link, None, None, None).await;
 
         let mut state = self.state();
         start_chat(&mut state, channel, Some(posted));
@@ -136,7 +136,7 @@ impl Bot {
     }
 
     // an image prank; if it's the hacked variant, it opens with the "hacked" bit
-    async fn run_prank(&self, ctx: &Context, channel: &RoomKey, hack: bool) {
+    async fn run_prank(&self, channel: &RoomKey, hack: bool) {
         let Some(image) = random_image() else {
             if self.stealth {
                 log::warn!("prank: no images in photos/, skipped");
@@ -181,7 +181,7 @@ impl Bot {
             log::debug!("prank: model stayed silent, prank skipped");
             return;
         };
-        self.send(ctx, channel, &first, None, Some(&image), None)
+        self.send(channel, &first, None, Some(&image), None)
             .await;
 
         let mut state = self.state();

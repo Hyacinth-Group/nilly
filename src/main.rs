@@ -1,7 +1,7 @@
 mod agenda;
 mod agents;
 mod chat_cli;
-mod command;
+pub mod command;
 mod growth;
 mod init;
 mod lang;
@@ -24,9 +24,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use agents::random_image;
 use platform::capabilities::{CountUnit, OutputLimits};
-use platform::discord::render::thought_display;
 #[cfg(test)]
-use platform::discord::render::{stream_view, thought_counter};
+use platform::discord::render::{stream_view, thought_counter, thought_display};
 use platform::types::*;
 use platform::types::{Emoji, UserRef};
 use platform::Platform;

@@ -67,7 +67,7 @@ impl Bot {
             log::info!(
                 "mind: chat closed [{channel}] ({minutes} min quiet) → queued ({queue_len}), diarist within 10 min"
             );
-            self.debug_note(ctx, &channel, format!("sohbet kapandı ({minutes} dk sessiz)"))
+            self.debug_note(&channel, format!("sohbet kapandı ({minutes} dk sessiz)"))
                 .await;
             self.state().growth.chats += 1;
             self.check_growth(ctx).await;
@@ -138,7 +138,7 @@ impl Bot {
             .await
         {
             Ok(announcement) => match self
-                .send_lines(ctx, &channel, &announcement, None, None, None)
+                .send_lines(&channel, &announcement, None, None, None)
                 .await
             {
                 Some(p) => {

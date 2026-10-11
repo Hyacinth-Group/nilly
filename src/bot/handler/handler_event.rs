@@ -58,8 +58,8 @@ impl EventHandler for Handler {
             run_cycle("news", move || news_cycle(bot.clone(), ctx2.clone()));
             let (bot, ctx2) = (self.bot.clone(), ctx.clone());
             run_cycle("poke", move || poke_cycle(bot.clone(), ctx2.clone()));
-            let (bot, ctx2) = (self.bot.clone(), ctx.clone());
-            run_cycle("prank", move || prank_cycle(bot.clone(), ctx2.clone()));
+            let bot = self.bot.clone();
+            run_cycle("prank", move || prank_cycle(bot.clone()));
             let bot = self.bot.clone();
             run_cycle("wanderer", move || wanderer_cycle(bot.clone()));
             let bot = self.bot.clone();
@@ -132,7 +132,7 @@ impl EventHandler for Handler {
         if let Some((room, user)) =
             platform::discord::events::decode_member_join(&self.bot, &ctx, &member)
         {
-            self.member_joined(&ctx, room, user).await;
+            self.member_joined(room, user).await;
         }
     }
 
@@ -146,7 +146,7 @@ impl EventHandler for Handler {
         ) else {
             return;
         };
-        self.message_created(&ctx, platform::discord::events::connection_id(), message)
+        self.message_created(platform::discord::events::connection_id(), message)
             .await;
     }
 
@@ -154,92 +154,20 @@ impl EventHandler for Handler {
         if let Some(event) =
             platform::discord::events::decode_reaction(&self.bot, &ctx, &add_reaction).await
         {
-            self.reaction_added(&ctx, event).await;
+            self.reaction_added(event).await;
         }
     }
 
-    // slash commands run from the command::definitions() table (the bot is only managed
-    // via slash); the menu/buttons on the mind card lead to detail modals; a modal
-    // submission just gets a short acknowledgment (display-only, no input is collected);
-    // the thought button follows its own older path
-    /// Serenity's `interaction_create` callback — routes slash commands, modal submissions,
-    /// and button/select-menu clicks.
+    /// Native command/component deadlines and rendering belong to the adapter.
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
-        // stealth: no commands are registered and no buttons are sent, so anything arriving
-        // here is stale (an old button on an earlier message) — left unanswered
-        if self.bot.stealth {
-            return;
-        }
-        match interaction {
-            Interaction::Command(cmd) => {
-                match command::definitions()
-                    .iter()
-                    .find(|k| k.name == cmd.data.name)
-                {
-                    Some(k) => (k.run)(&self.bot, &ctx, &cmd).await,
-                    None => log::warn!("unknown slash command: {}", cmd.data.name),
-                }
-            }
-            Interaction::Modal(modal_interaction) => {
-                let _ = modal_interaction
-                    .create_response(
-                        &ctx.http,
-                        CreateInteractionResponse::Message(
-                            CreateInteractionResponseMessage::new()
-                                .ephemeral(true)
-                                .content("Görüntüleme amaçlı; bir şey kaydetmedim."),
-                        ),
-                    )
-                    .await;
-            }
-            Interaction::Component(component) => {
-                if component.data.custom_id == THOUGHT_BUTTON {
-                    self.thought_button(&ctx, component).await;
-                    return;
-                }
-                if component.data.custom_id.starts_with("setting_") {
-                    self.setting_button(&ctx, component).await;
-                    return;
-                }
-                // the mind detail layer: buttons open a section modal, the menu opens a person modal
-                let to_open = match component.data.custom_id.as_str() {
-                    modal::MIND_TOPICS => Some(modal::topics_modal()),
-                    modal::MIND_EVENTS => Some(modal::events_modal()),
-                    modal::MIND_SUMMARY => {
-                        let state = self.bot.state();
-                        Some(modal::summary_modal(&state))
-                    }
-                    modal::MIND_PERSON_PICK => {
-                        let ComponentInteractionDataKind::StringSelect { values } =
-                            &component.data.kind
-                        else {
-                            return;
-                        };
-                        let Some(id) = values.first().and_then(|v| v.parse::<UserKey>().ok()) else {
-                            return;
-                        };
-                        Some(modal::person_modal(&id))
-                    }
-                    _ => None,
-                };
-                if let Some(m) = to_open {
-                    if let Err(e) = component
-                        .create_response(&ctx.http, CreateInteractionResponse::Modal(m))
-                        .await
-                    {
-                        log::warn!("couldn't send detail modal: {e}");
-                    }
-                }
-            }
-            _ => {}
-        }
+        platform::discord::commands::interaction_create(&self.bot, &ctx, interaction).await;
     }
 }
 
 
 impl Handler {
-    /// Common welcome decision; Context is only a temporary outgoing transport edge.
-    async fn member_joined(&self, ctx: &Context, room: RoomRef, member: UserRef) {
+    /// Common welcome decision consumes only decoded room and member identities.
+    async fn member_joined(&self, room: RoomRef, member: UserRef) {
         let channel = &room.id;
         let name = &member.display_name;
         {
@@ -273,7 +201,7 @@ impl Handler {
         // unrecognizable
         match self
             .bot
-            .send_lines(ctx, channel, &greeting, None, None, Some(&member.id))
+            .send_lines(channel, &greeting, None, None, Some(&member.id))
             .await
         {
             Some(p) => {
@@ -286,7 +214,6 @@ impl Handler {
     /// Common message decisions consume decoded text and identities, never native cache.
     async fn message_created(
         &self,
-        ctx: &Context,
         connection: &ConnectionId,
         msg: IncomingMessage,
     ) {
@@ -468,16 +395,16 @@ impl Handler {
         if debug {
             let decision = if should_reply { "reply" } else { "silent" };
             self.bot
-                .debug_note(ctx, channel, format!("{trace} → {decision}"))
+                .debug_note(channel, format!("{trace} → {decision}"))
                 .await;
         }
         if should_reply {
-            self.bot.reply(ctx, channel).await;
+            self.bot.reply(channel).await;
         }
     }
 
     /// Social reactions record context but never trigger a willingness check or reply.
-    async fn reaction_added(&self, ctx: &Context, event: ReactionEvent) {
+    async fn reaction_added(&self, event: ReactionEvent) {
         let channel = &event.room.id;
         let name = &event.actor.display_name;
         let Some(content) = &event.original_text else {
@@ -511,7 +438,7 @@ impl Handler {
             channel_note(&mut state, channel, format!("{name}: {text}"));
         }
         self.bot
-            .debug_note(ctx, channel, format!("tepki: {name} → {emoji}"))
+            .debug_note(channel, format!("tepki: {name} → {emoji}"))
             .await;
     }
 }

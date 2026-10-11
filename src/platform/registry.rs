@@ -5,11 +5,27 @@ use super::{
     outgoing::{ConnectionSnapshot, ConnectionStatus, RoomSnapshot},
     types::*,
 };
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+enum AdminPolicy {
+    LegacyDiscordOpen,
+    Users(HashSet<UserKey>),
+}
+impl AdminPolicy {
+    fn allows(&self, user: &UserKey) -> bool {
+        match self {
+            Self::LegacyDiscordOpen => user.platform() == PlatformKind::Discord,
+            Self::Users(users) => users.contains(user),
+        }
+    }
+}
 struct ConnectionEntry {
     adapter: Arc<Adapter>,
     status: ConnectionStatus,
     rooms: HashMap<ConversationKey, RoomRef>,
+    administration: AdminPolicy,
 }
 #[derive(Default)]
 pub struct ConnectionRegistry {
@@ -19,17 +35,25 @@ impl ConnectionRegistry {
     pub fn register(&mut self, adapter: Adapter) -> Arc<Adapter> {
         let id = adapter.connection_id().clone();
         let adapter = Arc::new(adapter);
-        let rooms = self
-            .connections
-            .remove(&id)
-            .map(|entry| entry.rooms)
-            .unwrap_or_default();
+        let previous = self.connections.remove(&id);
+        let (rooms, administration) = match previous {
+            Some(entry) => (entry.rooms, entry.administration),
+            None => (
+                HashMap::new(),
+                if adapter.self_user().id.platform() == PlatformKind::Discord {
+                    AdminPolicy::LegacyDiscordOpen
+                } else {
+                    AdminPolicy::Users(HashSet::new())
+                },
+            ),
+        };
         self.connections.insert(
             id,
             ConnectionEntry {
                 adapter: adapter.clone(),
                 status: ConnectionStatus::Ready,
                 rooms,
+                administration,
             },
         );
         adapter
@@ -39,6 +63,18 @@ impl ConnectionRegistry {
             .get(id)
             .filter(|entry| entry.status == ConnectionStatus::Ready)
             .map(|entry| entry.adapter.clone())
+    }
+    pub fn connection_platform(&self, connection: &ConnectionId) -> Option<PlatformKind> {
+        self.connections
+            .get(connection)
+            .filter(|entry| entry.status == ConnectionStatus::Ready)
+            .map(|entry| entry.adapter.self_user().id.platform())
+    }
+    pub fn is_bound(&self, connection: &ConnectionId, room: &RoomRef) -> bool {
+        self.connections.get(connection).is_some_and(|entry| {
+            entry.status == ConnectionStatus::Ready
+                && entry.rooms.contains_key(&room.conversation())
+        })
     }
     pub fn bind(&mut self, connection: &ConnectionId, room: RoomRef) -> PlatformResult<()> {
         let entry = self
@@ -105,6 +141,35 @@ impl ConnectionRegistry {
             .status = status;
         Ok(())
     }
+    /// New platforms require explicit, source-qualified administrator identities.
+    pub fn set_admin_users(
+        &mut self,
+        connection: &ConnectionId,
+        users: HashSet<UserKey>,
+    ) -> PlatformResult<()> {
+        self.connections
+            .get_mut(connection)
+            .ok_or(PlatformError::NotFound)?
+            .administration = AdminPolicy::Users(users);
+        Ok(())
+    }
+    pub fn authorize(&self, connection: &ConnectionId, user: &UserKey) -> PlatformResult<()> {
+        let entry = self
+            .connections
+            .get(connection)
+            .ok_or(PlatformError::Disconnected)?;
+        if entry.status != ConnectionStatus::Ready {
+            return Err(PlatformError::Disconnected);
+        }
+        if user.platform() != entry.adapter.self_user().id.platform() {
+            return Err(PlatformError::PermissionDenied);
+        }
+        if entry.administration.allows(user) {
+            Ok(())
+        } else {
+            Err(PlatformError::PermissionDenied)
+        }
+    }
     pub fn snapshot(&self) -> Vec<ConnectionSnapshot> {
         let mut connections: Vec<_> = self
             .connections
@@ -135,5 +200,21 @@ impl ConnectionRegistry {
             .collect();
         connections.sort_by(|left, right| left.connection.cmp(&right.connection));
         connections
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn administration_requires_explicit_qualified_identity_outside_legacy_discord() {
+        let discord = UserKey::discord(42);
+        let telegram = UserKey::new(PlatformKind::Telegram, &["42"]).unwrap();
+        assert!(AdminPolicy::LegacyDiscordOpen.allows(&discord));
+        assert!(!AdminPolicy::LegacyDiscordOpen.allows(&telegram));
+        assert!(!AdminPolicy::Users(HashSet::new()).allows(&telegram));
+        let policy = AdminPolicy::Users(HashSet::from([discord.clone()]));
+        assert!(policy.allows(&discord));
+        assert!(!policy.allows(&telegram));
     }
 }

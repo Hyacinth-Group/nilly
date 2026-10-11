@@ -5,7 +5,7 @@ impl Bot {
     /// streams a reply (falling back to non-streaming on an empty stream), records it, and
     /// loops again if a new message arrived meanwhile. See `docs/flows.md`'s `reply` diagram
     /// for the full step-by-step.
-    async fn reply(&self, _ctx: &Context, channel: &RoomKey) {
+    async fn reply(&self, channel: &RoomKey) {
         let transport = match self.transport(channel) {
             Ok(transport) => transport,
             Err(e) => { log::error!("reply [{channel}]: {e}"); return; }
@@ -165,7 +165,6 @@ impl Bot {
             };
             let reply = match self
                 .send_stream(
-                    _ctx,
                     channel,
                     reader,
                     StreamContext {
@@ -186,7 +185,7 @@ impl Bot {
                     log::debug!("reply [{channel}]: silent");
                     if debug {
                         trace.push("silent (-)".to_string());
-                        self.debug_trace(_ctx, channel, debug, &trace).await;
+                        self.debug_trace(channel, debug, &trace).await;
                     }
                     // the hacked prank keeps advancing even on silence: otherwise the
                     // HACK_CONTINUE instruction would get stuck forever
@@ -217,7 +216,7 @@ impl Bot {
                             let mut fallback = parse_reply(strip_name(&c, &bot_name), capabilities.output);
                             fallback.lines.retain(|s| !self.is_repeat(channel, s));
                             match self
-                                .send_reply(_ctx, channel, fallback, reply_to, last_message.as_ref(), None)
+                                .send_reply(channel, fallback, reply_to, last_message.as_ref(), None)
                                 .await
                             {
                                 Some(p) => p,
@@ -250,7 +249,7 @@ impl Bot {
                     summary = format!("{summary} · reaction {t}");
                 }
                 trace.push(summary);
-                self.debug_trace(_ctx, channel, debug, &trace).await;
+                self.debug_trace(channel, debug, &trace).await;
             }
             {
                 let mut state = self.state();

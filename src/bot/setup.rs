@@ -125,7 +125,7 @@ impl Bot {
     // caller only builds the format! while debug is on). Not written to memory or the
     // channel note — the bot shouldn't mistake it for its own words — and since it's a
     // bot message, it doesn't reach the message handler either
-    async fn debug_note(&self, _ctx: &Context, channel: &RoomKey, text: String) {
+    async fn debug_note(&self, channel: &RoomKey, text: String) {
         if !self.state().debug {
             return;
         }
@@ -143,13 +143,12 @@ impl Bot {
 
     async fn debug_trace(
         &self,
-        _ctx: &Context,
         channel: &RoomKey,
         enabled: bool,
         trace: &[String],
     ) {
         if enabled && !trace.is_empty() {
-            self.debug_note(_ctx, channel, trace.join(" · ")).await;
+            self.debug_note(channel, trace.join(" · ")).await;
         }
     }
 

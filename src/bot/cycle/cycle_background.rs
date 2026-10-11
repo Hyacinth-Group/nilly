@@ -41,7 +41,7 @@ async fn poke_cycle(bot: Arc<Bot>, ctx: Context) {
                 // post a small code gripe to the dev channel
                 if let Some(channel) = default_channel(&bot, &ctx) {
                     if !bot.state().chats.contains_key(&channel) {
-                        bot.post_problem(&ctx, &channel).await;
+                        bot.post_problem(&channel).await;
                     }
                 }
                 continue;
@@ -60,7 +60,7 @@ async fn poke_cycle(bot: Arc<Bot>, ctx: Context) {
             }
         };
         match bot
-            .send_lines(&ctx, &channel, &line, None, None, None)
+            .send_lines(&channel, &line, None, None, None)
             .await
         {
             Some(p) => {
@@ -72,7 +72,7 @@ async fn poke_cycle(bot: Arc<Bot>, ctx: Context) {
 }
 
 // every so often, posts an image from the photos/ folder; sometimes with the hacked bit
-async fn prank_cycle(bot: Arc<Bot>, ctx: Context) {
+async fn prank_cycle(bot: Arc<Bot>) {
     loop {
         sleep(PRANK_INTERVAL).await;
         if SHUTTING_DOWN.load(Ordering::SeqCst) {
@@ -87,7 +87,7 @@ async fn prank_cycle(bot: Arc<Bot>, ctx: Context) {
         let Some((channel, _)) = idle_channel(&bot) else {
             continue;
         };
-        bot.run_prank(&ctx, &channel, rand::random::<f64>() < HACK_SHARE)
+        bot.run_prank(&channel, rand::random::<f64>() < HACK_SHARE)
             .await;
     }
 }
@@ -176,7 +176,7 @@ async fn sleep_cycle(bot: Arc<Bot>, ctx: Context) {
             let mut state = bot.state();
             sleep::update(&mut state);
         }
-        bot.sleep_transition(&ctx).await;
+        bot.sleep_transition().await;
         bot.close_timed_out(&ctx).await;
     }
 }

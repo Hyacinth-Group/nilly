@@ -170,7 +170,6 @@ impl Bot {
     /// `ping` is the only user allowed to be mentioned.
     async fn send(
         &self,
-        _ctx: &Context,
         channel: &RoomKey,
         text: &str,
         ping: Option<&UserKey>,

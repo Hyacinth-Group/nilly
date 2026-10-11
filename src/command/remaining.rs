@@ -32,7 +32,7 @@ impl Bot {
     }
 
     // !debug ac|kapat (toggles if empty); persisted in durum/debug.md. Returns the new state.
-    pub fn set_debug(&self, arg: &str) -> bool {
+    pub(crate) fn set_debug(&self, arg: &str) -> Result<bool, crate::BotError> {
         let mut state = self.state();
         let new_value = match arg.trim().to_lowercase().as_str() {
             "aç" | "ac" | "açık" | "acik" | "on" => true,
@@ -40,13 +40,13 @@ impl Bot {
             _ => !state.debug,
         };
         state.debug = new_value;
-        memory::write("debug.md", if new_value { "acik" } else { "kapali" });
-        new_value
+        memory::write_result("debug.md", if new_value { "acik" } else { "kapali" })?;
+        Ok(new_value)
     }
 
     // whether `id` is in openrouter's model catalog (queries the live /models list)
     /// Fails open if the catalog request fails, so a network hiccup doesn't block `/model`.
-    async fn model_exists(&self, id: &str) -> bool {
+    pub(crate) async fn model_exists(&self, id: &str) -> bool {
         #[derive(Deserialize)]
         struct ModelList {
             data: Vec<ModelEntry>,

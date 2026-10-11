@@ -1,4 +1,5 @@
 //! Discord-native decoding, rendering, and private outbound SDK operations.
+pub(crate) mod commands;
 pub(crate) mod events;
 pub(crate) mod render;
 mod transport;

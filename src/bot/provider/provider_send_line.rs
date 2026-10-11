@@ -3,7 +3,6 @@ impl Bot {
     /// Returns protocol text if anything was sent, or `None` for silence/empty output.
     async fn send_lines(
         &self,
-        _ctx: &Context,
         channel: &RoomKey,
         raw: &str,
         reply_to: Option<&MessageKey>,
@@ -17,7 +16,7 @@ impl Bot {
         };
         let room = platform::types::RoomRef::from_key(channel.clone());
         let reply = parse_reply(strip_name(raw, &bot_name), transport.capabilities(&room).output);
-        self.send_reply(_ctx, channel, reply, reply_to, reaction_target, ping)
+        self.send_reply(channel, reply, reply_to, reaction_target, ping)
             .await
     }
 
@@ -28,7 +27,6 @@ impl Bot {
     /// Returns protocol text if anything was sent, or `None` otherwise.
     async fn send_reply(
         &self,
-        _ctx: &Context,
         channel: &RoomKey,
         mut reply: Reply,
         reply_to: Option<&MessageKey>,
@@ -66,7 +64,7 @@ impl Bot {
             }
             let (ping_i, reply_i) = if i == 0 { (ping, reply_to) } else { (None, None) };
             // Prefix mentions are rendered only after parsing the reply protocol.
-            self.send(_ctx, channel, line, ping_i, None, reply_i).await;
+            self.send(channel, line, ping_i, None, reply_i).await;
         }
         if let (Some(emoji), Some(target)) = (&reply.reaction, reaction_target) {
             if capabilities.react {
@@ -77,7 +75,7 @@ impl Bot {
                     log::warn!("couldn't add reaction ({channel}): {e}");
                 }
             } else {
-                self.send(_ctx, channel, emoji, None, None, None).await;
+                self.send(channel, emoji, None, None, None).await;
             }
             // send() already recorded the lines; the reaction is recorded here (in protocol form)
             let mut s = self.state();
