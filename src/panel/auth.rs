@@ -1335,4 +1335,44 @@ mod tests {
         );
         assert!(policy.check(&headers, true).is_ok());
     }
+
+    #[tokio::test]
+    async fn automatic_log_connections_do_not_refresh_idle_sessions() {
+        use crate::panel::tests::{
+            fixture as app_fixture, owner as app_owner, request as app_request,
+        };
+        use tower::ServiceExt;
+        let (app, _directory) = app_fixture().await;
+        let owner = app_owner(&app).await;
+        let previous = Instant::now() - Duration::from_secs(60);
+        app.auth
+            .state()
+            .unwrap()
+            .sessions
+            .get_mut(&digest(owner.token.as_bytes()))
+            .unwrap()
+            .touched = previous;
+        let response = crate::panel::routes::router(app.clone())
+            .oneshot(app_request(
+                "GET",
+                "/api/v1/logs/stream",
+                Some(&owner.token),
+                "",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+        assert_eq!(
+            app.auth
+                .state()
+                .unwrap()
+                .sessions
+                .get(&digest(owner.token.as_bytes()))
+                .unwrap()
+                .touched,
+            previous
+        );
+        drop(response);
+        assert_eq!(app.streams.available_permits(), 8);
+    }
 }

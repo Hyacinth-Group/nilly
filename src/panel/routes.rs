@@ -1223,7 +1223,8 @@ async fn log_stream(
     headers: HeaderMap,
     Query(query): Query<LogQuery>,
 ) -> WebResult<Response> {
-    let session = admin(&app, &headers)?;
+    let session = token(&headers)?;
+    app.auth.require_admin_passive(&session)?;
     let permit = app
         .streams
         .clone()

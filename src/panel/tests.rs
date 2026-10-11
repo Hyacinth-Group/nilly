@@ -4,7 +4,7 @@ use axum::extract::ConnectInfo;
 use axum::http::{header, Request, StatusCode};
 use tower::ServiceExt;
 
-async fn fixture() -> (Arc<App>, tempfile::TempDir) {
+pub(super) async fn fixture() -> (Arc<App>, tempfile::TempDir) {
     let directory = tempfile::tempdir().unwrap();
     let config = config::Config::load(directory.path().join(".env"), &HashMap::new()).unwrap();
     let auth = auth::AuthService::isolated(&directory.path().join("test.redb"))
@@ -35,7 +35,7 @@ async fn fixture() -> (Arc<App>, tempfile::TempDir) {
     )
 }
 
-async fn owner(app: &App) -> auth::SessionIssue {
+pub(super) async fn owner(app: &App) -> auth::SessionIssue {
     let peer = "127.0.0.1".parse().unwrap();
     let claim = app.auth.renew_claim().unwrap().unwrap();
     let preauth = app.auth.preauth(peer).unwrap();
@@ -54,7 +54,7 @@ async fn owner(app: &App) -> auth::SessionIssue {
         .unwrap()
 }
 
-fn request(method: &str, path: &str, cookie: Option<&str>, body: &str) -> Request<Body> {
+pub(super) fn request(method: &str, path: &str, cookie: Option<&str>, body: &str) -> Request<Body> {
     let mut request = Request::builder()
         .method(method)
         .uri(path)

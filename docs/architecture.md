@@ -50,6 +50,8 @@ Direct loopback access accepts only the fixed `localhost`, `127.0.0.1`, and `[::
 
 ### Logs and persistence
 
+Automatic log connections and reconnections authorize without refreshing the administrator's idle timeout, just like stream heartbeats and passive dashboard polling. Only actual page/form activity refreshes an idle session.
+
 `src/logging.rs` provides a bounded, redacted recent-entry ring and authenticated panel streaming. The ring is in memory and disappears at restart; it is not a durable audit log or proof that exported logs contain no member data. Console/container logs are separate retention surfaces and may include the one-use claim link.
 
 Compose mounts `./config` for private settings, `./photos` read-only, and the fixed named volume `discord-bot-data` at `/data/durum`. The Compose volume key remains `durum`; folder/project renaming no longer changes its identity. Multiple installations must deliberately use distinct volume names. Older project-prefixed volumes require an explicit stopped-service backup/restore migration; changing the name does not copy memory. [Migration instructions](setup-guide.md#existing-compose-installations) preserve the old volume rather than deleting it.
