@@ -207,7 +207,21 @@ impl Bot {
         reply_to: Option<&MessageKey>,
     ) -> Result<(), BotError> {
         let (transport, room) = self.transport(channel)?;
-        let capabilities = transport.capabilities(&room);
+        self.send_in_room((&transport, &room), channel, text, ping, file, reply_to).await
+    }
+
+    /// Use an already-resolved destination for every part of one outgoing reply.
+    async fn send_in_room(
+        &self,
+        destination: (&platform::Adapter, &platform::types::RoomRef),
+        channel: &ConversationKey,
+        text: &str,
+        ping: Option<&UserKey>,
+        file: Option<&PathBuf>,
+        reply_to: Option<&MessageKey>,
+    ) -> Result<(), BotError> {
+        let (transport, room) = destination;
+        let capabilities = transport.capabilities(room);
         if !capabilities.send {
             return Err(platform::PlatformError::Unsupported("send").into());
         }
@@ -239,7 +253,7 @@ impl Bot {
             prefix_user: ping,
         };
         body.attachments = attachments.as_slice();
-        let receipt = transport.send(&room, &body).await?;
+        let receipt = transport.send(room, &body).await?;
         let mut s = self.state();
         s.own_messages.push_back(receipt.last_accepted_text.clone());
         if s.own_messages.len() > 50 {

@@ -1,4 +1,4 @@
-//! Acknowledgment and heartbeat handling never wait for enrichment or model work.
+//! Only accepted envelopes are acknowledged; heartbeat handling never waits for enrichment.
 use super::{events, SlackAdapter};
 use crate::{
     command::{self, ActionTarget, Actor, AdminService},
@@ -56,6 +56,53 @@ where
             .map_err(|_| PlatformError::Disconnected)?;
     }
     Ok(())
+}
+/// Reserve bounded worker capacity before ACK, then publish only after ACK.
+/// Full queues leave envelopes unacknowledged for Slack's native redelivery,
+/// without blocking subsequent socket frames (including heartbeat pings).
+async fn socket_frame<S>(
+    sink: &mut S,
+    sender: &mpsc::Sender<Value>,
+    message: Message,
+) -> PlatformResult<bool>
+where
+    S: Sink<Message> + Unpin,
+{
+    match message {
+        Message::Text(text) => {
+            let mut envelope: Value = serde_json::from_str(&text).map_err(|_| {
+                PlatformError::Transport("Slack socket envelope is invalid JSON".into())
+            })?;
+            match envelope["type"].as_str() {
+                Some("events_api") => {
+                    let permit = match sender.try_reserve() {
+                        Ok(permit) => permit,
+                        Err(mpsc::error::TrySendError::Full(_)) => return Ok(true),
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
+                            return Err(PlatformError::Transport(
+                                "Slack event worker stopped".into(),
+                            ));
+                        }
+                    };
+                    acknowledge(sink, &envelope).await?;
+                    permit.send(envelope["payload"].take());
+                }
+                Some("disconnect") => {
+                    acknowledge(sink, &envelope).await?;
+                    return Ok(false);
+                }
+                _ => acknowledge(sink, &envelope).await?,
+            }
+        }
+        Message::Ping(bytes) => {
+            sink.send(Message::Pong(bytes))
+                .await
+                .map_err(|_| PlatformError::Disconnected)?;
+        }
+        Message::Close(_) => return Ok(false),
+        _ => {}
+    }
+    Ok(true)
 }
 
 fn command_args(
@@ -274,25 +321,11 @@ async fn dispatch(
         }
         ChatEvent::ReactionAdded(reaction) => {
             reaction.actor = slack.resolve_user(&reaction.actor.id).await?;
-            let channel = reaction.target.id.components().nth(1).ok_or(KeyError)??;
-            let ts = reaction.target.id.components().nth(2).ok_or(KeyError)??;
-            slack.reserve_history().await;
-            let data = slack
-                .api(
-                    "conversations.history",
-                    json!({"channel":channel,"latest":ts,"oldest":ts,"inclusive":true,"limit":1}),
-                )
-                .await?;
-            if let Some(message) = data["messages"]
-                .as_array()
-                .and_then(|messages| messages.first())
-            {
-                reaction.target.author = message["user"]
-                    .as_str()
-                    .map(|u| UserKey::new(PlatformKind::Slack, &[&slack.team, u]))
-                    .transpose()?;
-                reaction.original_text = message["text"].as_str().map(str::to_owned);
-            }
+            slack.enrich_reaction(reaction).await?;
+            bot.adapters
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .bind_discovered(&slack.connection, reaction.room.clone())?;
         }
         _ => {}
     }
@@ -422,18 +455,12 @@ pub(crate) async fn run(
                     _=shutdown.changed()=>{let _=socket.close(None).await;return Ok(());},
                     result=&mut worker=>{worker_completed=true;let _=result;return Err(PlatformError::Transport("Slack event worker stopped".into()));},
                     message=socket.next()=>match message {
-                        Some(Ok(Message::Text(text)))=>{
-                            let mut envelope:Value=serde_json::from_str(&text).map_err(|_|PlatformError::Transport("Slack socket envelope is invalid JSON".into()))?;
-                            if acknowledge(&mut socket,&envelope).await.is_err() { break; }
-                            match envelope["type"].as_str() {
-                                Some("disconnect")=>break,
-                                Some("events_api")=>sender.try_send(envelope["payload"].take()).map_err(|_|PlatformError::Transport("Slack ingress queue is full or disconnected".into()))?,
-                                _=>{}
-                            }
+                        Some(Ok(message)) => match socket_frame(&mut socket, &sender, message).await {
+                            Ok(true) => {},
+                            Ok(false) | Err(PlatformError::Disconnected) => break,
+                            Err(error) => return Err(error),
                         },
-                        Some(Ok(Message::Ping(bytes)))=>{if socket.send(Message::Pong(bytes)).await.is_err() {break;}},
-                        Some(Ok(Message::Close(_)))|Some(Err(_))|None=>break,
-                        _=>{}
+                        Some(Err(_))|None=>break,
                     }
                 }
             }
@@ -505,6 +532,134 @@ mod tests {
         log.lock().push("process");
         acknowledge(&mut sink, &envelope).await.unwrap();
         assert_eq!(*log.lock(), ["ack", "process", "ack"]);
+    }
+
+    #[tokio::test]
+    async fn saturated_queue_keeps_socket_and_heartbeat_alive_without_ack_loss() {
+        let frames = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let sink =
+            futures_util::sink::unfold(frames.clone(), |frames, frame: Message| async move {
+                frames.lock().push(frame);
+                Ok::<_, std::convert::Infallible>(frames)
+            });
+        tokio::pin!(sink);
+        let (sender, mut receiver) = mpsc::channel::<Value>(2);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let (drained_tx, drained_rx) = tokio::sync::oneshot::channel();
+        let worker_frames = frames.clone();
+        let worker = tokio::spawn(async move {
+            let first = receiver.recv().await.unwrap();
+            // Publishing cannot wake the worker before the corresponding ACK.
+            assert_eq!(
+                worker_frames.lock()[0].to_text().unwrap(),
+                "{\"envelope_id\":\"e1\"}"
+            );
+            started_tx.send(()).unwrap();
+            release_rx.await.unwrap();
+            let mut accepted = vec![first["event_id"].as_str().unwrap().to_owned()];
+            for _ in 0..2 {
+                accepted.push(
+                    receiver.recv().await.unwrap()["event_id"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                );
+            }
+            drained_tx.send(()).unwrap();
+            while let Some(payload) = receiver.recv().await {
+                accepted.push(payload["event_id"].as_str().unwrap().to_owned());
+            }
+            accepted
+        });
+        let event = |id: &str| {
+            Message::Text(
+                json!({
+                    "envelope_id":id, "type":"events_api", "payload":{"event_id":id}
+                })
+                .to_string()
+                .into(),
+            )
+        };
+        assert!(socket_frame(&mut sink, &sender, event("e1")).await.unwrap());
+        started_rx.await.unwrap();
+        for id in ["e2", "e3"] {
+            assert!(socket_frame(&mut sink, &sender, event(id)).await.unwrap());
+        }
+        for _ in 0..3 {
+            assert!(socket_frame(&mut sink, &sender, event("e4")).await.unwrap());
+            assert!(
+                socket_frame(&mut sink, &sender, Message::Ping(vec![7, 8].into()))
+                    .await
+                    .unwrap()
+            );
+        }
+        assert!(!worker.is_finished());
+        assert!(!sender.is_closed());
+        {
+            let frames = frames.lock();
+            let acks: Vec<_> = frames
+                .iter()
+                .filter_map(|frame| match frame {
+                    Message::Text(text) => Some(
+                        serde_json::from_str::<Value>(text).unwrap()["envelope_id"]
+                            .as_str()
+                            .unwrap()
+                            .to_owned(),
+                    ),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(acks, ["e1", "e2", "e3"]);
+            assert_eq!(
+                frames
+                    .iter()
+                    .filter(
+                        |frame| matches!(frame, Message::Pong(bytes) if bytes.as_ref() == [7, 8])
+                    )
+                    .count(),
+                3
+            );
+        }
+        release_tx.send(()).unwrap();
+        drained_rx.await.unwrap();
+        // Native redelivery succeeds once capacity returns; accepted backlog survives.
+        assert!(socket_frame(&mut sink, &sender, event("e4")).await.unwrap());
+        drop(sender);
+        assert_eq!(worker.await.unwrap(), ["e1", "e2", "e3", "e4"]);
+        assert_eq!(
+            frames
+                .lock()
+                .iter()
+                .filter(|frame| matches!(frame, Message::Text(_)))
+                .count(),
+            4
+        );
+    }
+
+    #[tokio::test]
+    async fn ack_failure_does_not_publish_or_consume_acceptance_capacity() {
+        let sink = futures_util::sink::unfold((), |(), _: Message| async move {
+            Err::<(), _>(std::io::Error::other("disconnected"))
+        });
+        tokio::pin!(sink);
+        let (sender, mut receiver) = mpsc::channel::<Value>(1);
+        let event = Message::Text(
+            json!({
+                "envelope_id":"retry", "type":"events_api", "payload":{"event_id":"retry"}
+            })
+            .to_string()
+            .into(),
+        );
+        assert!(matches!(
+            socket_frame(&mut sink, &sender, event).await,
+            Err(PlatformError::Disconnected)
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        assert_eq!(sender.capacity(), 1);
     }
 
     #[tokio::test]

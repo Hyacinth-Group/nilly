@@ -26,7 +26,8 @@ fn single_line(text: &str) -> String {
 // reconciles the layout with the messages already open: changed ones are edited, missing
 // ones are opened, and if the text got shorter (e.g. the name prefix got stripped) extra
 // messages are deleted
-/// Only the first message gets a reply target. Network errors are logged, not propagated.
+/// The room is resolved once for the whole reply; only the first message gets a
+/// visual reply target. Network errors are logged, not propagated.
 async fn write_stream(
     transport: &platform::Adapter,
     room: &platform::types::RoomRef,

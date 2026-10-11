@@ -9,6 +9,7 @@ impl Bot {
         context: StreamContext<'_>,
     ) -> Result<StreamResult, BotError> {
         let (transport, room) = self.transport(channel)?;
+        let room = transport.route_reply(room, context.reply_to)?;
 
         let capabilities = transport.capabilities(&room);
         let mut text = String::new();

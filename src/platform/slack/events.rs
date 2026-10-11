@@ -108,7 +108,7 @@ fn decode_entities(text: &str) -> String {
     result
 }
 
-fn normalize_text(team: &str, text: &str) -> PlatformResult<(String, Vec<UserKey>)> {
+pub(super) fn normalize_text(team: &str, text: &str) -> PlatformResult<(String, Vec<UserKey>)> {
     let mut result = String::with_capacity(text.len());
     let mut mentions = Vec::new();
     let mut rest = text;

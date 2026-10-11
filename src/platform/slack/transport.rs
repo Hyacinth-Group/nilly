@@ -286,6 +286,58 @@ impl SlackAdapter {
         }
         Ok(reply)
     }
+    /// reactions.get addresses an exact message, including replies absent from
+    /// conversations.history, using the installed app's reactions:read scope.
+    pub(crate) async fn enrich_reaction(&self, reaction: &mut ReactionEvent) -> PlatformResult<()> {
+        let channel = self.channel(&reaction.room)?;
+        if reaction.target.room != reaction.room.id {
+            return Err(KeyError.into());
+        }
+        let ts = native_message(&self.team, &channel, &reaction.target.id)?;
+        let data = self
+            .api(
+                "reactions.get",
+                json!({"channel":channel,"timestamp":ts,"full":false}),
+            )
+            .await?;
+        self.apply_reaction_context(reaction, &data)
+    }
+
+    fn apply_reaction_context(
+        &self,
+        reaction: &mut ReactionEvent,
+        data: &Value,
+    ) -> PlatformResult<()> {
+        let channel = self.channel(&reaction.room)?;
+        let ts = native_message(&self.team, &channel, &reaction.target.id)?;
+        let message = &data["message"];
+        if reaction.target.room != reaction.room.id
+            || data["type"].as_str() != Some("message")
+            || data["channel"].as_str() != Some(channel.as_str())
+            || message["ts"].as_str() != Some(ts.as_str())
+        {
+            return Err(transport("Slack returned a different reaction target"));
+        }
+        let author = message["user"]
+            .as_str()
+            .ok_or_else(|| transport("Slack reaction target author missing"))?;
+        let author = UserKey::new(PlatformKind::Slack, &[&self.team, author])?;
+        native_user(&self.team, &author)?;
+        let text = message["text"]
+            .as_str()
+            .ok_or_else(|| transport("Slack reaction target text missing"))?;
+        let (text, _) = events::normalize_text(&self.team, text)?;
+        let mut room = reaction.room.clone();
+        room.thread = message["thread_ts"]
+            .as_str()
+            .map(|thread| ThreadKey::new(PlatformKind::Slack, &[&self.team, &channel, thread]))
+            .transpose()?;
+        self.channel(&room)?;
+        reaction.room = room;
+        reaction.target.author = Some(author);
+        reaction.original_text = Some(text);
+        Ok(())
+    }
 
     pub(crate) async fn reserve_history(&self) {
         // Wait for a snapshot, then recheck before reserving. A 429 may extend the
@@ -446,6 +498,25 @@ impl Platform for SlackAdapter {
         caps.private_results = send;
         caps.upload_bytes = (send && scopes.contains("files:write")).then_some(MEDIA_LIMIT as u64);
         caps
+    }
+    fn route_reply(
+        &self,
+        mut room: RoomRef,
+        reply_to: Option<&MessageKey>,
+    ) -> PlatformResult<RoomRef> {
+        let channel = self.channel(&room)?;
+        let reply = reply_to
+            .map(|target| native_message(&self.team, &channel, target))
+            .transpose()?;
+        if room.thread.is_none() {
+            if let Some(ts) = reply {
+                room.thread = Some(ThreadKey::new(
+                    PlatformKind::Slack,
+                    &[&self.team, &channel, &ts],
+                )?);
+            }
+        }
+        Ok(room)
     }
 
     fn render_stream(
@@ -907,6 +978,233 @@ mod tests {
         receipt.message.id =
             MessageKey::new(PlatformKind::Slack, &["T123", "C999", "1700000000.000123"]).unwrap();
         assert!(adapter.check_receipt(&receipt).is_err());
+    }
+
+    #[test]
+    fn resolved_reply_routes_every_line_chunk_and_thought_answer_part_to_one_thread() {
+        let adapter = adapter();
+        let room = events::room("T123", "C123").unwrap();
+        let target = MessageRef {
+            id: MessageKey::new(PlatformKind::Slack, &["T123", "C123", "1700000000.000123"])
+                .unwrap(),
+            room: room.id.clone(),
+            author: None,
+        };
+        let routed = adapter.route_reply(room.clone(), Some(&target.id)).unwrap();
+        assert!(room.thread.is_none());
+        let long_answer = "a".repeat(10_000);
+        let lines = vec!["first answer".to_owned(), long_answer];
+        let live = adapter.render_stream(
+            &routed,
+            ThoughtPresentation::Show,
+            "thinking about it",
+            "first answer\nsecond answer\n",
+            false,
+        );
+        let final_layout = adapter.render_final(
+            &routed,
+            ThoughtPresentation::Show,
+            "thinking about it",
+            &lines,
+        );
+        assert!(live.len() >= 3);
+        assert!(final_layout.len() > lines.len());
+        for layout in [&live, &final_layout] {
+            for (index, part) in layout.iter().enumerate() {
+                let mut body = OutgoingMessage::text(part);
+                body.reply_to = (index == 0).then_some(&target);
+                let thread = adapter.thread_ts(&routed, &body).unwrap();
+                assert_eq!(thread.as_deref(), Some("1700000000.000123"));
+                let mut payload = render::message_payload("C123", part);
+                payload["thread_ts"] = json!(thread.unwrap());
+                assert_eq!(payload["thread_ts"], "1700000000.000123");
+            }
+        }
+        // No room-global last-target state: concurrent replies resolve independently.
+        let other =
+            MessageKey::new(PlatformKind::Slack, &["T123", "C123", "1700000001.000456"]).unwrap();
+        let other_room = adapter.route_reply(room.clone(), Some(&other)).unwrap();
+        assert_ne!(routed.thread, other_room.thread);
+        let no_target = OutgoingMessage::text("later part");
+        assert_eq!(
+            adapter.thread_ts(&routed, &no_target).unwrap().as_deref(),
+            Some("1700000000.000123")
+        );
+        assert_eq!(
+            adapter
+                .thread_ts(&other_room, &no_target)
+                .unwrap()
+                .as_deref(),
+            Some("1700000001.000456")
+        );
+        assert!(adapter.route_reply(room, None).unwrap().thread.is_none());
+    }
+
+    #[test]
+    fn reply_route_preserves_existing_thread_and_rejects_foreign_targets() {
+        let adapter = adapter();
+        let mut room = events::room("T123", "C123").unwrap();
+        room.thread = Some(
+            ThreadKey::new(PlatformKind::Slack, &["T123", "C123", "1700000000.000123"]).unwrap(),
+        );
+        let reply =
+            MessageKey::new(PlatformKind::Slack, &["T123", "C123", "1700000002.000001"]).unwrap();
+        let routed = adapter.route_reply(room.clone(), Some(&reply)).unwrap();
+        assert_eq!(routed.conversation(), room.conversation());
+        assert_eq!(routed.space, room.space);
+        assert_eq!(routed.kind, room.kind);
+        assert_eq!(routed.name, room.name);
+        for components in [
+            ["T999", "C123", "1700000002.000001"],
+            ["T123", "C999", "1700000002.000001"],
+        ] {
+            let foreign = MessageKey::new(PlatformKind::Slack, &components).unwrap();
+            assert!(adapter.route_reply(room.clone(), Some(&foreign)).is_err());
+        }
+    }
+
+    #[test]
+    fn threaded_bot_reaction_enrichment_retains_recordable_author_text_and_conversation() {
+        let adapter = adapter();
+        let event = json!({
+            "type":"reaction_added", "user":"U789", "reaction":"thumbsup",
+            "item":{"type":"message", "channel":"C123", "ts":"1700000002.000001"}
+        });
+        let Some(ChatEvent::ReactionAdded(mut reaction)) = events::decode(
+            &adapter.connection,
+            &adapter.team,
+            &adapter.account.id,
+            &event,
+        )
+        .unwrap() else {
+            panic!("reaction was not decoded");
+        };
+        assert!(reaction.target.author.is_none());
+        assert!(reaction.original_text.is_none());
+        let data = json!({
+            "ok":true, "type":"message", "channel":"C123",
+            "message":{"user":"U123", "text":"bot reply &amp; original context",
+                "ts":"1700000002.000001", "thread_ts":"1700000000.000123"}
+        });
+        adapter
+            .apply_reaction_context(&mut reaction, &data)
+            .unwrap();
+        // These are the fields required by the shared reaction recorder.
+        assert_eq!(reaction.target.author.as_ref(), Some(&adapter.account.id));
+        assert_eq!(
+            reaction.original_text.as_deref(),
+            Some("bot reply & original context")
+        );
+        assert_eq!(reaction.target.room, reaction.room.id);
+        assert_eq!(
+            reaction.room.conversation().thread,
+            Some(
+                ThreadKey::new(PlatformKind::Slack, &["T123", "C123", "1700000000.000123"])
+                    .unwrap()
+            )
+        );
+        assert_eq!(
+            reaction.target.id,
+            MessageKey::new(PlatformKind::Slack, &["T123", "C123", "1700000002.000001"]).unwrap()
+        );
+        let enriched = reaction.clone();
+        for wrong in [
+            json!({"type":"message","channel":"C999","message":data["message"]}),
+            json!({"type":"message","channel":"C123","message":{"ts":"1700000009.000001","user":"U123","text":"wrong"}}),
+            json!({"type":"message","channel":"C123","message":{"ts":"1700000002.000001","user":"U123","text":"wrong","thread_ts":"invalid"}}),
+        ] {
+            assert!(adapter
+                .apply_reaction_context(&mut reaction, &wrong)
+                .is_err());
+            assert_eq!(reaction.target.author, enriched.target.author);
+            assert_eq!(reaction.original_text, enriched.original_text);
+            assert_eq!(reaction.room.conversation(), enriched.room.conversation());
+            assert_eq!(reaction.room.space, enriched.room.space);
+            assert_eq!(reaction.room.kind, enriched.room.kind);
+            assert_eq!(reaction.room.name, enriched.room.name);
+        }
+    }
+
+    #[tokio::test]
+    async fn enriched_threaded_bot_reaction_is_recorded_in_the_native_conversation() {
+        crate::memory::test::ensure_test_db();
+        let bot = crate::test::route_fixture();
+        let mut adapter = adapter();
+        adapter.connection = ConnectionId::new("slack-threaded-reaction-recording");
+        let connection = adapter.connection.clone();
+        let account = adapter.account.clone();
+        let event = json!({
+            "type":"reaction_added", "user":"U789", "reaction":"thumbsup",
+            "item":{"type":"message","channel":"C87651","ts":"1700000002.000001"}
+        });
+        let Some(ChatEvent::ReactionAdded(mut reaction)) =
+            events::decode(&connection, &adapter.team, &account.id, &event).unwrap()
+        else {
+            panic!("reaction was not decoded");
+        };
+        adapter
+            .apply_reaction_context(
+                &mut reaction,
+                &json!({
+                    "ok":true,"type":"message","channel":"C87651",
+                    "message":{"user":"U123","text":"threaded bot context","ts":"1700000002.000001",
+                        "thread_ts":"1700000000.000123"}
+                }),
+            )
+            .unwrap();
+        reaction.actor.display_name = "Slack Reactor".into();
+        let conversation = reaction.room.conversation();
+        let base = RoomRef::from_key(reaction.room.id.clone()).conversation();
+        {
+            let mut registry = bot
+                .adapters
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            registry.register(crate::platform::Adapter::Slack(Box::new(adapter)));
+            registry
+                .set_room_policy(
+                    &connection,
+                    crate::platform::registry::RoomPolicy::Approved(HashSet::from([reaction
+                        .room
+                        .id
+                        .clone()])),
+                )
+                .unwrap();
+            registry
+                .bind_discovered(&connection, reaction.room.clone())
+                .unwrap();
+        }
+        {
+            let mut state = bot.state();
+            state.accounts.insert(connection.clone(), account);
+            crate::start_chat(&mut state, &conversation, None);
+            crate::start_chat(&mut state, &base, None);
+        }
+        bot.reaction_added(&connection, reaction).await;
+        let recorded =
+            "Slack Reactor: (tepki :thumbsup:) \"threaded bot context\" mesajına tepki verdi";
+        {
+            let state = bot.state();
+            assert_eq!(
+                state.channel_history[&conversation].back().unwrap(),
+                recorded
+            );
+            assert_eq!(
+                state.chats[&conversation].history.last().unwrap().content,
+                recorded
+            );
+            assert!(!state
+                .channel_history
+                .get(&base)
+                .is_some_and(|history| history.iter().any(|entry| entry == recorded)));
+        }
+        assert!(
+            crate::memory::read(&crate::platform::keys::room_record(&conversation))
+                .contains(recorded)
+        );
+        assert!(
+            !crate::memory::read(&crate::platform::keys::room_record(&base)).contains(recorded)
+        );
     }
 
     #[tokio::test]

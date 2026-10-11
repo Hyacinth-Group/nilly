@@ -51,6 +51,16 @@ pub trait Platform: Send + Sync {
         Vec::new()
     }
     fn capabilities(&self, room: &RoomRef) -> Capabilities;
+    /// Resolve the destination once per outgoing reply, before sending any part.
+    /// Visual reply references may still appear only on the first part. The default
+    /// preserves the owned room unchanged, without extra copies or allocations.
+    fn route_reply(
+        &self,
+        room: RoomRef,
+        _reply_to: Option<&MessageKey>,
+    ) -> PlatformResult<RoomRef> {
+        Ok(room)
+    }
     fn render_stream(
         &self,
         room: &RoomRef,
@@ -150,6 +160,15 @@ impl Platform for Adapter {
             Self::Slack(adapter) => adapter.capabilities(room),
             #[cfg(feature = "matrix")]
             Self::Matrix(adapter) => adapter.capabilities(room),
+        }
+    }
+    fn route_reply(&self, room: RoomRef, reply_to: Option<&MessageKey>) -> PlatformResult<RoomRef> {
+        match self {
+            Self::Discord(adapter) => adapter.route_reply(room, reply_to),
+            Self::Telegram(adapter) => adapter.route_reply(room, reply_to),
+            Self::Slack(adapter) => adapter.route_reply(room, reply_to),
+            #[cfg(feature = "matrix")]
+            Self::Matrix(adapter) => adapter.route_reply(room, reply_to),
         }
     }
     fn render_stream(
@@ -282,5 +301,42 @@ impl Platform for Adapter {
             #[cfg(feature = "matrix")]
             Self::Matrix(adapter) => adapter.resolve_media(attachment).await,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discord_reply_routing_is_identity_without_copying_room_metadata() {
+        let adapter = super::super::discord::test_adapter(
+            ConnectionId::new("discord-routing"),
+            UserRef {
+                id: UserKey::discord(1),
+                display_name: "bot".into(),
+                username: None,
+                automation: Automation::Bot,
+                stability: IdentityStability::Persistent,
+            },
+        );
+        let room = RoomRef {
+            id: RoomKey::discord(2),
+            space: Some(SpaceKey::discord(3)),
+            kind: RoomKind::Channel,
+            name: Some("original room allocation".into()),
+            thread: None,
+        };
+        let name_pointer = room.name.as_ref().unwrap().as_ptr();
+        let target = MessageKey::discord(4);
+        let routed = adapter.route_reply(room, Some(&target)).unwrap();
+        assert_eq!(routed.id, RoomKey::discord(2));
+        assert_eq!(routed.space, Some(SpaceKey::discord(3)));
+        assert_eq!(routed.kind, RoomKind::Channel);
+        assert!(routed.thread.is_none());
+        assert_eq!(routed.name.as_ref().unwrap().as_ptr(), name_pointer);
+        let routed = adapter.route_reply(routed, None).unwrap();
+        assert_eq!(routed.name.as_ref().unwrap().as_ptr(), name_pointer);
+        assert!(routed.thread.is_none());
     }
 }

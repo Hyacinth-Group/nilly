@@ -4,7 +4,7 @@
             stability: platform::types::IdentityStability::Persistent }
     }
 
-    fn route_fixture() -> Arc<Bot> {
+    pub(crate) fn route_fixture() -> Arc<Bot> {
         Arc::new(Bot {
             state: Mutex::new(State::default()),
             adapters: Mutex::new(platform::ConnectionRegistry::default()),

@@ -62,6 +62,7 @@ impl Bot {
             return Ok(None);
         }
         let (transport, room) = self.transport(channel)?;
+        let room = transport.route_reply(room, reply_to)?;
 
         let capabilities = transport.capabilities(&room);
         for (i, line) in reply.lines.iter().enumerate() {
@@ -76,7 +77,7 @@ impl Bot {
             let (ping_i, reply_i) = if i == 0 { (ping, reply_to) } else { (None, None) };
             // Prefix mentions are rendered only after parsing the reply protocol.
             if approved_only { self.authorize_automatic_delivery(channel)?; }
-            self.send(channel, line, ping_i, None, reply_i).await?;
+            self.send_in_room((&transport, &room), channel, line, ping_i, None, reply_i).await?;
         }
         if let (Some(emoji), Some(target)) = (&reply.reaction, reaction_target) {
             if approved_only { self.authorize_automatic_delivery(channel)?; }
@@ -86,11 +87,11 @@ impl Bot {
                 };
                 match transport.react(&target, &platform::types::Emoji::Unicode(emoji.clone())).await {
                     Ok(()) => {}
-                    Err(platform::PlatformError::Unsupported(_)) => self.send(channel, emoji, None, None, None).await?,
+                    Err(platform::PlatformError::Unsupported(_)) => self.send_in_room((&transport, &room), channel, emoji, None, None, None).await?,
                     Err(error) => return Err(error.into()),
                 }
             } else {
-                self.send(channel, emoji, None, None, None).await?;
+                self.send_in_room((&transport, &room), channel, emoji, None, None, None).await?;
             }
             // send() already recorded the lines; the reaction is recorded here (in protocol form)
             let mut s = self.state();
