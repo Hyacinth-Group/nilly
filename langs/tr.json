@@ -443,5 +443,9 @@
   "panel.settings.tests": "Kimlik bilgilerini kaydetmeden dene",
   "panel.settings.tests_help": "Boş alan bu test için kaydedilmiş bilgiyi kullanır. Testler Discord veya resmî yapay zekâ sağlayıcısını denetler; özel uç noktaları, ayrıcalıklı intentleri veya ücretli yanıtları denemez.",
   "panel.settings.use_saved": "Kaydedilmiş ayarları kullan",
-  "panel.settings.test_passed": "Kimlik bilgisi denetimi başarılı. Hiçbir şey kaydedilmedi. Ağ geçidi izinleri ve model yanıtları ayrı denetimlerdir."
+  "panel.settings.test_passed": "Kimlik bilgisi denetimi başarılı. Hiçbir şey kaydedilmedi. Ağ geçidi izinleri ve model yanıtları ayrı denetimlerdir.",
+  "panel.logs.ended": "Oturumun sona erdi. Canlı günlükler için tekrar giriş yap.",
+  "panel.logs.stopped": "Bot süreci kapanıyor. Yeniden başladıktan sonra sayfayı yenile.",
+  "panel.logs.reset": "Günlük sırası yeniden başladı. Saklanan kayıtlar gösteriliyor.",
+  "panel.logs.unavailable": "Canlı günlükler kullanılamıyor. Sayfayı yenile veya tekrar giriş yap; son kayıtlar okunabilir."
 }

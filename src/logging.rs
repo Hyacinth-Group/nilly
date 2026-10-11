@@ -65,6 +65,8 @@ pub struct Batch {
     pub newest: Option<u64>,
     /// Unavailable sequence IDs between the requested cursor and retained history.
     pub dropped: u64,
+    /// The requested cursor belongs to a sequence newer than this process buffer.
+    pub reset: bool,
     pub entries: Vec<Entry>,
 }
 
@@ -95,6 +97,8 @@ impl Buffer {
     fn snapshot(&self, after: Option<u64>, limit: usize) -> Batch {
         let oldest = self.entries.front().map(|entry| entry.id);
         let newest = self.entries.back().map(|entry| entry.id);
+        let reset = after.is_some_and(|cursor| cursor > newest.unwrap_or(0));
+        let after = if reset { None } else { after };
         let dropped = match (after, oldest) {
             (Some(cursor), Some(first)) => first.saturating_sub(cursor).saturating_sub(1),
             _ => 0,
@@ -103,6 +107,7 @@ impl Buffer {
             oldest,
             newest,
             dropped,
+            reset,
             entries: self
                 .entries
                 .iter()
@@ -616,7 +621,10 @@ mod tests {
         assert_eq!(batch.entries[0].id, 11);
         assert_eq!(buffer.snapshot(Some(520), 1).entries[0].id, 521);
         assert!(buffer.snapshot(Some(522), 100).entries.is_empty());
-        assert!(buffer.snapshot(Some(u64::MAX), 100).entries.is_empty());
+        let restarted = buffer.snapshot(Some(u64::MAX), 100);
+        assert!(restarted.reset);
+        assert_eq!(restarted.entries.len(), 100);
+        assert_eq!(restarted.entries[0].id, 11);
         assert_eq!(buffer.snapshot(None, 0).dropped, 0);
         assert!(buffer.snapshot(None, 0).entries.is_empty());
     }
@@ -695,5 +703,19 @@ mod tests {
         assert_eq!(utc(0), "1970-01-01T00:00:00Z");
         assert_eq!(utc(-1), "1969-12-31T23:59:59Z");
         assert_eq!(utc(951782400), "2000-02-29T00:00:00Z");
+    }
+
+    #[test]
+    fn restarted_log_cursor_recovers_even_before_the_first_new_line() {
+        let mut buffer = Buffer::default();
+        let batch = buffer.snapshot(Some(999), 64);
+        assert!(batch.reset);
+        assert_eq!(batch.dropped, 0);
+        assert!(batch.entries.is_empty());
+        push(&mut buffer, "new process");
+        let batch = buffer.snapshot(Some(999), 64);
+        assert!(batch.reset);
+        assert_eq!(batch.entries[0].id, 1);
+        assert!(!buffer.snapshot(Some(1), 64).reset);
     }
 }

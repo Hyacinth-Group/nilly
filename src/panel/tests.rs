@@ -592,3 +592,94 @@ async fn settings_tests_reject_invalid_credentials_without_saving_or_mutating_wi
         original
     );
 }
+
+#[tokio::test]
+async fn log_stream_ends_and_releases_capacity_when_the_session_is_revoked() {
+    use futures_util::StreamExt;
+    let (app, _directory) = fixture().await;
+    let admin = owner(&app).await;
+    let response = routes::router(app.clone())
+        .oneshot(request(
+            "GET",
+            "/api/v1/logs/stream",
+            Some(&admin.token),
+            "",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(app.streams.available_permits(), 7);
+    let mut stream = response.into_body().into_data_stream();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .is_ok()
+    );
+    app.auth.logout(&admin.token, &admin.info.csrf).unwrap();
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(std::str::from_utf8(&ended)
+        .unwrap()
+        .contains("event: session_ended"));
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), stream.next())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(app.streams.available_permits(), 8);
+}
+
+#[tokio::test]
+async fn log_stream_connections_are_bounded_and_recent_logs_remain_readable_without_js() {
+    let (app, _directory) = fixture().await;
+    let admin = owner(&app).await;
+    let router = routes::router(app.clone());
+    let mut streams = Vec::new();
+    for _ in 0..8 {
+        let response = router
+            .clone()
+            .oneshot(request(
+                "GET",
+                "/api/v1/logs/stream",
+                Some(&admin.token),
+                "",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        streams.push(response);
+    }
+    let response = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/v1/logs/stream",
+            Some(&admin.token),
+            "",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    drop(streams);
+    assert_eq!(app.streams.available_permits(), 8);
+    let response = router
+        .oneshot(request("GET", "/logs", Some(&admin.token), ""))
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 256 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains(views::text(views::Language::En, "panel.logs.body").unwrap()));
+    assert!(html.contains("<noscript>"));
+    assert!(html.contains("data-log-ended="));
+}

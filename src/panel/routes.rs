@@ -1169,6 +1169,9 @@ async fn help_page(
     let mut card = section(lang, "panel.title.help");
     card.description = t(lang, "panel.help.body");
     page.sections.push(card);
+    let mut commands = section(lang, "panel.help.commands");
+    commands.description = t(lang, "panel.help.commands_body");
+    page.sections.push(commands);
     html(&page)
 }
 async fn logs_page(
@@ -1180,12 +1183,13 @@ async fn logs_page(
     let lang = lang(&query);
     let mut page = page(lang, "panel.title.logs", "logs")?;
     page.authenticated = true;
-    page.description = t(lang, "panel.logs.privacy");
+    page.description = t(lang, "panel.logs.body");
     page.log_stream_url = "/api/v1/logs/stream".into();
     let mut recent = section(lang, "panel.logs.recent");
     recent.items = crate::logging::snapshot(None, 100)
         .entries
         .into_iter()
+        .rev()
         .map(|entry| Item {
             label: format!("{} {}", entry.timestamp, entry.level),
             value: entry.message,
@@ -1228,17 +1232,48 @@ async fn log_stream(
         .and_then(|value| value.parse().ok())
         .or(query.after);
     let stream = futures_util::stream::unfold(
-        (app, session, after, permit, VecDeque::new()),
-        |(app, session, mut after, permit, mut pending)| async move {
-            if app.auth.require_admin_passive(&session).is_err() || *app.stop.borrow() {
+        (app, session, after, permit, VecDeque::new(), false),
+        |(app, session, mut after, permit, mut pending, closed)| async move {
+            if closed {
                 return None;
+            }
+            if app.auth.require_admin_passive(&session).is_err() || *app.stop.borrow() {
+                let name = if *app.stop.borrow() {
+                    "stopped"
+                } else {
+                    "session_ended"
+                };
+                return Some((
+                    Ok::<_, std::convert::Infallible>(
+                        axum::response::sse::Event::default().event(name).data("{}"),
+                    ),
+                    (app, session, after, permit, VecDeque::new(), true),
+                ));
             }
             if pending.is_empty() {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 if app.auth.require_admin_passive(&session).is_err() || *app.stop.borrow() {
-                    return None;
+                    let name = if *app.stop.borrow() {
+                        "stopped"
+                    } else {
+                        "session_ended"
+                    };
+                    return Some((
+                        Ok::<_, std::convert::Infallible>(
+                            axum::response::sse::Event::default().event(name).data("{}"),
+                        ),
+                        (app, session, after, permit, VecDeque::new(), true),
+                    ));
                 }
                 let batch = crate::logging::snapshot(after, 64);
+                if batch.reset {
+                    after = None;
+                    pending.push_back(
+                        axum::response::sse::Event::default()
+                            .event("reset")
+                            .data("{}"),
+                    );
+                }
                 if batch.dropped > 0 {
                     pending.push_back(
                         axum::response::sse::Event::default()
@@ -1261,7 +1296,7 @@ async fn log_stream(
                 .unwrap_or_else(|| axum::response::sse::Event::default().comment("heartbeat"));
             Some((
                 Ok::<_, std::convert::Infallible>(event),
-                (app, session, after, permit, pending),
+                (app, session, after, permit, pending, false),
             ))
         },
     );

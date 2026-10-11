@@ -157,7 +157,17 @@ if (streamUrl) {
   };
   const stream = new EventSource(streamUrl, { withCredentials: true });
   stream.addEventListener("open", () => { state.textContent = logs.dataset.logConnected; });
-  stream.addEventListener("error", () => { state.textContent = logs.dataset.logReconnecting; });
+  stream.addEventListener("error", () => {
+    state.textContent = stream.readyState === EventSource.CLOSED ? logs.dataset.logUnavailable : logs.dataset.logReconnecting;
+  });
+  for (const [event, label] of [["session_ended", "logEnded"], ["stopped", "logStopped"]]) {
+    stream.addEventListener(event, () => { state.textContent = logs.dataset[label]; stream.close(); });
+  }
+  stream.addEventListener("reset", () => {
+    entries.length = 0;
+    state.textContent = logs.dataset.logReset;
+    schedule();
+  });
   stream.addEventListener("line", (event) => {
     if (event.data.length > 32768) return;
     try {

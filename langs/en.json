@@ -443,5 +443,9 @@
   "panel.settings.tests": "Test credentials without saving",
   "panel.settings.tests_help": "Blank keeps the saved credential for this test. These tests check Discord or the official AI provider; they do not test custom endpoints, privileged intents or paid completions.",
   "panel.settings.use_saved": "Use saved settings",
-  "panel.settings.test_passed": "Credential check passed. Nothing was saved. Gateway permissions and model completions are separate checks."
+  "panel.settings.test_passed": "Credential check passed. Nothing was saved. Gateway permissions and model completions are separate checks.",
+  "panel.logs.ended": "Your session ended. Sign in again to view live logs.",
+  "panel.logs.stopped": "The bot process is stopping. Reload after starting it again.",
+  "panel.logs.reset": "The log sequence restarted. Showing the retained buffer.",
+  "panel.logs.unavailable": "Live logs are unavailable. Reload or sign in again; recent lines remain readable."
 }

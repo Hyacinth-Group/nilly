@@ -108,7 +108,7 @@
       {% endfor %}
       </div>
       {% if !page.log_stream_url.is_empty() %}
-      <section class="card logs-card" data-log-stream="{{ page.log_stream_url }}" data-log-connected="{{ chrome.log_connected }}" data-log-reconnecting="{{ chrome.log_reconnecting }}" data-log-lag="{{ chrome.log_lag }}" data-log-pause="{{ chrome.log_pause }}" data-log-resume="{{ chrome.log_resume }}">
+      <section class="card logs-card" data-log-stream="{{ page.log_stream_url }}" data-log-connected="{{ chrome.log_connected }}" data-log-reconnecting="{{ chrome.log_reconnecting }}" data-log-ended="{{ chrome.log_ended }}" data-log-stopped="{{ chrome.log_stopped }}" data-log-reset="{{ chrome.log_reset }}" data-log-unavailable="{{ chrome.log_unavailable }}" data-log-lag="{{ chrome.log_lag }}" data-log-pause="{{ chrome.log_pause }}" data-log-resume="{{ chrome.log_resume }}">
         <div class="log-controls" hidden>
           <div><label for="log-level">{{ chrome.log_level }}</label><select id="log-level"><option value="all">{{ chrome.log_all }}</option><option value="error">{{ chrome.log_error }}</option><option value="warn">{{ chrome.log_warn }}</option><option value="info">{{ chrome.log_info }}</option><option value="debug">{{ chrome.log_debug }}</option><option value="trace">{{ chrome.log_trace }}</option></select></div>
           <div class="log-search"><label for="log-search">{{ chrome.log_search }}</label><input type="search" id="log-search" maxlength="256"></div>
