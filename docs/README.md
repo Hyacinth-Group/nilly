@@ -18,6 +18,6 @@
 - [Glossary](glossary.md): retained compatibility vocabulary.
 - [Development](development.md) and [CONTRIBUTING](../CONTRIBUTING.md): focused changes and PR workflow.
 - [Roadmap](roadmap.md): outstanding work.
-- [Historical decisions](decisions.md): dated rationale; superseded entries are not the current behavior reference.
+- [Design decisions](decisions.md): concise rationale and current tradeoffs; older chronology remains in Git history.
 
-Public docs describe the product and contribution contracts, not agent sessions. Current source and reference pages take precedence over dated historical decisions.
+Public docs describe the product and contribution contracts, not agent sessions. Historical verification claims are not current test results.
