@@ -16,14 +16,19 @@ pub fn run(args: &[String]) -> Result<(), BotError> {
 
     let stdin = io::stdin();
     let (content, app_id) = build_env(&mut stdin.lock(), stdin.is_terminal())?;
-    std::fs::write(path, content)?;
+    std::fs::write(path, &content)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     }
 
-    println!("Wrote .env\n{}", next_steps(app_id));
+    let steps = if content.starts_with("MATRIX_HOMESERVER=") {
+        strings::t("init.matrix.next_steps").to_string()
+    } else {
+        next_steps(app_id)
+    };
+    println!("Wrote .env\n{steps}");
     Ok(())
 }
 
@@ -61,13 +66,32 @@ fn build_env<R: BufRead>(
     } else {
         "piped input"
     };
-    let token = ask_required(
-        input,
-        &format!(
-            "Discord bot token (required; Developer Portal -> Bot -> Reset Token; {secret_hint}): "
-        ),
-        hidden_secrets,
-    )?;
+    let matrix = loop {
+        let answer = ask(input, strings::t("init.platform"))?;
+        match answer.as_str() {
+            "" | "discord" => break false,
+            "matrix" => break true,
+            _ => continue,
+        }
+    };
+    let (mut content, app_id) = if matrix {
+        (
+            matrix_credentials(input, hidden_secrets, secret_hint)?,
+            None,
+        )
+    } else {
+        let token = ask_required(
+            input,
+            &format!(
+                "Discord bot token (required; Developer Portal -> Bot -> Reset Token; {secret_hint}): "
+            ),
+            hidden_secrets,
+        )?;
+        (
+            format!("DISCORD_TOKEN={token}\n"),
+            app_id_from_token(&token),
+        )
+    };
     let provider = loop {
         let answer = ask(
             input,
@@ -111,14 +135,28 @@ fn build_env<R: BufRead>(
             _ => continue,
         }
     };
-    let owner = loop {
-        let answer = ask(
-            input,
-            "Your Discord user ID (optional; e.g. 123456789012345678; enable Developer Mode, right-click your user and Copy User ID; owner can switch /model; Enter = skip): ",
-        )?;
-        if answer.bytes().all(|byte| byte.is_ascii_digit()) {
-            break answer;
-        }
+    let owner_setting = if matrix {
+        let owner = loop {
+            let answer = ask(input, strings::t("init.matrix.owner"))?;
+            if valid_matrix_id(&answer, '@') {
+                break platform::types::UserKey::new(
+                    platform::types::PlatformKind::Matrix,
+                    &[&answer],
+                )?;
+            }
+        };
+        format!("OWNER_KEY={owner}")
+    } else {
+        let owner = loop {
+            let answer = ask(
+                input,
+                "Your Discord user ID (optional; e.g. 123456789012345678; enable Developer Mode, right-click your user and Copy User ID; owner can switch /model; Enter = skip): ",
+            )?;
+            if answer.bytes().all(|byte| byte.is_ascii_digit()) {
+                break answer;
+            }
+        };
+        format!("OWNER_ID={owner}")
     };
     let offset = loop {
         let answer = ask(
@@ -134,14 +172,101 @@ fn build_env<R: BufRead>(
         }
     };
 
-    let mut content = format!("DISCORD_TOKEN={token}\n{key_name}={key}\n");
+    content.push_str(&format!("{key_name}={key}\n"));
     if provider == "mistral" {
         content.push_str("PROVIDER=mistral\n");
     }
     content.push_str(&format!(
-        "MODEL={model}\nBOT_LANG={language}\nOWNER_ID={owner}\nTZ_OFFSET={offset}\n# more options: see .env.example\n"
+        "MODEL={model}\nBOT_LANG={language}\n{owner_setting}\nTZ_OFFSET={offset}\n# more options: see .env.example\n"
     ));
-    Ok((content, app_id_from_token(&token)))
+    Ok((content, app_id))
+}
+
+fn valid_matrix_id(value: &str, sigil: char) -> bool {
+    value.starts_with(sigil)
+        && value.len() > 1
+        && !value
+            .chars()
+            .any(|ch| ch.is_whitespace() || ch.is_control())
+        && ((sigil == '!' && !value.contains(':'))
+            || value[1..]
+                .split_once(':')
+                .is_some_and(|(local, server)| !local.is_empty() && !server.is_empty()))
+}
+
+fn matrix_credentials<R: BufRead>(
+    input: &mut R,
+    hidden_secrets: bool,
+    secret_hint: &str,
+) -> Result<String, BotError> {
+    eprintln!("{}", strings::t("init.matrix.plaintext"));
+    let homeserver = loop {
+        let answer = ask(input, strings::t("init.matrix.homeserver"))?;
+        if reqwest::Url::parse(&answer).is_ok_and(|url| {
+            matches!(url.scheme(), "https" | "http")
+                && url.host_str().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none()
+        }) {
+            break dotenv_value(answer);
+        }
+    };
+    let user = loop {
+        let answer = ask(input, strings::t("init.matrix.user"))?;
+        if valid_matrix_id(&answer, '@') {
+            break dotenv_value(answer);
+        }
+    };
+    let auth = loop {
+        let answer = ask(input, strings::t("init.matrix.auth"))?;
+        match answer.as_str() {
+            "" | "token" => break "MATRIX_ACCESS_TOKEN",
+            "password" => break "MATRIX_PASSWORD",
+            _ => continue,
+        }
+    };
+    let prompt = strings::t(if auth == "MATRIX_ACCESS_TOKEN" {
+        "init.matrix.token"
+    } else {
+        "init.matrix.password"
+    })
+    .replace("{secret_hint}", secret_hint);
+    let secret = dotenv_value(ask_required(input, &prompt, hidden_secrets)?);
+    let rooms = loop {
+        let mut answer = ask(input, strings::t("init.matrix.rooms"))?;
+        if answer.is_empty()
+            || answer
+                .split(',')
+                .all(|room| valid_matrix_id(room.trim(), '!'))
+        {
+            answer.retain(|ch| !ch.is_whitespace());
+            break dotenv_value(answer);
+        }
+    };
+    Ok(format!(
+        "MATRIX_HOMESERVER={homeserver}\nMATRIX_USER={user}\n{auth}={secret}\nMATRIX_ROOMS={rooms}\n"
+    ))
+}
+
+fn dotenv_value(value: String) -> String {
+    if value
+        .chars()
+        .all(|ch| !ch.is_whitespace() && !matches!(ch, '#' | '\'' | '"' | '$' | '\\'))
+    {
+        return value;
+    }
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('"');
+    for ch in value.chars() {
+        if matches!(ch, '\\' | '"' | '$') {
+            quoted.push('\\');
+        }
+        quoted.push(ch);
+    }
+    quoted.push('"');
+    quoted
 }
 
 fn model_prompt(provider: &str, default_model: &str) -> String {
@@ -209,7 +334,8 @@ mod test {
 
     #[test]
     fn build_env_collects_openrouter_answers() {
-        let mut input = io::Cursor::new(b"MTIzNDU2Nzg5MDEyMzQ1Njc4.x.y\n\nsk-test\n\nen\n42\n-5\n");
+        let mut input =
+            io::Cursor::new(b"\nMTIzNDU2Nzg5MDEyMzQ1Njc4.x.y\n\nsk-test\n\nen\n42\n-5\n");
         let (content, app_id) = build_env(&mut input, false).unwrap();
         assert!(content.contains("OPENROUTER_KEY=sk-test\n"));
         assert!(content.contains("OWNER_ID=42\n"));
@@ -222,7 +348,7 @@ mod test {
     #[test]
     fn build_env_reasks_invalid_answers_and_supports_mistral() {
         let mut input = io::Cursor::new(
-            b"\ntoken\nunknown\nmistral\n\nsk-test\ncustom-model\nde\ntr\ninvalid\n42\n15\n5.5\n",
+            b"unknown\ndiscord\n\ntoken\nunknown\nmistral\n\nsk-test\ncustom-model\nde\ntr\ninvalid\n42\n15\n5.5\n",
         );
         let (content, app_id) = build_env(&mut input, false).unwrap();
         assert_eq!(content, "DISCORD_TOKEN=token\nMISTRAL_KEY=sk-test\nPROVIDER=mistral\nMODEL=custom-model\nBOT_LANG=tr\nOWNER_ID=42\nTZ_OFFSET=5.5\n# more options: see .env.example\n");
@@ -231,7 +357,7 @@ mod test {
 
     #[test]
     fn build_env_defaults_optional_answers() {
-        let mut input = io::Cursor::new(b"token\n\nsk-test\n\n\n\n\n");
+        let mut input = io::Cursor::new(b"\ntoken\n\nsk-test\n\n\n\n\n");
         let (content, _) = build_env(&mut input, false).unwrap();
         assert!(content.contains("MODEL=\nBOT_LANG=en\nOWNER_ID=\nTZ_OFFSET=0\n"));
     }
@@ -239,7 +365,7 @@ mod test {
     #[test]
     fn build_env_keeps_explicit_free_model_and_trims_piped_secrets() {
         let answers = format!(
-            "  token  \r\nopenrouter\r\n  sk-test  \r\n{FREE_OPENROUTER_MODEL}\r\n\r\n\r\n\r\n"
+            "\r\n  token  \r\nopenrouter\r\n  sk-test  \r\n{FREE_OPENROUTER_MODEL}\r\n\r\n\r\n\r\n"
         );
         let (content, app_id) = build_env(&mut io::Cursor::new(answers), false).unwrap();
         assert_eq!(
@@ -247,6 +373,41 @@ mod test {
             format!("DISCORD_TOKEN=token\nOPENROUTER_KEY=sk-test\nMODEL={FREE_OPENROUTER_MODEL}\nBOT_LANG=en\nOWNER_ID=\nTZ_OFFSET=0\n# more options: see .env.example\n")
         );
         assert_eq!(app_id, None);
+    }
+
+    #[test]
+    fn build_env_matrix_prefers_token_and_encodes_owner() {
+        let answers = b"matrix\nhttps://matrix.example.org\n@bot:example.org\n\nsyt_test\n!one:example.org,!two:example.org\n\nsk-test\n\nen\n@owner:example.org\n\n";
+        let (content, app_id) = build_env(&mut io::Cursor::new(answers), false).unwrap();
+        assert_eq!(content, "MATRIX_HOMESERVER=https://matrix.example.org\nMATRIX_USER=@bot:example.org\nMATRIX_ACCESS_TOKEN=syt_test\nMATRIX_ROOMS=!one:example.org,!two:example.org\nOPENROUTER_KEY=sk-test\nMODEL=\nBOT_LANG=en\nOWNER_KEY=matrix:user:%40owner%3Aexample.org\nTZ_OFFSET=0\n# more options: see .env.example\n");
+        assert_eq!(app_id, None);
+        assert!(!content.contains("DISCORD_TOKEN"));
+        assert!(!content.contains("MATRIX_PASSWORD"));
+        assert!(!content.contains("OWNER_ID"));
+    }
+
+    #[test]
+    fn build_env_matrix_password_reasks_invalid_configuration() {
+        let answers = b"matrix\n\nmatrix.example.org\nftp://example.org\nhttps://example.org\nbot\n@:example.org\n@bot:\n@bot:example.org\nunknown\npassword\n\nsecret\n#alias:example.org\n!room:\n\nmistral\nsk-test\ncustom\ntr\n\nowner\n@owner:example.org\n5.5\n";
+        let (content, _) = build_env(&mut io::Cursor::new(answers), false).unwrap();
+        assert!(content.contains("MATRIX_PASSWORD=secret\nMATRIX_ROOMS=\n"));
+        assert!(content.contains("MISTRAL_KEY=sk-test\nPROVIDER=mistral\n"));
+        assert!(content.contains("BOT_LANG=tr\nOWNER_KEY=matrix:user:%40owner%3Aexample.org\n"));
+        assert!(content.contains("TZ_OFFSET=5.5\n"));
+        assert!(!content.contains("MATRIX_ACCESS_TOKEN"));
+    }
+
+    #[test]
+    fn matrix_secret_survives_dotenv_quoting() {
+        let secret = r#"pa ss#'$word"\end"#;
+        let content = format!("MATRIX_PASSWORD={}\n", dotenv_value(secret.to_string()));
+        let entries = dotenvy::from_read_iter(content.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            entries,
+            vec![("MATRIX_PASSWORD".to_string(), secret.to_string())]
+        );
     }
 
     #[test]

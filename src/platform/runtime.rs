@@ -51,6 +51,11 @@ pub enum ConnectionConfig {
         connection: ConnectionId,
         token: String,
     },
+    #[cfg(feature = "matrix")]
+    Matrix {
+        connection: ConnectionId,
+        config: super::matrix::MatrixConfig,
+    },
 }
 struct SeenEvents {
     set: HashSet<(ConnectionId, EventKey)>,
@@ -88,24 +93,40 @@ pub(crate) async fn run(bot: Arc<Bot>, configs: Vec<ConnectionConfig>) -> Result
     let mut runners = JoinSet::new();
     let mut ids = HashSet::new();
     for config in &configs {
-        let ConnectionConfig::Discord { connection, .. } = config;
+        let (connection, kind) = match config {
+            ConnectionConfig::Discord { connection, .. } => (connection, PlatformKind::Discord),
+            #[cfg(feature = "matrix")]
+            ConnectionConfig::Matrix { connection, .. } => (connection, PlatformKind::Matrix),
+        };
         if !ids.insert(connection.clone()) {
             return Err(PlatformError::Transport("duplicate configured connection".into()).into());
         }
         bot.adapters
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .configure(connection, PlatformKind::Discord)?;
+            .configure(connection, kind)?;
     }
     for config in configs {
-        let ConnectionConfig::Discord { connection, token } = config;
+        let connection = match &config {
+            ConnectionConfig::Discord { connection, .. } => connection.clone(),
+            #[cfg(feature = "matrix")]
+            ConnectionConfig::Matrix { connection, .. } => connection.clone(),
+        };
         let bot = bot.clone();
         let ingress = ingress.clone();
         let shutdown = shutdown_rx.clone();
         runners.spawn(async move {
-            let result =
-                super::discord::runner::run(bot, connection.clone(), token, ingress, shutdown)
-                    .await;
+            let result = match config {
+                ConnectionConfig::Discord { token, .. } => {
+                    super::discord::runner::run(bot, connection.clone(), token, ingress, shutdown)
+                        .await
+                }
+                #[cfg(feature = "matrix")]
+                ConnectionConfig::Matrix { config, .. } => {
+                    super::matrix::runner::run(bot, connection.clone(), config, ingress, shutdown)
+                        .await
+                }
+            };
             (connection, result)
         });
     }

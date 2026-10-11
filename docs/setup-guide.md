@@ -1,6 +1,10 @@
-# Your first Discord bot
+# Your first bot
 
 This bot keeps conversation notes and uses them alongside a fixed persona in later replies. You do not need to write code, but setup still requires copying commands into Terminal or PowerShell.
+
+The steps below use Discord, the setup wizard's default. For Matrix, follow
+[Matrix plaintext room setup](#matrix-plaintext-room-setup) instead of the Discord
+account/intents/invite steps. Both use the same model account and saved brain.
 
 ## What you need
 
@@ -28,6 +32,130 @@ The bot itself is free, open-source software. You bring your own model account. 
 Free-model requests are rate-limited; consult [OpenRouter's current limits](https://openrouter.ai/docs/api_reference/limits). A **request** is one model call, not one Discord message. Background analysis makes requests too and can exhaust the free allowance before ordinary chat does.
 
 We have not published a measured running cost yet. Replies and background analysis both use your model key. Start with a provider spending limit and check the provider's usage dashboard. A rented server may have its own bill.
+
+## Matrix plaintext room setup
+
+Matrix is an alternative chat transport, **not an encrypted assistant**.
+End-to-end encrypted rooms and encrypted attachments are unsupported. This bot
+uses outbound HTTP(S) sync: a home computer behind NAT can run it without port
+forwarding, a tunnel, or a public webhook. Keep the computer on and connected.
+
+### 1. Create a separate bot account
+
+1. In a Matrix client such as Element, create a **dedicated bot account** on
+   `matrix.org`, or ask your own homeserver administrator to create one. The bot
+   acts as this account; do not give it your personal account's credentials.
+2. Save its **full user ID**, such as `@mybot:matrix.org`. A display name or just
+   `mybot` is not a user ID. Your homeserver URL is usually `https://matrix.org`
+   for that server; on your own server use its Matrix client API base URL.
+3. Prefer an **access token**. While signed in as the bot, use the client's
+   account/help/developer tools to reveal its access token. Client versions
+   differ; if it is not exposed, browser developer tools can show the
+   `Authorization: Bearer ...` header on a Matrix client API request. Copy only
+   the token, never the `Bearer ` prefix. Treat it as the account's password:
+   do not paste it in chat, screenshots, issue reports or source control.
+4. Password login is also supported: choose `password` in the wizard if your
+   homeserver supports password login. For SSO-only accounts, obtain an access
+   token from a signed-in client instead. Revoke a leaked token/session in your
+   Matrix client's session settings; change a leaked password too.
+
+Keep your **owner** account separate. Find its full user ID, for example
+`@owner:matrix.org`; the wizard needs this to approve invitations and commands.
+
+### 2. Make an explicitly approved, unencrypted room
+
+1. As the owner, create a room and **disable encryption before creation**. Many
+   clients enable encryption for new rooms or direct messages by default. Check
+   the room's security settings before inviting the bot.
+2. An already encrypted room cannot safely be turned into a plaintext room.
+   Create a new room if encryption is on. The bot cannot decrypt messages or
+   use a key-backup/recovery phrase.
+3. Tell members what the bot reads and stores, and that selected conversation
+   text and saved notes are sent to your model service. It observes ordinary
+   messages in approved rooms, not only mentions. The homeserver can also read
+   plaintext content.
+4. Invite the bot **from the configured owner's account**. Alternatively,
+   explicitly allowlist the room's internal ID in `MATRIX_ROOMS`. Find it in
+   the client's room settings/advanced information: it starts with `!`, for
+   example `!roomid:matrix.org`. A room alias (`#myroom:matrix.org`) is not an ID.
+
+`MATRIX_ROOMS` accepts native room IDs separated by commas. It is an explicit
+allowlist, **not** a list of rooms to search for automatically. A blank value
+allows owner-approved invitations only, not every room the account already
+joined. Previously joined but unapproved rooms are ignored. Owner invitation
+approvals persist across restarts.
+
+**Shared-brain privacy:** approved rooms use the same memories and persona.
+Information learned in one approved room can influence replies in another.
+Do not approve unrelated private communities expecting isolated memory. A room
+invitation, leaving a room, or resetting a chat does not erase stored notes.
+See [privacy and retention](#privacy).
+
+### 3. Configure and launch a Matrix-enabled build
+
+Default release builds and the Docker image include the `matrix` Cargo feature.
+For source builds the explicit commands below also work. The wizard cannot add
+Matrix support to a binary built with `--no-default-features`:
+```sh
+cargo run --release --features matrix -- init
+cargo run --release --features matrix
+```
+
+Run both from the repository folder; saved configuration and state are relative
+to the launch directory. Get a model API key as in [step 2 below](#2-get-an-openrouter-key).
+The wizard asks:
+
+| Question | What to enter |
+| --- | --- |
+| Chat platform | Type `matrix`. Enter keeps Discord. |
+| Homeserver URL | `https://matrix.org`, or your own homeserver base URL. |
+| Bot user ID | Full dedicated account ID, e.g. `@mybot:matrix.org`. |
+| Login method | Enter for preferred `token`, or type `password`. |
+| Token/password | The dedicated bot's credential; terminal input is hidden. |
+| Approved room IDs | Optional comma-separated native `!id:server` or modern opaque `!id` values; Enter uses owner invitations only. |
+| Provider, API key, model, language | Your model account and preferred language; Enter selects a **paid** default model. |
+| Owner user ID | Your full Matrix ID; the wizard writes the percent-encoded `OWNER_KEY`. |
+| UTC offset | Your hours from UTC, or Enter for `0`. |
+
+For a Matrix-only installation, leave `DISCORD_TOKEN` blank if editing an
+existing `.env`. Protect `.env` and the entire state directory. Matrix session
+files contain secrets; never share them as troubleshooting attachments.
+Keep the state directory between restarts so the bot restores the same session
+and device instead of logging in as a fresh device each time.
+[Exact state paths](state-files.md#matrix-session-and-sync-state).
+
+### 4. Verify as the owner
+
+With `STEALTH` off, send **`!status`** in an approved plaintext room (`!durum` for
+Turkish UI). `!help` / `!yardim` lists the available commands. Matrix commands
+are **owner-only**; a different member's command is not permission to administer
+the shared brain.
+
+Matrix has no Discord-style ephemeral reply. Commands deliver their private
+results in a separate **plaintext admin room** containing only the bot and owner.
+When the bot invites you to that room, **accept the invitation** and run
+`!status` there to see the result. Keep it unencrypted and do not invite other
+people. This admin room is excluded from conversational memory.
+
+Private results, including mind/settings detail, are denied in public rooms
+rather than printed to everyone. If the private room becomes encrypted or has
+other members, delivery fails closed: there is no public fallback. Plaintext
+admin rooms are not end-to-end confidential; the homeserver can read them too.
+Use the approved group for room-targeted actions such as `!news` and `!reset`;
+shared-brain commands such as `!status` also work in the admin room.
+Do not enable public diagnostics expecting them to be private.
+
+If no reply appears, check that the build has Matrix enabled, the full account
+IDs/homeserver are correct, the owner invited the bot or the room is allowlisted,
+the room is not encrypted, `STEALTH` is off, and you accepted the bot's private
+admin-room invitation. Then inspect local logs without sharing credentials.
+Ordinary chat still depends on the sleep schedule and the
+bot's willingness to reply; `!status` is the setup check.
+
+For developers using a disposable local homeserver, the ignored integration
+test command and `MATRIX_TEST_*` credentials are documented in
+[configuration](configuration.md#disposable-matrix-integration-test).
+
 
 ## 1. Create the bot in Discord
 
@@ -140,6 +268,7 @@ The wizard asks these questions in order:
 
 | Question | What to enter |
 | --- | --- |
+| Chat platform | Press Enter for `discord`; Matrix uses the separate setup above. |
 | Discord bot token | The token from step 1; terminal input is hidden. |
 | Provider | Press Enter for `openrouter`, or type `mistral`. |
 | API key | Your chosen provider's key from step 2; terminal input is hidden. |

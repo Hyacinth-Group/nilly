@@ -88,22 +88,28 @@ async fn main() -> Result<(), BotError> {
         bot.chat_cli().await;
         return Ok(());
     }
-    let token = match setting("DISCORD_TOKEN") {
-        Ok(token) => token,
-        Err(_) => {
-            eprintln!("DISCORD_TOKEN is missing. Run `discord-bot init` (or `cargo run -- init`) to create .env.");
-            std::process::exit(1);
-        }
-    };
-    let bot = Bot::setup()?;
-
-    platform::runtime::run(
-        bot,
-        vec![platform::runtime::ConnectionConfig::Discord {
+    let mut connections = Vec::new();
+    if let Ok(token) = setting("DISCORD_TOKEN") {
+        connections.push(platform::runtime::ConnectionConfig::Discord {
             connection: ConnectionId::new("discord-default"),
             token,
-        }],
-    )
-    .await
+        });
+    }
+    #[cfg(feature = "matrix")]
+    if let Some(config) = platform::matrix::MatrixConfig::from_env()? {
+        connections.push(platform::runtime::ConnectionConfig::Matrix {
+            connection: ConnectionId::new("matrix-default"),
+            config,
+        });
+    }
+    #[cfg(not(feature = "matrix"))]
+    if setting("MATRIX_HOMESERVER").is_ok() {
+        return Err("Matrix support requires building with --features matrix".into());
+    }
+    if connections.is_empty() {
+        return Err("No platform configured. Run `discord-bot init` to create .env.".into());
+    }
+    let bot = Bot::setup()?;
+    platform::runtime::run(bot, connections).await
 }
 include!("bot/tests/tests.rs");

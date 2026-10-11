@@ -1,17 +1,20 @@
 # Architecture
 
-Discord events enter the chat engine. Replies combine the core persona, evolving notes, retrieved memory, and the current task. Finished chats are queued for background memory analysis. This changes reply context, not model weights; there is no fixed 12-message conversation limit.
+Platform events enter the shared chat engine. Replies combine the core persona, evolving notes, retrieved memory, and the current task. Finished chats are queued for background memory analysis. This changes reply context, not model weights; there is no fixed 12-message conversation limit.
 
 ## Data boundaries
 
 ```mermaid
 flowchart TD
     Discord[Discord events / accessible history] --> Chat[Chat engine]
+    Matrix[Approved Matrix plaintext rooms / sync] --> Chat
     Clock[Sleep and growth stages] --> Chat
     Chat --> Model[OpenRouter / Mistral / configured endpoint]
     Model --> Reply[Replies / silence / reactions]
     Reply --> Discord
+    Reply --> Matrix
     Discord --> Agents[Background analysis]
+    Matrix --> Agents
     Web[News / page reading] --> Agents
     Agents --> Model
     Agents --> Memory[Local redb records]
@@ -35,6 +38,7 @@ Selected messages, saved notes, and optionally images leave the host for model p
 | `src/bot/cycle/` | background loops, memory queues and actions |
 | `src/command.rs`, `src/command/` | shared typed actions, validation and administrative read models |
 | `src/platform/discord/` | native gateway, SDK transport, slash registration, UI cards/modals and renderer |
+| `src/platform/matrix/` | feature-gated plaintext SDK sync runner, raw-event decoder, native transport and plain renderer |
 | `src/agents.rs`, `src/agenda.rs` | analysis and web/news work |
 | `src/memory.rs`, `src/migrate.rs` | redb records, retrieval, summarization/archive support and legacy import |
 | `src/growth.rs`, `src/sleep.rs`, `src/travel.rs` | growth stages, clock/sleep, Turkish calendar |
@@ -93,8 +97,9 @@ personality decisions. Shared ingress types are `IncomingMessage`, `ReactionEven
 `ChatEvent`, and `EventEnvelope`; account identity is connection-local.
 `ConversationKey` includes optional topic/thread scope for adapter routing.
 Explicit native conversions remain inside Discord transport/UI boundaries.
-Memory has completed its canonical schema-v2 cutover. Discord is the only enabled
-runtime transport; the interface does not advertise unimplemented networks.
+Memory has completed its canonical schema-v2 cutover. Matrix is a concrete
+runtime transport when built with the `matrix` feature; generic interfaces do not
+claim decryption or native rich UI for it.
 
 Capabilities describe usable room permissions: ordinary-message visibility,
 history/decryption, replies/threads, sending/reactions/edits/deletes/typing,
@@ -191,13 +196,15 @@ explicit qualified administrator set is supplied through
 
 ### Generic lifecycle and adapter registration
 
-`platform::runtime::ConnectionConfig::Discord { connection: ConnectionId, token: String }`
-is the current startup configuration; credentials remain runner-local. Startup
-calls `platform::runtime::run(Arc<Bot>, Vec<ConnectionConfig>) -> Result<(), BotError>`.
+`platform::runtime::ConnectionConfig` carries adapter-specific startup
+configuration; credentials remain runner-local. Matrix configuration includes
+homeserver/account credentials and explicit room approval rather than borrowing
+Discord token/room fields. Startup calls
+`platform::runtime::run(Arc<Bot>, Vec<ConnectionConfig>) -> Result<(), BotError>`.
 Adding a concrete network means extending this configuration enum and `Adapter`,
 implementing the complete `Platform` interface, and providing an adapter-local
 runner accepting an `EventSender` and `ShutdownReceiver`. No generic brain code
-should need an SDK import. The Discord gateway and event handler now live under
+should need an SDK import. The Discord gateway and event handler live under
 `platform::discord`, including intents, slash UI, safe-content decoding and HTTP
 enrichment.
 
@@ -247,6 +254,57 @@ reversible canonical filename without rewriting old Discord history bodies.
 typed settings registry should validate it through `UserKey::from_str`, expose
 it as optional, and preserve the numeric compatibility input. Configuration,
 memory and status APIs do not expose native SDK objects or credentials.
+
+### Matrix plaintext adapter
+
+Matrix uses `matrix-sdk` 0.19.1 under the default-enabled `matrix` Cargo feature
+(removable with `--no-default-features`), with SDK crypto disabled. Its runner
+logs in/restores a session, registers the concrete adapter,
+and consumes raw sync JSON through an adapter-local decoder before publishing
+normalized envelopes. Sync is outbound HTTP(S), with no inbound webhook listener.
+Matrix user/room/event IDs remain opaque, case-sensitive native IDs inside their
+canonical typed keys; `@owner:example.org` becomes
+`matrix:user:%40owner%3Aexample.org`, not a display-name identity.
+
+Room discovery is not approval. `MATRIX_ROOMS` supplies native explicit
+allowlisted room IDs; invitations from the qualified owner can approve additional
+rooms and persist that decision in `rooms.json`. Previously joined unapproved
+rooms do not enter the shared brain. An encryption state event prevents a room
+from becoming a usable plaintext route; encrypted events/attachments are not
+decrypted or interpreted as plaintext. No SDK crypto store or recovery support
+is present. Approved conversational rooms share memory rather than private,
+per-room brains.
+
+The native transport supports bounded room history (`/messages`, at most 100
+events per page), replies but not Matrix thread routes, `m.reaction`, `m.replace`
+edits, own-event redaction, typing, and per-room membership nicknames. Sending/
+reaction/edit/delete capabilities follow room power levels on sync; unknown and
+encrypted rooms fail closed. Explicit `m.mentions` lists use `room:false`.
+Authenticated homeserver MXC downloads are streamed with a 10 MiB bound and
+JPEG/PNG/GIF/WebP MIME support; `IMAGE_ANALYSIS=off` bypasses image reading.
+Local file/byte uploads are bounded at 10 MiB with one attachment per event.
+Output uses a 16,000-UTF-8-byte budget and 1,200 ms edit cadence, not Discord's
+scalar count. Decryption and native rich UI remain unavailable.
+
+Matrix exposes owner-only `!status`, `!help` and the shared localized prefix
+command schema, not Discord slash registrations, buttons or modals. Private
+administrative results never fall back to public text. The runner creates a
+dedicated private plaintext admin room and invites the owner when needed; it
+persists that route in `admin-room.json`, checks that only bot/owner are joined
+or invited, and rejects encryption. The owner must accept the invitation.
+This route is excluded from conversational learning. Plaintext membership checks
+are not E2EE: the homeserver can read the admin room too. An unusable private
+route yields a privacy/error response, never public mind/settings detail.
+`STEALTH` consumes commands without sending command UI.
+
+Session/device identity and sync continuation are persisted under
+`matrix/<connection>/session.json` and `sync.json`; SDK SQLite state is under
+`matrix/<connection>/store/`. These live beneath the state directory, separately
+from redb, and include secrets/cache data. Keeping them across restart preserves
+device identity. [State protection](state-files.md#matrix-session-and-sync-state).
+Offline decoder/renderer characterization is distinct from the opt-in ignored
+`matrix_live` network tests documented in [configuration](configuration.md#disposable-matrix-integration-test).
+
 
 Localized platform fragments render the common prompts through `PromptContext`.
 The Discord golden fixtures retain complete English/Turkish bytes. Other networks

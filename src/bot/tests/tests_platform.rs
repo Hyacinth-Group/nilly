@@ -137,6 +137,8 @@
         let (adapter, _) = bot.transport(&room.conversation()).unwrap();
         match adapter.as_ref() {
             platform::Adapter::Discord(adapter) => assert_eq!(adapter.media_resolution_count(), 0),
+            #[cfg(feature = "matrix")]
+            platform::Adapter::Matrix(_) => panic!("Discord fixture registered a Matrix adapter"),
         }
         {
             let state = bot.state();

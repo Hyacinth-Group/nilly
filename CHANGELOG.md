@@ -4,6 +4,11 @@ Notable changes are recorded here in [Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Added
+- Default-enabled, removable `matrix` feature for plaintext Matrix sync, explicit room approval, owner-only prefix administration and stable persisted session/device state.
+- Matrix setup-wizard selection with access-token or password login, canonical owner identity, bilingual guidance, and a beginner plaintext-room/privacy guide.
+- Opt-in ignored `matrix_live` integration tests for session restoration, native transport operations and encryption rejection on disposable homeservers.
+
 ### Changed
 - Default prompts identify the bot honestly and omit a fictional university biography and fixed political identity.
 - Shorter bilingual READMEs explain the memory mechanism, collection scope, external processing, and unmeasured running cost.
