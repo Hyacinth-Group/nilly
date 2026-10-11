@@ -102,14 +102,16 @@ fn input(language: Language, view: &FieldView) -> Field {
             Source::Default => "panel.field.default",
         },
     );
-    input.configured = t(
-        language,
-        if view.effective.configured {
-            "panel.settings.configured"
-        } else {
-            "panel.settings.empty"
-        },
-    );
+    if view.spec.secret {
+        input.configured = t(
+            language,
+            if view.effective.configured {
+                "panel.settings.configured"
+            } else {
+                "panel.settings.empty"
+            },
+        );
+    }
     input.effective = if view.spec.secret {
         input.configured.clone()
     } else {

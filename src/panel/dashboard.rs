@@ -301,7 +301,7 @@ pub(super) async fn overview(
         })
         .collect();
     if events.items.is_empty() {
-        events.description = t(language, "panel.logs.empty");
+        events.description = t(language, "panel.logs.no_recent");
     }
     page.sections.push(events);
     html(&page)

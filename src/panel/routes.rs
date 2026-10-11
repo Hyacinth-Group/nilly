@@ -392,7 +392,7 @@ async fn login_page(
     }
     let lang = lang(&query);
     let mut page = page(lang, "panel.title.login", "")?;
-    page.description = t(lang, "panel.setup.protect");
+    page.description = t(lang, "panel.login.body");
     let mut card = section(lang, "panel.title.login");
     let mut password = field(lang, "password", "panel.label.password", "password", "");
     password.required = true;
@@ -1196,6 +1196,9 @@ async fn logs_page(
             ..Default::default()
         })
         .collect();
+    if recent.items.is_empty() {
+        recent.description = t(lang, "panel.logs.no_recent");
+    }
     page.sections.push(recent);
     html(&page)
 }

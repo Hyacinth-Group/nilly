@@ -30,6 +30,8 @@ When no administrator exists, startup exposes a one-use `/setup#token=...` conso
 
 Setup completion writes configuration and signals the runtime owner to start Discord within the same process. The lifecycle distinguishes unconfigured, configured/starting, running, configuration error, and stopping. Overview reports gateway connection separately from panel availability; moods belong to active conversations, not a global summary. It also shows process-local model-call/token counters, not provider cost accounting or durable usage history. Memory/personality editors, runtime action buttons, and the dedicated usage page are intentionally disabled pending core APIs.
 
+The interface uses system fonts and server-rendered forms with a visible, wrapping mobile navigation. Core setup, sign-in, settings, and account forms work without JavaScript; the console claim code can be pasted manually. JavaScript adds setup-fragment handling, passive dashboard refreshes, and live logs, while recent log entries remain server-rendered. Ordinary settings never receive secret-status labels; credential fields show only configured/source flags, not stored values.
+
 ### Configuration and settings
 
 `src/config/` supplies the shared schema, validation, loading, and saving used by the panel, CLI, and bot. The startup process environment wins over the configured dotenv file; externally supplied fields are read-only in the panel. The default file is `.env`; Compose selects `/data/config/.env` with `PANEL_CONFIG_PATH`. Saves use a private atomic replacement while preserving unrelated settings/comments, so containers must mount a writable configuration **directory**, not just the file.

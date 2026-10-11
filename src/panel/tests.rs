@@ -680,6 +680,56 @@ async fn log_stream_connections_are_bounded_and_recent_logs_remain_readable_with
     )
     .unwrap();
     assert!(html.contains(views::text(views::Language::En, "panel.logs.body").unwrap()));
+    assert!(html.contains(views::text(views::Language::En, "panel.logs.no_recent").unwrap()));
     assert!(html.contains("<noscript>"));
     assert!(html.contains("data-log-ended="));
+}
+
+#[tokio::test]
+async fn login_explains_existing_ownership_and_nonsecret_settings_have_no_secret_metadata() {
+    let (app, _directory) = fixture().await;
+    settings_fixture(&app);
+    let owner = owner(&app).await;
+    let router = routes::router(app);
+    let response = router
+        .clone()
+        .oneshot(request("GET", "/login", None, ""))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 128 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains("Enter the administrator password you saved during setup"));
+    assert!(!html.contains("Choose a unique admin password"));
+    assert!(html.contains("discord-bot panel reset-password"));
+    let response = router
+        .clone()
+        .oneshot(request("GET", "/settings", Some(&owner.token), ""))
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 256 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert_eq!(html.matches("Secret configured:").count(), 4);
+    let response = router
+        .oneshot(request("GET", "/setup?step=2", Some(&owner.token), ""))
+        .await
+        .unwrap();
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 128 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains("Leave Presence Intent off."));
 }
