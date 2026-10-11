@@ -46,7 +46,7 @@ include!("bot/handler/handler.rs");
 include!("bot/setup.rs");
 include!("bot/lifecycle.rs");
 
-/// Runs the Discord client or terminal chat bench until shutdown or failure.
+/// Runs configured network adapters or the terminal chat bench until shutdown.
 #[tokio::main]
 async fn main() -> Result<(), BotError> {
     dotenvy::dotenv().ok();
@@ -88,22 +88,30 @@ async fn main() -> Result<(), BotError> {
         bot.chat_cli().await;
         return Ok(());
     }
-    let token = match setting("DISCORD_TOKEN") {
-        Ok(token) => token,
-        Err(_) => {
-            eprintln!("DISCORD_TOKEN is missing. Run `discord-bot init` (or `cargo run -- init`) to create .env.");
-            std::process::exit(1);
-        }
-    };
-    let bot = Bot::setup()?;
-
-    platform::runtime::run(
-        bot,
-        vec![platform::runtime::ConnectionConfig::Discord {
+    let mut configs = Vec::new();
+    if let Ok(token) = setting("DISCORD_TOKEN") {
+        configs.push(platform::runtime::ConnectionConfig::Discord {
             connection: ConnectionId::new("discord-default"),
             token,
-        }],
-    )
-    .await
+        });
+    }
+    if let Ok(token) = setting("TELEGRAM_TOKEN") {
+        configs.push(platform::runtime::ConnectionConfig::Telegram {
+            connection: ConnectionId::new("telegram-default"),
+            token,
+            rooms: platform::telegram::runner::parse_rooms(
+                &std::env::var("TELEGRAM_ROOMS").unwrap_or_default(),
+            )?,
+            owner: owner_id()
+                .filter(|user| user.platform() == PlatformKind::Telegram)
+                .cloned(),
+        });
+    }
+    if configs.is_empty() {
+        eprintln!("{}", strings::t("telegram.startup.missing"));
+        std::process::exit(1);
+    }
+    let bot = Bot::setup()?;
+    platform::runtime::run(bot, configs).await
 }
 include!("bot/tests/tests.rs");

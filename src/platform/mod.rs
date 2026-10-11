@@ -8,6 +8,7 @@ pub mod outgoing;
 pub mod prompt_context;
 pub mod registry;
 pub mod runtime;
+pub mod telegram;
 pub mod types;
 
 pub use interface::{Adapter, Platform, PlatformError, PlatformResult};

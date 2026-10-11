@@ -8,6 +8,12 @@ const INVITE_PERMISSIONS: u64 = 67226688;
 const FREE_OPENROUTER_MODEL: &str = "google/gemma-4-31b-it:free";
 const EXISTING_ENV_MESSAGE: &str = ".env already exists. Your existing settings were not changed. Open .env to edit them, or rerun discord-bot init --force to replace them.";
 
+#[derive(Debug, PartialEq, Eq)]
+enum SetupTarget {
+    Discord(Option<u64>),
+    Telegram,
+}
+
 pub fn run(args: &[String]) -> Result<(), BotError> {
     let path = std::path::Path::new(".env");
     if path.exists() && !args.iter().any(|arg| arg == "--force") {
@@ -15,7 +21,7 @@ pub fn run(args: &[String]) -> Result<(), BotError> {
     }
 
     let stdin = io::stdin();
-    let (content, app_id) = build_env(&mut stdin.lock(), stdin.is_terminal())?;
+    let (content, target) = build_env(&mut stdin.lock(), stdin.is_terminal())?;
     std::fs::write(path, content)?;
     #[cfg(unix)]
     {
@@ -23,7 +29,11 @@ pub fn run(args: &[String]) -> Result<(), BotError> {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     }
 
-    println!("Wrote .env\n{}", next_steps(app_id));
+    let steps = match target {
+        SetupTarget::Discord(app_id) => next_steps(app_id),
+        SetupTarget::Telegram => strings::t("init.telegram.next_steps").to_string(),
+    };
+    println!("Wrote .env\n{steps}");
     Ok(())
 }
 
@@ -55,17 +65,36 @@ fn ask_required<R: BufRead>(input: &mut R, prompt: &str, hidden: bool) -> Result
 fn build_env<R: BufRead>(
     input: &mut R,
     hidden_secrets: bool,
-) -> Result<(String, Option<u64>), BotError> {
+) -> Result<(String, SetupTarget), BotError> {
     let secret_hint = if hidden_secrets {
         "input hidden"
     } else {
         "piped input"
     };
+    let telegram = loop {
+        match ask(input, strings::t("init.platform"))?.as_str() {
+            "" | "discord" => break false,
+            "telegram" => break true,
+            _ => continue,
+        }
+    };
+    if telegram {
+        eprintln!("{}", strings::t("init.telegram.setup"));
+    }
     let token = ask_required(
         input,
-        &format!(
-            "Discord bot token (required; Developer Portal -> Bot -> Reset Token; {secret_hint}): "
-        ),
+        &if telegram {
+            strings::t("init.telegram.token").replace(
+                "{secret_hint}",
+                strings::t(if hidden_secrets {
+                    "init.input_hidden"
+                } else {
+                    "init.piped_input"
+                }),
+            )
+        } else {
+            format!("Discord bot token (required; Developer Portal -> Bot -> Reset Token; {secret_hint}): ")
+        },
         hidden_secrets,
     )?;
     let provider = loop {
@@ -111,14 +140,33 @@ fn build_env<R: BufRead>(
             _ => continue,
         }
     };
-    let owner = loop {
-        let answer = ask(
-            input,
-            "Your Discord user ID (optional; e.g. 123456789012345678; enable Developer Mode, right-click your user and Copy User ID; owner can switch /model; Enter = skip): ",
-        )?;
-        if answer.bytes().all(|byte| byte.is_ascii_digit()) {
-            break answer;
+    let owner = if telegram {
+        loop {
+            let answer = ask(input, strings::t("init.telegram.owner"))?;
+            if answer.is_empty() || valid_telegram_owner(&answer) {
+                break answer;
+            }
         }
+    } else {
+        loop {
+            let answer = ask(
+                input,
+                "Your Discord user ID (optional; e.g. 123456789012345678; enable Developer Mode, right-click your user and Copy User ID; owner can switch /model; Enter = skip): ",
+            )?;
+            if answer.bytes().all(|byte| byte.is_ascii_digit()) {
+                break answer;
+            }
+        }
+    };
+    let rooms = if telegram {
+        loop {
+            let answer = ask(input, strings::t("init.telegram.rooms"))?;
+            if let Some(rooms) = telegram_rooms(&answer) {
+                break rooms;
+            }
+        }
+    } else {
+        String::new()
     };
     let offset = loop {
         let answer = ask(
@@ -134,14 +182,77 @@ fn build_env<R: BufRead>(
         }
     };
 
-    let mut content = format!("DISCORD_TOKEN={token}\n{key_name}={key}\n");
+    let token_name = if telegram {
+        "TELEGRAM_TOKEN"
+    } else {
+        "DISCORD_TOKEN"
+    };
+    let mut content = format!("{token_name}={token}\n{key_name}={key}\n");
     if provider == "mistral" {
         content.push_str("PROVIDER=mistral\n");
     }
+    content.push_str(&format!("MODEL={model}\nBOT_LANG={language}\n"));
+    if telegram {
+        content.push_str(&format!("OWNER_KEY={owner}\nTELEGRAM_ROOMS={rooms}\n"));
+    } else {
+        content.push_str(&format!("OWNER_ID={owner}\n"));
+    }
     content.push_str(&format!(
-        "MODEL={model}\nBOT_LANG={language}\nOWNER_ID={owner}\nTZ_OFFSET={offset}\n# more options: see .env.example\n"
+        "TZ_OFFSET={offset}\n# more options: see .env.example\n"
     ));
-    Ok((content, app_id_from_token(&token)))
+    let target = if telegram {
+        SetupTarget::Telegram
+    } else {
+        SetupTarget::Discord(app_id_from_token(&token))
+    };
+    Ok((content, target))
+}
+
+fn valid_telegram_owner(value: &str) -> bool {
+    use crate::platform::types::{PlatformKind, UserKey};
+    let Ok(key) = value.parse::<UserKey>() else {
+        return false;
+    };
+    key.platform() == PlatformKind::Telegram
+        && value
+            .strip_prefix("telegram:user:")
+            .filter(|id| !id.starts_with('0') && id.bytes().all(|byte| byte.is_ascii_digit()))
+            .is_some_and(|id| id.parse::<u64>().is_ok())
+}
+
+fn telegram_rooms(value: &str) -> Option<String> {
+    use crate::platform::telegram::runner::parse_rooms;
+    if value.is_empty() {
+        return Some(String::new());
+    }
+    for value in value.split(',').map(str::trim) {
+        let native = if let Some(native) = value.strip_prefix("telegram:room:") {
+            native
+        } else {
+            if value.parse::<i64>().ok()? >= 0 {
+                return None;
+            }
+            value
+        };
+        let digits = native.strip_prefix('-').unwrap_or(native);
+        if digits.is_empty()
+            || digits.starts_with('0')
+            || !digits.bytes().all(|byte| byte.is_ascii_digit())
+            || native.parse::<i64>().is_err()
+        {
+            return None;
+        }
+    }
+    let mut rooms: Vec<_> = parse_rooms(value).ok()?.into_iter().collect();
+    rooms.sort_unstable();
+    let mut output = String::new();
+    for room in rooms {
+        if !output.is_empty() {
+            output.push(',');
+        }
+        output.push_str(room.as_str());
+    }
+    Some(output)
 }
 
 fn model_prompt(provider: &str, default_model: &str) -> String {
@@ -209,29 +320,30 @@ mod test {
 
     #[test]
     fn build_env_collects_openrouter_answers() {
-        let mut input = io::Cursor::new(b"MTIzNDU2Nzg5MDEyMzQ1Njc4.x.y\n\nsk-test\n\nen\n42\n-5\n");
+        let mut input =
+            io::Cursor::new(b"\nMTIzNDU2Nzg5MDEyMzQ1Njc4.x.y\n\nsk-test\n\nen\n42\n-5\n");
         let (content, app_id) = build_env(&mut input, false).unwrap();
         assert!(content.contains("OPENROUTER_KEY=sk-test\n"));
         assert!(content.contains("OWNER_ID=42\n"));
         assert!(content.contains("TZ_OFFSET=-5\n"));
         assert!(content.contains("MODEL=\nBOT_LANG=en\n"));
-        assert_eq!(app_id, Some(123456789012345678));
+        assert_eq!(app_id, SetupTarget::Discord(Some(123456789012345678)));
         assert!(content.ends_with("# more options: see .env.example\n"));
     }
 
     #[test]
     fn build_env_reasks_invalid_answers_and_supports_mistral() {
         let mut input = io::Cursor::new(
-            b"\ntoken\nunknown\nmistral\n\nsk-test\ncustom-model\nde\ntr\ninvalid\n42\n15\n5.5\n",
+            b"unknown\ndiscord\n\ntoken\nunknown\nmistral\n\nsk-test\ncustom-model\nde\ntr\ninvalid\n42\n15\n5.5\n",
         );
         let (content, app_id) = build_env(&mut input, false).unwrap();
         assert_eq!(content, "DISCORD_TOKEN=token\nMISTRAL_KEY=sk-test\nPROVIDER=mistral\nMODEL=custom-model\nBOT_LANG=tr\nOWNER_ID=42\nTZ_OFFSET=5.5\n# more options: see .env.example\n");
-        assert_eq!(app_id, None);
+        assert_eq!(app_id, SetupTarget::Discord(None));
     }
 
     #[test]
     fn build_env_defaults_optional_answers() {
-        let mut input = io::Cursor::new(b"token\n\nsk-test\n\n\n\n\n");
+        let mut input = io::Cursor::new(b"\ntoken\n\nsk-test\n\n\n\n\n");
         let (content, _) = build_env(&mut input, false).unwrap();
         assert!(content.contains("MODEL=\nBOT_LANG=en\nOWNER_ID=\nTZ_OFFSET=0\n"));
     }
@@ -239,14 +351,14 @@ mod test {
     #[test]
     fn build_env_keeps_explicit_free_model_and_trims_piped_secrets() {
         let answers = format!(
-            "  token  \r\nopenrouter\r\n  sk-test  \r\n{FREE_OPENROUTER_MODEL}\r\n\r\n\r\n\r\n"
+            "\r\n  token  \r\nopenrouter\r\n  sk-test  \r\n{FREE_OPENROUTER_MODEL}\r\n\r\n\r\n\r\n"
         );
         let (content, app_id) = build_env(&mut io::Cursor::new(answers), false).unwrap();
         assert_eq!(
             content,
             format!("DISCORD_TOKEN=token\nOPENROUTER_KEY=sk-test\nMODEL={FREE_OPENROUTER_MODEL}\nBOT_LANG=en\nOWNER_ID=\nTZ_OFFSET=0\n# more options: see .env.example\n")
         );
-        assert_eq!(app_id, None);
+        assert_eq!(app_id, SetupTarget::Discord(None));
     }
 
     #[test]
@@ -259,6 +371,103 @@ mod test {
         assert!(mistral.contains(&format!("Enter uses paid default {MISTRAL_MODEL}")));
         assert!(mistral.contains("free models require OpenRouter"));
         assert!(!mistral.contains(FREE_OPENROUTER_MODEL));
+    }
+
+    #[test]
+    fn build_env_telegram_runs_without_discord_credentials() {
+        let mut input = io::Cursor::new(
+            b"telegram\n123:secret\n\nsk-test\n\ntr\n42\ndiscord:user:42\ntelegram:user:42\n-100123, telegram:room:-456, -100123\n3\n",
+        );
+        let (content, target) = build_env(&mut input, false).unwrap();
+        assert_eq!(target, SetupTarget::Telegram);
+        assert_eq!(content, "TELEGRAM_TOKEN=123:secret\nOPENROUTER_KEY=sk-test\nMODEL=\nBOT_LANG=tr\nOWNER_KEY=telegram:user:42\nTELEGRAM_ROOMS=telegram:room:-100123,telegram:room:-456\nTZ_OFFSET=3\n# more options: see .env.example\n");
+        assert!(!content.contains("DISCORD_TOKEN"));
+        assert!(!content.contains("OWNER_ID"));
+    }
+
+    #[test]
+    fn telegram_defaults_deny_rooms_and_reasks_invalid_approval() {
+        let mut input = io::Cursor::new(
+            b"telegram\n123:secret\n\nsk-test\n\n\n\n123\n-01\ndiscord:room:42\n\n\n",
+        );
+        let (content, _) = build_env(&mut input, false).unwrap();
+        assert!(content.contains("OWNER_KEY=\nTELEGRAM_ROOMS=\nTZ_OFFSET=0\n"));
+    }
+
+    #[test]
+    fn telegram_identity_answers_are_native_and_canonical() {
+        assert!(valid_telegram_owner("telegram:user:42"));
+        for invalid in [
+            "42",
+            "telegram:user:0",
+            "telegram:user:-42",
+            "telegram:user:042",
+            "telegram:user:+42",
+            "telegram:user:name",
+            "discord:user:42",
+            "telegram:user:18446744073709551616",
+        ] {
+            assert!(!valid_telegram_owner(invalid), "{invalid}");
+        }
+        assert_eq!(
+            telegram_rooms("-1001, telegram:room:-2, telegram:room:42"),
+            Some("telegram:room:-1001,telegram:room:-2,telegram:room:42".to_string())
+        );
+        for invalid in [
+            "0",
+            "42",
+            "-01",
+            "-1001,",
+            "telegram:room:0",
+            "telegram:room:+42",
+            "telegram:room:-01",
+            "telegram:room:name",
+            "telegram:room:-9223372036854775809",
+            "discord:room:42",
+        ] {
+            assert_eq!(telegram_rooms(invalid), None, "{invalid}");
+        }
+    }
+
+    #[test]
+    fn telegram_setup_strings_cover_safe_onboarding() {
+        let setup = strings::t("init.telegram.setup");
+        assert!(setup.contains("/newbot"));
+        assert!(setup.contains("/setprivacy"));
+        assert!(setup.contains("Disable"));
+        let steps = strings::t("init.telegram.next_steps");
+        assert!(steps.contains("TELEGRAM_ROOMS"));
+        assert!(steps.contains("OWNER_KEY"));
+        assert!(!steps.contains("discord.com/oauth2"));
+    }
+
+    #[test]
+    fn telegram_onboarding_and_notices_exist_in_both_languages() {
+        for raw in [
+            include_str!("../langs/en.json"),
+            include_str!("../langs/tr.json"),
+        ] {
+            let table: std::collections::HashMap<String, String> =
+                serde_json::from_str(raw).unwrap();
+            for key in [
+                "init.platform",
+                "init.telegram.setup",
+                "init.telegram.token",
+                "init.telegram.owner",
+                "init.telegram.rooms",
+                "init.telegram.next_steps",
+                "telegram.privacy_warning",
+                "telegram.nickname_warning",
+                "telegram.history_warning",
+                "telegram.commands.private",
+                "telegram.startup.missing",
+            ] {
+                assert!(!table.get(key).unwrap().is_empty(), "{key}");
+            }
+            assert!(table["init.telegram.token"].contains("{secret_hint}"));
+            assert!(table["init.telegram.setup"].contains("/setprivacy"));
+            assert!(table["init.telegram.setup"].contains("/newbot"));
+        }
     }
 
     #[test]

@@ -1,5 +1,8 @@
 //! Native return-position futures keep send/edit/reaction hot paths allocation-free.
-use super::{capabilities::Capabilities, discord::DiscordAdapter, outgoing::*, types::*};
+use super::{
+    capabilities::Capabilities, discord::DiscordAdapter, outgoing::*, telegram::TelegramAdapter,
+    types::*,
+};
 use std::{fmt, future::Future, time::Duration};
 
 pub type PlatformResult<T> = Result<T, PlatformError>;
@@ -102,21 +105,25 @@ pub trait Platform: Send + Sync {
 /// generates one statically sized future; no boxed trait objects or plugin registry.
 pub enum Adapter {
     Discord(DiscordAdapter),
+    Telegram(TelegramAdapter),
 }
 impl Platform for Adapter {
     fn connection_id(&self) -> &ConnectionId {
         match self {
             Self::Discord(adapter) => adapter.connection_id(),
+            Self::Telegram(adapter) => adapter.connection_id(),
         }
     }
     fn self_user(&self) -> &UserRef {
         match self {
             Self::Discord(adapter) => adapter.self_user(),
+            Self::Telegram(adapter) => adapter.self_user(),
         }
     }
     fn capabilities(&self, room: &RoomRef) -> Capabilities {
         match self {
             Self::Discord(adapter) => adapter.capabilities(room),
+            Self::Telegram(adapter) => adapter.capabilities(room),
         }
     }
     fn render_stream(
@@ -129,6 +136,7 @@ impl Platform for Adapter {
     ) -> Vec<String> {
         match self {
             Self::Discord(adapter) => adapter.render_stream(room, mode, thought, text, done),
+            Self::Telegram(adapter) => adapter.render_stream(room, mode, thought, text, done),
         }
     }
     fn render_final(
@@ -140,6 +148,7 @@ impl Platform for Adapter {
     ) -> Vec<String> {
         match self {
             Self::Discord(adapter) => adapter.render_final(room, mode, thought, lines),
+            Self::Telegram(adapter) => adapter.render_final(room, mode, thought, lines),
         }
     }
     async fn send<'a>(
@@ -149,6 +158,7 @@ impl Platform for Adapter {
     ) -> PlatformResult<MessageReceipt> {
         match self {
             Self::Discord(adapter) => adapter.send(room, body).await,
+            Self::Telegram(adapter) => adapter.send(room, body).await,
         }
     }
     async fn edit<'a>(
@@ -158,21 +168,25 @@ impl Platform for Adapter {
     ) -> PlatformResult<()> {
         match self {
             Self::Discord(adapter) => adapter.edit(sent, body).await,
+            Self::Telegram(adapter) => adapter.edit(sent, body).await,
         }
     }
     async fn delete<'a>(&'a self, sent: &'a MessageReceipt) -> PlatformResult<()> {
         match self {
             Self::Discord(adapter) => adapter.delete(sent).await,
+            Self::Telegram(adapter) => adapter.delete(sent).await,
         }
     }
     async fn react<'a>(&'a self, target: &'a MessageRef, emoji: &'a Emoji) -> PlatformResult<()> {
         match self {
             Self::Discord(adapter) => adapter.react(target, emoji).await,
+            Self::Telegram(adapter) => adapter.react(target, emoji).await,
         }
     }
     async fn typing<'a>(&'a self, room: &'a RoomRef) -> PlatformResult<()> {
         match self {
             Self::Discord(adapter) => adapter.typing(room).await,
+            Self::Telegram(adapter) => adapter.typing(room).await,
         }
     }
     async fn set_nickname<'a>(
@@ -182,6 +196,7 @@ impl Platform for Adapter {
     ) -> PlatformResult<()> {
         match self {
             Self::Discord(adapter) => adapter.set_nickname(target, name).await,
+            Self::Telegram(adapter) => adapter.set_nickname(target, name).await,
         }
     }
     async fn fetch_history<'a>(
@@ -191,11 +206,13 @@ impl Platform for Adapter {
     ) -> PlatformResult<HistoryPage> {
         match self {
             Self::Discord(adapter) => adapter.fetch_history(room, page).await,
+            Self::Telegram(adapter) => adapter.fetch_history(room, page).await,
         }
     }
     async fn list_rooms(&self) -> PlatformResult<Vec<RoomRef>> {
         match self {
             Self::Discord(adapter) => adapter.list_rooms().await,
+            Self::Telegram(adapter) => adapter.list_rooms().await,
         }
     }
     async fn resolve_media<'a>(
@@ -204,6 +221,7 @@ impl Platform for Adapter {
     ) -> PlatformResult<ModelMedia> {
         match self {
             Self::Discord(adapter) => adapter.resolve_media(attachment).await,
+            Self::Telegram(adapter) => adapter.resolve_media(attachment).await,
         }
     }
 }
