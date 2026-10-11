@@ -1,34 +1,33 @@
 # Your first Discord bot
 
-This bot grows its own personality. It remembers people, forms opinions, has moods, and eventually chooses its own name. You do not need to write any code.
+This bot keeps conversation notes and uses them alongside a fixed persona in later replies. You do not need to write code, but setup still requires copying commands into Terminal or PowerShell.
 
 ## What you need
 
 - [ ] A Discord account.
 - [ ] A Discord server where you are an administrator.
 - [ ] A computer or a small server with internet access.
-- [ ] About 10 minutes, plus any installation or download time.
+- [ ] A Discord bot token, a model account, and Docker or a release binary.
 
 Keep the computer on for the bot to stay online.
+
+> **Before inviting the bot: data flow and privacy**
+>
+> - **Stored locally:** person/topic notes, summaries and bounded channel history in `durum/hafiza.redb` (memory database); raw overflow in `durum/arsiv/` (archive), plus your backups.
+> - **Sent to your model service:** selected chat text and saved notes for replies and background analysis. OpenRouter also routes to the serving model provider. Images may be sent; image analysis defaults on (`IMAGE_ANALYSIS=off` disables it).
+> - **Other services:** Firecrawl receives page URLs and search queries when configured.
+>
+> Tell members which channels the bot can read. It reads ordinary messages, not only mentions; its first scan reads up to **14 days** of accessible text history, and it observes messages while asleep. Set `CHANNELS` before first launch. **Blank `GUILD_ID` / `CHANNELS` means every accessible server / channel.** Selective member deletion is not supported, and `/reset` does not erase stored records. [Retention details](#privacy).
 
 ## What does it cost?
 
 The bot itself is free, open-source software. You bring your own model account. A **model** is the AI that writes the bot's replies.
 
-**You can try a free model.** OpenRouter currently lists models whose IDs end in `:free`, such as `liquid/lfm-2.5-2.6b:free`. Availability can change. Copy a current model ID from [OpenRouter's model list](https://openrouter.ai/models) and enter it during setup. Pressing Enter for the default model does **not** select a free model.
+**You can try a free model.** The live OpenRouter catalog listed `google/gemma-4-31b-it:free` on 11 October 2026. This is a catalog-verified example, not an end-to-end bot compatibility claim. Availability and limits can change. Copy the exact ID into the wizard's model prompt. Enter alone selects the provider's **paid** default, not a free model.
 
-According to [OpenRouter's limits documentation](https://openrouter.ai/docs/api_reference/limits), free variants have these limits:
+Free-model requests are rate-limited; consult [OpenRouter's current limits](https://openrouter.ai/docs/api_reference/limits). A **request** is one model call, not one Discord message. Background analysis makes requests too and can exhaust the free allowance before ordinary chat does.
 
-| All-time credits purchased | Requests per minute | Requests per day |
-| --- | --- | --- |
-| Less than 10 credits | 20 | 50 |
-| At least 10 credits | 20 | 1,000 |
-
-A **request** is one call to the AI service, not one Discord message. The bot's background memory work makes requests too. Free limits can run out quickly in a busy server. Buying credits raises the daily allowance; the free variant itself still has no model charge.
-
-**Paid models charge for usage.** Light use with an inexpensive model can cost cents, but there is no fixed daily price. For a concrete example, OpenRouter currently lists `openai/gpt-4o-mini` at $0.15 per million input tokens and $0.60 per million output tokens. **Tokens** are small pieces of text. At those prices, 100 requests containing 1,000 input tokens and 1,000 output tokens each would cost $0.075, or 7.5 US cents, for model usage. This is an illustration, not a prediction of this bot's bill. Long conversations, background work, and more expensive models cost more.
-
-Set a spending limit on your OpenRouter key. Check usage in your provider account. A rented server may have its own bill.
+We have not published a measured running cost yet. Replies and background analysis both use your model key. Start with a provider spending limit and check the provider's usage dashboard. A rented server may have its own bill.
 
 ## 1. Create the bot in Discord
 
@@ -141,15 +140,19 @@ The wizard asks these questions in order:
 
 | Question | What to enter |
 | --- | --- |
-| Discord bot token | The token from step 1. |
+| Discord bot token | The token from step 1; terminal input is hidden. |
 | Provider | Press Enter for `openrouter`, or type `mistral`. |
-| API key | Your chosen provider's key from step 2. |
-| Model ID | Paste a model ID, including `:free` if you want a free OpenRouter model. Enter alone uses the provider's default. |
+| API key | Your chosen provider's key from step 2; terminal input is hidden. |
+| Model ID | Free OpenRouter example: `google/gemma-4-31b-it:free`. Enter alone uses the provider's **paid** default. |
 | Language | Press Enter for `en` (English), or type `tr` (Turkish). |
 | Your Discord user ID | Paste the number from step 3, or press Enter to skip. |
 | UTC offset hours | Your local time difference from UTC, or Enter for `0`. For example, `3` means UTC+3. This sets the bot's day and night. |
 
 The wizard saves a file called `.env` in `mybot`. It contains your settings and secret keys. It also prints an invite link and a reminder about the two intent switches.
+
+Before command 4, open `.env` and add `GUILD_ID=<your server ID>` and `CHANNELS=<channel ID>` (comma-separated for several channels). With Discord Developer Mode enabled, right-click the server or channel to copy its ID. Remove the `<...>` example text and paste the numeric IDs. Empty values mean **all** accessible servers/channels, including history scanning.
+
+Keep this folder private. Never upload or share `.env`. On Windows restrict folder access in **Properties → Security**; Unix init sets mode `600`. Rotate a leaked Discord token in Developer Portal and a leaked model key in its provider account.
 
 **Keep the invite link handy. Do not share your `.env` file.**
 
@@ -172,13 +175,13 @@ If you missed the link, run `docker compose logs -f` in the `mybot` folder. When
 - [ ] The bot appears in my server's member list.
 - [ ] The bot can see and send messages in the channel where I want to talk.
 
-## 7. Say hi
+## 7. Verify with a command, then say hi
 
-In a channel the bot can access, mention it and say hello: `@My Bot hi!` Choose the bot from Discord's mention list.
+Run **`/status`** in a channel the bot can access (`/durum` if you selected Turkish). You are done when its status card appears. This command does not depend on its willingness to chat or sleep schedule. Keep `STEALTH` off; reduced UI mode ignores slash interactions.
 
-Give it a moment to respond. It can get to know the server's recent conversation history when it first joins. Over time it remembers people, develops opinions, and picks its own name and nickname.
+If no status card appears within 30 seconds, use [the troubleshooting checklist](#the-bot-is-online-but-silent-what-should-i-check). Then try `@My Bot hi!`, choosing the bot from Discord's mention list.
 
-It is not a machine that answers every message. It chooses when to join ordinary conversations, and sometimes reacts instead of writing a reply. It also sleeps at night. Mentioning it is a good way to start talking.
+It chooses when to join ordinary conversations, may react instead of replying, and sleeps at night. Name selection is gradual, not an instant setup step: the established stage starts after at least 10 days and 25 finished chats.
 
 ## Everyday controls
 
@@ -199,11 +202,11 @@ On older Windows PowerShell, run the two update commands on separate lines: firs
 
 First, check **Bot → Privileged Gateway Intents** in the Developer Portal. Both **Message Content Intent** and **Server Members Intent** must be on. Save changes, then run `docker compose restart` from `mybot`.
 
-If an intent is off, Discord may also reject the connection entirely. If the switches are already on, mention the bot in a channel it can read and write in. Check the logs for provider errors or exhausted free limits. Remember that it does not answer every ordinary message.
+If an intent is off, Discord may reject the connection entirely. Check channel read/write permissions, `.env` scope filters, and that `STEALTH` is off; retry `/status`. If status works but chat does not, check logs for provider errors/exhausted limits and consider the sleep schedule. Ordinary chat is not a deterministic health check.
 
 ### It says “DISCORD_TOKEN is missing”. What does that mean?
 
-The bot could not find its password. Open your `mybot` folder and check that the wizard created `.env` there. Run the setup command again from that folder and enter your token. If asked about replacing an existing `.env`, only do so if you want to replace its settings. Then run `docker compose up -d` again.
+The bot could not find its password. Check that `.env` exists in `mybot` and run from that folder. An existing-file refusal leaves your settings unchanged: edit `.env` directly, or back it up privately before rerunning `init --force` to replace it. Then run `docker compose up -d`.
 
 For a downloaded binary or a source build, run `init` and start the bot from the same folder. Do not rename `.env` to `.env.txt`.
 
@@ -221,37 +224,67 @@ Run `docker compose logs -f` from `mybot`. **Logs** are the bot's running activi
 
 ## Where your memories live
 
-Docker keeps memory in a **volume** called `durum`. A volume is storage that survives stopping or replacing the bot. With the folder name used above, Docker normally calls it `mybot_durum`. You can list volume names with `docker volume ls`.
+Docker keeps **saved bot data** in the explicitly named volume `discord-bot-data`. The Compose key is still `durum` (“state/data”), but the actual volume name no longer depends on your folder. A volume survives stopping or replacing the container. Multiple installations using this Compose file share that name; choose distinct names if intentionally running separate bots.
 
-The bot never deletes memories automatically. Older material is summarized and archived, not discarded. Stopping it with `docker compose down` keeps that storage. **Do not use `docker compose down -v`** unless you mean to delete its saved memory.
+Channel history rolls over; larger records are summarized and raw overflow can be archived. `docker compose down` keeps saved data. **Do not use `docker compose down -v`** unless you mean to delete it. Existing project-prefixed volumes need migration below before switching to the new name.
 
 ### Back up the memory
 
-From `mybot`, stop the bot, copy the volume into a backup file, and start it again:
+From `mybot`, stop the bot and verify the existing volume and database before copying. `docker volume inspect` fails instead of silently creating a misspelled volume. If inspection or the database check fails, stop and investigate; do not continue to tar.
 
 ```sh
 docker compose down
-docker run --rm -v mybot_durum:/data:ro -v "$PWD:/backup" ubuntu tar czf /backup/durum-backup.tar.gz -C /data .
+docker volume inspect discord-bot-data
+docker run --rm -v discord-bot-data:/data:ro ubuntu test -s /data/hafiza.redb
+docker run --rm -v discord-bot-data:/data:ro -v "$PWD:/backup" ubuntu tar czf /backup/durum-backup.tar.gz -C /data .
 docker compose up -d
 ```
 
-On Windows PowerShell, replace the middle command with:
+On Windows PowerShell, replace the tar command with:
 
 ```powershell
-docker run --rm -v mybot_durum:/data:ro -v "${PWD}:/backup" ubuntu tar czf /backup/durum-backup.tar.gz -C /data .
+docker run --rm -v discord-bot-data:/data:ro -v "${PWD}:/backup" ubuntu tar czf /backup/durum-backup.tar.gz -C /data .
 ```
 
-If you chose a different folder or project name, replace `mybot_durum` with the existing volume name shown by `docker volume ls`. Do not guess: a wrong name can create an empty volume instead of backing up your memory.
+This writes `durum-backup.tar.gz`. Protect it like member data; use a different filename to keep earlier backups. Save `.env` separately and privately. Restore procedures below have not been exercised in a live deployment.
 
-This makes `durum-backup.tar.gz` in your folder. The first backup may download the Ubuntu helper package. Copy the backup somewhere safe. Give each backup a different filename if you want to keep older copies. Also save `.env` securely so you can recover your settings; it contains secrets.
+### Restore a backup
+
+Stop the bot, inspect the destination volume, and save a separate copy of its current contents before replacing them. Restore to an **empty** volume; extracting over an existing archive tree can leave stale files.
+
+```sh
+docker compose down
+docker volume inspect discord-bot-data
+docker run --rm -v discord-bot-data:/data -v "$PWD:/backup:ro" ubuntu sh -c 'test -z "$(find /data -mindepth 1 -print -quit)" && tar xzf /backup/durum-backup.tar.gz -C /data'
+docker compose up -d
+```
+
+For PowerShell, use `"${PWD}:/backup:ro"` instead of `"$PWD:/backup:ro"`. If the empty-volume check fails, nothing is extracted: do not bypass it without first preserving the current data. Use `/status` and `/mind` after startup to inspect the result.
+
+### Existing Compose installations
+
+Changing the volume name does **not** migrate data. Before adopting the new Compose file, stop the old installation and identify its existing volume (often `mybot_durum`) with `docker volume ls`; do not guess. Keep the old volume until the migrated data is confirmed.
+
+For example, after verifying `mybot_durum` is your old nonempty volume:
+
+```sh
+docker volume inspect mybot_durum
+docker run --rm -v mybot_durum:/data:ro ubuntu test -s /data/hafiza.redb
+docker run --rm -v mybot_durum:/data:ro -v "$PWD:/backup" ubuntu tar czf /backup/durum-backup.tar.gz -C /data .
+docker volume create discord-bot-data
+```
+
+Then use the empty-volume restore procedure above before starting the new Compose service. For PowerShell use `"${PWD}:/backup"` for the backup mount. These migration instructions are not a claim of a tested live migration.
 
 For a binary or source build, memory lives in the local `durum/` folder. Stop the bot before copying that folder to your backup location.
 
 ## Privacy
 
-Tell your server members what the bot does before inviting it. Messages it can read, and relevant conversation history and memory, are sent to your chosen model provider for replies and background analysis. With OpenRouter, that includes the model provider serving the request. Attached images may also be sent when image analysis is enabled.
+Tell members before inviting it: accessible ordinary messages and up to 14 days of first-scan history may be processed, subject to `CHANNELS` and Discord permissions. Observation continues while asleep. Replies and background analysis send selected chat text and saved notes to the chosen model service (including OpenRouter's serving provider). Attached images can be sent because image analysis defaults on. Configured Firecrawl receives page URLs and search queries.
 
-The bot's saved memory stays on your machine, in its memory storage. This does **not** mean all processing stays on your machine. Check your provider's privacy terms before using it with sensitive conversations.
+Saved data stays on your machine, but processing is **not** local. Channel histories are bounded; derived person/topic notes, summaries and archived raw text can remain after a conversation. **Selective member deletion is not supported.** `/reset` resets channel/chat state, not stored member records or archives. Do not promise members an erasure capability the bot does not have.
+
+For a complete local reset, stop the bot, delete its entire saved-data volume (or `durum/` folder for binary/source installs), and remove every backup and exported log/transcript containing the data. This is destructive and removes all members' data, not one member's. It does not delete copies already processed/retained by model services or Firecrawl; review their retention policies and deletion channels separately. Keep the bot stopped or remove its permissions to avoid recollection.
 
 ## Prefer not to use Docker?
 
@@ -259,7 +292,7 @@ These routes use the same token, key, and intent settings from steps 1–3.
 
 ### Download a release
 
-Download the matching archive from [GitHub Releases](https://github.com/krxi/discord-bot/releases): Linux x86_64 or arm64, macOS Apple Silicon, or Windows. Extract it into a folder, open a terminal in that folder, and run:
+No Docker or Rust is needed, but a **terminal is required**. Download the matching archive from [GitHub Releases](https://github.com/krxi/discord-bot/releases): Linux x86_64 or arm64, macOS Apple Silicon, or Windows. Extract it into a private folder, open a terminal there, and run:
 
 ```sh
 ./discord-bot init
@@ -286,17 +319,17 @@ cargo run -- init
 cargo run --release
 ```
 
-The first build takes longer. Keep the terminal open, invite the bot with the printed link, and say hi.
+The first build takes longer. Keep the terminal open, restrict scope in `.env`, invite it with the printed link, and verify `/status` as in step 7.
 
 ## Sources
 
-External setup details and prices were checked on **11 October 2026**. Buttons, available free models, and limits can change.
+The free model ID was checked against the live catalog on **11 October 2026**. Platform documentation links below explain setup; buttons, available free models, limits, and pricing can change.
 
 - [Discord's official getting-started guide](https://discord.com/developers/docs/quick-start/getting-started) — application creation, **Bot**, **Reset Token**, token safety, and server installation.
 - [Member Counter's Developer Portal walkthrough](https://docs.membercounter.app/custom-bot/creating-a-discord-bot-account) — **New Application**, **Create**, **Privileged Gateway Intents**, **Message Content Intent**, **Server Members Intent**, and **Save Changes** labels. Its own bot needs different switches; follow this guide's choices for discord-bot.
 - [Discord's official user ID instructions](https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID) — **User Settings → Advanced → Developer Mode** and **Copy User ID**.
 - [OpenRouter rate limits](https://openrouter.ai/docs/api_reference/limits) — `:free` variants and the published free request limits.
-- [OpenRouter live model catalog](https://openrouter.ai/api/v1/models) — currently available `:free` models and `openai/gpt-4o-mini` input/output prices used in the cost example.
+- [OpenRouter live model catalog](https://openrouter.ai/api/v1/models) — catalog verification of the example free model; no running-cost measurement.
 - [OpenRouter authentication guide](https://openrouter.ai/docs/api_reference/authentication) — creating keys, naming them, and setting spending limits.
 - [OpenRouter key page](https://openrouter.ai/keys) — sign-in and sign-up entry point.
 - [Docker Desktop documentation](https://docs.docker.com/desktop/) — Mac/Windows installation links, bundled Docker Compose, and Linux-container support on Windows.
