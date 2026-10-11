@@ -1,104 +1,109 @@
 # discord-bot
 
-Sohbet hafızası ve zamanla değişen bir personası olan, kendi makinenizde çalıştırabileceğiniz bir Discord botu.
+Discord, Telegram, Slack veya Matrix grup sohbetinize eklediğiniz; insanları hatırlayan, ruh halleri ve uyku düzeni olan, kendiliğinden sohbete katılan ve sizin bilgisayarınızda çalışan bir yapay zeka karakteri.
 
-[English](README.md) · [Kurulum rehberi](docs/setup-guide.md) · [Sürümler](https://github.com/krxi/discord-bot/releases) · [Değişiklikler](CHANGELOG.md)
+- Tarayıcınızdan kurun ve yönetin.
+- İnsanlar hakkında hatırladıklarını görün ve düzeltin.
+- Birkaç sohbet uygulamasını aynı hafıza ve kişiliğe bağlayın.
 
-## Nasıl çalışır?
+[English](README.md) · [Adım adım kurulum](docs/setup-guide.md) · [Değişiklikler](CHANGELOG.md)
 
-discord-bot bir Discord sunucusunda çalışır ve slash komutu beklemeden sohbete katılabilir. Arka plandaki model çağrıları kişiler, konular ve botun önceki cevapları hakkında notlar yazar; sonraki cevaplar bu notları sabit bir kişilik promptuyla birlikte kullanır. Uyku düzeni ve gelişim evreleri bazı davranışlarını belirler. Bot Rust ile yazılmıştır, hafızasını yerel olarak saklar ve model çağrıları için sizin OpenRouter veya Mistral anahtarınızı kullanır. Sohbet bağlamı makinenizden dışarı gönderilir; arka plan işleri de API kullanımınıza dahildir.
+## Yönetim ekranları nasıl görünüyor?
 
-İnsan bir sunucu üyesi değil, yapay zeka botudur. Varsayılan persona kimlik sorularına dürüstçe cevap verir. Henüz yayımlanmış bir Discord kaydı veya uzun dönem kullanım çalışması yok; kayıt tarifi, kişilik gelişiminin kanıtı değildir.
+![Tarayıcı kurulumunda Discord, Telegram, Slack ve Matrix seçimi](docs/images/setup-platforms.png)
 
-## Veri akışı ve gizlilik
+*Gerçek yerel yönetim paneli: kurulum sırasında sohbet uygulaması seçimi. Canlı sohbet veya gizli anahtar gösterilmiyor.*
 
-> **Davet etmeden önce üyelere hangi kanalları okuyabileceğini söyleyin.** Botu başlatmadan önce tarayıcı kurulumunda `CHANNELS` ayarlayın. Boş `GUILD_ID` / `CHANNELS`, yalnız bota hitap edilen sohbetler değil, botun erişebildiği tüm sunucular / kanallar demektir.
+<details>
+<summary>Genel bakış, hafıza düzenleyicisi ve kişilik sayfasını görün</summary>
 
-| Hedef | Gönderilen veya saklanan veri |
-|---|---|
-| Makineniz | `durum/hafiza.redb` içinde kişi/konu notları, özetler, kanal geçmişi ve panel kimlik doğrulama kayıtları; `durum/arsiv/` içinde taşan ham metin ve oluşturduğunuz yedekler. Özel izinli `.env` içinde bot/model anahtarları (Docker: `config/.env`). |
-| Model hizmeti | Cevaplar ve arka plan analizi için seçilmiş sohbet metni ve kayıtlı notlar. OpenRouter kullanıldığında isteği karşılayan model sağlayıcısı da veriyi işler. Ekli görseller dahil edilebilir: görsel analizi varsayılan olarak açıktır (`IMAGE_ANALYSIS=off` kapatır). |
-| Firecrawl, ayarlanmışsa | Web okuma/arama için sayfa adresleri ve arama sorguları. |
+![Bot bağlanmadan önce yönetim panelinin genel bakışı](docs/images/overview.png)
 
-İlk taramada, kanal kısıtları ve Discord izinleri dahilinde erişilebilir metin kanallarının **14 güne kadar** geçmişini okur. Uyurken de mesajları gözlemler. Yerel depolama, sohbet bittikten sonra özet ve arşivleri saklayabilir. **Üye bazında seçici silme desteklenmez; `/reset` veri silme komutu değildir.** Yedekler dahil ayrıntılar için [depolama ve gizlilik](docs/setup-guide.md#privacy). Kendi makinenizde çalışması, tüm işlemenin yerel olduğu anlamına gelmez.
+*Gerçek yönetim paneli: sohbet bağlantısı kurulmadan önce Genel Bakış. Bu, çalışan bir sohbetin demosu değil.*
 
-## Zamanla ne değişiyor?
+![Kurgusal Alex kaydıyla kişi hafızası düzenleyicisi](docs/images/memory-person.png)
 
-- **Cevapların arkasındaki notlar.** Arka plan analizi grup profilini, huy notlarını ve sohbet sonrası düzeltmeleri günceller. Bu notlar sonraki cevaplara bağlam olur; model ağırlıkları değişmez.
-- **Hatırladığı bilgiler.** Kişi ve konu kayıtları yerel redb veritabanında saklanır, yeniden başlatınca kaybolmaz. Getirilen hafıza sınırlıdır; eski malzeme özetlenir. Arşiv insanların incelemesi içindir, bot burada arama yapmaz.
-- **Sohbete katıldığı anlar.** Normal mesajlar bir isteklilik kontrolünden geçer. Bot uyanıkken etiketlenmesi veya devam eden bir konuşma bu kontrolü atlayabilir. Cevap verebilir, tepki bırakabilir veya susabilir.
+*Gerçek yönetim paneli: bir kişi kaydını düzenleme. “Alex” ve kayıtlı notlar kurgusal demo verileridir; bir üyenin sohbeti değildir.*
 
-Temel persona ve gelişim eşikleri kaynak kodda tanımlıdır. Bu bir prompt ve hafıza deneyi; yararlı kişilik değişimini göstermek için zaman içinde gerçekleşmiş gerçek sohbetler gerekir.
+![Düzenlenebilir huy ve salt okunur bağlamla kişilik sayfası](docs/images/personality.png)
+
+*Gerçek yönetim paneli: huy düzenleme ve salt okunur kişilik bağlamı; notlar kurgusal demo verileridir. Bu görüntüler arayüzü gösterir, ölçülmüş kişilik gelişimini değil.*
+
+</details>
+
+## 3 adımda başlayın
+
+Önce [Docker](https://docs.docker.com/get-started/get-docker/) kurup açın. Grubunuza bot ekleme izni ve bir yapay zeka hizmeti hesabı/anahtarı gerekir. Mac/Linux'ta Terminal'e üç komut kopyalayacaksınız; [Windows PowerShell komutları ve uygulama ayarları](docs/setup-guide.md#start-with-docker) rehberde bulunur.
+
+**1. Bir klasör oluşturun ve başlatma dosyasını indirin.**
+
+```sh
+mkdir mybot && cd mybot && curl -O https://raw.githubusercontent.com/krxi/discord-bot/main/docker-compose.yml
+```
+
+**2. Başlatın.**
+
+```sh
+docker compose up -d
+```
+
+**3. Kurulum bağlantısını açın.**
+
+```sh
+docker compose logs bot
+```
+
+`http://localhost:8787/setup#token=...` bağlantısını bulun ve aynı bilgisayardaki tarayıcınızda açın. Bu bağlantı gizlidir, tek kullanımlıktır ve 15 dakika sonra geçersiz olur. Tarayıcı sihirbazı yönetici parolası belirlemenizi, sohbet uygulaması seçmenizi, bot bilgilerini ve yapay zeka anahtarını girmenizi, okuyabileceği odaları seçmenizi ve botu başlatmanızı ister. Uygulama hesaplarının kendi kurulum adımları da gerekir; sihirbaz bunları açıklar. [Bağlantı süresi dolduysa veya uzak sunucu kullanıyorsanız](docs/setup-guide.md#browser-setup).
+
+Kurulumdan sonra **http://localhost:8787** adresinde bağlantıları görebilir, hafıza/huy notlarını düzenleyebilir, işlemleri çalıştırabilir, kullanım/kayıtları inceleyebilir ve ayarları değiştirebilirsiniz. Panel varsayılan olarak yalnız bu bilgisayardan erişilir; 8787 portunu internete açmayın. Bilgisayarınız ve Docker açık kalsın. Normal cevaplara güvenmeden önce [sohbet bağlantısını doğrulayın](docs/setup-guide.md#verify-the-connection).
+
+Docker ayarları ve hafızayı kalıcı birimlerde tutar; bilgisayarınızda `.env` hazırlamanız gerekmez. [Gizli yedekler ve dosyayı elle düzenleme seçeneği](docs/setup-guide.md#where-your-memories-live) rehberde açıklanır.
+
+Terminal alternatifi: `discord-bot init` ile [komut satırından kurulum](docs/setup-guide.md#headless-cli-setup) hâlâ kullanılabilir.
+
+Docker olmadan: [hazır binary](docs/setup-guide.md#download-a-release) indirin, terminalden başlatın ve kurulum bağlantısını açın; Rust gerekmez.
+
+**v1 veya eski bir Compose dosyası zaten çalışıyor mu?** Önce [yükseltme adımlarını okuyun](docs/setup-guide.md#existing-compose-installations). Hafıza yedek alınarak otomatik taşınır; Docker artık ayarları bilgisayarınızdaki `.env` dosyasında değil, özel `discord-bot-config` biriminde tutar. [Her iki birimi yedekleyin](docs/setup-guide.md#back-up-the-memory).
+
+## Sohbet uygulamanızı seçin
+
+Dördü de aynı yapay zekayı ve hafızayı kullanır. Uygulamaların izin verdiği özellikler farklıdır:
+
+| Uygulama | Çalışan özellikler | Eklemeden önce bilin |
+|---|---|---|
+| **Discord** | Sohbet, yanıtlar, tepkiler, görseller, slash komutları ve özel kontrol kartları; ilk taramada erişilebilir geçmişin 14 güne kadarı. | **Message Content Intent** ve **Server Members Intent** açın; Presence Intent açmayın. Başlamadan kanalları kısıtlayın; boş Discord filtreleri tüm erişilebilir kanallar demektir. |
+| **Telegram** | Grup sohbeti, yanıtlar/forum konuları, izinli emoji tepkileri, görseller ve özel sahip kontrolleri. | Normal mesajları okuyabilmesi için BotFather **gizlilik modunu** kapatıp botu yeniden ekleyin veya grup yöneticisi yapın. Odaları açıkça onaylayın. Eski grup geçmişini getiremez. |
+| **Slack** | Kanal/konu sohbeti, tepkiler, görsel/dosyalar, sınırlı geçmiş ve özel sahip kontrolleri. | **Socket Mode**, bir uygulama tokenı ve bir bot tokenı kullanır. Onaylı kanallara davet edin. Slack slash komutları yoktur; sahip olarak `!status` veya `@bot status` kullanın. |
+| **Matrix** | Onaylı şifresiz odalarda sohbet, yanıtlar, tepkiler, görseller, sınırlı geçmiş ve sahip kontrolleri. | **Yalnız düz metin:** şifreli odalar ve ekler desteklenmez. Yanıtlar desteklenir, Matrix konu başlıkları desteklenmez. Sahip belirleyip odaları onaylayın; Discord tarzı düğme/menüler yoktur. |
+
+İzinler bu özellikleri sınırlayabilir. Anahtar testinin başarılı olması, botun bir odada okuyup cevap verebildiğini kanıtlamaz. Bkz. [uygulama kurulumu](docs/setup-guide.md) ve [özellik ayrıntıları](docs/architecture.md#platform-boundary).
+
+## “Hatırlamak” ne demek?
+
+Sohbetlerden sonra arka plandaki yapay zeka çağrıları insanlar, konular ve botun cevapları hakkında notlar yazar. Sonraki cevaplar seçilmiş notları sabit bir karakter promptuyla birlikte kullanır. **Memory** sayfasında notları inceleyip düzeltebilir, **Personality** sayfasında huyunu düzenleyebilirsiniz; sonraki arka plan işleri bu düzenlemeleri yeniden değiştirebilir.
+
+Değişen şey bağlamdır, model ağırlıkları değil. Hatırlama sınırlıdır, ruh halleri konuşma bazındadır ve sıradan mesajlara cevap, tepki veya sessizlik gelebilir. Karakter bir yapay zeka botudur; içtenlikle sorulan kimlik sorularına dürüstçe cevap verir. [Nasıl çalışır?](docs/architecture.md)
 
 ## Maliyet
 
 Henüz ölçülmüş bir çalıştırma maliyeti yayımlamadık. Cevaplar ve arka plan analizi model anahtarınızı kullanır. Sağlayıcı harcama limitiyle başlayın ve kullanım panelini kontrol edin.
 
-Kurulumun varsayılan modelleri **ücretlidir**. 11 Ekim 2026'da canlı OpenRouter listesinde doğrulanan ücretsiz bir örnek: `google/gemma-4-31b-it:free`. Erişilebilirlik ve limitler değişebilir; bu model botla uçtan uca test edilmedi. Arka plan çağrıları da ücretsiz limiti tüketebilir. Barındırma ayrıca ücretli olabilir.
+Varsayılan modeller **ücretlidir**. Ücretsiz seçeneklerin erişilebilirliği ve limitleri değişebilir; arka plan çağrıları da bu limitleri tüketir. Panel gözlemlenen kullanımı gösterir, eksiksiz fatura veya harcama limiti değildir. [Model seçimi](docs/setup-guide.md#model-keys-and-cost).
 
-## Hızlı başlangıç — Docker
+## Gizlilik ve veri akışı
 
-Kurulumda seçeceğiniz platformun kimlik bilgileri, bir model API anahtarı ve çalışan [Docker](https://docs.docker.com/get-started/get-docker/) gerekir. Kurulum Terminal veya PowerShell'e komut kopyalamayı gerektirir. [Adım adım rehber](docs/setup-guide.md) platformları ve Windows komutlarını açıklar. Discord seçiyorsanız Developer Portal → **Bot → Privileged Gateway Intents** altında **Message Content Intent** ve **Server Members Intent** açın; Presence Intent açmayın. Anahtarları gizli tutun.
+Botu eklemeden **önce** üyelere neleri okuyabileceğini söyleyin. Yalnız güvenilen odaları seçin: **bağlı tüm uygulamalar tek hafızayı paylaşır**, dolayısıyla bir odada öğrenilen şey başka bir cevabı etkileyebilir. Birbirinden bağımsız gruplar için ayrı kurulumlar kullanın.
 
-macOS/Linux için:
+| Nerede? | Oraya giden veri |
+|---|---|
+| Bilgisayarınız | Kayıtlı notlar, özetler, yakın oda geçmişi, saklanan düzenleme geçmişi ve arşivler; ayrıca oluşturduğunuz yedekler. |
+| Model hizmetiniz | Cevap/analiz için seçilmiş mesajlar ve kayıtlı notlar. Görsel analizi varsayılan olarak açık olduğundan görseller de gönderilebilir; gerekirse Ayarlar'dan kapatın. OpenRouter isteği karşılayan model sağlayıcısına da gönderir. |
+| Firecrawl, açıksa | Web okuma/arama için sayfa adresleri ve arama sorguları. |
 
-```sh
-mkdir mybot && cd mybot
-curl -O https://raw.githubusercontent.com/krxi/discord-bot/main/docker-compose.yml
-mkdir -p config photos
-```
-
-Linux'ta yapılandırma dizinini yalnız konteynerin UID 10001 kullanıcısının yazabileceği şekilde ayarlayın:
-
-```sh
-sudo chown 10001:10001 config
-sudo chmod 700 config
-```
-
-Docker Desktop'ta sahiplik farklı yönetilir; [kurulum rehberine](docs/setup-guide.md) bakın. Başlangıçta `.env` veya CLI sihirbazı gerekmez. Paneli başlatın:
-
-```sh
-docker compose up -d
-docker compose logs bot
-```
-
-Loglarda yazdırılan tek kullanımlık `http://localhost:8787/setup#token=…` bağlantısını açın; **15 dakika** sonra geçersiz olur. İkinci adımda **Discord, Telegram, Slack veya Matrix** seçin. Yeni başlayanlara Telegram önerilir: sihirbaz BotFather'dan alınan tokenı Telegram `getMe` ile test eder, doğrulanan bot kimliğini gösterir ve gizlilik sıradan grup görünürlüğünü engelleyebilecekse uyarır. Slack, `xoxb-` bot tokenını `auth.test` ile; `xapp-` uygulama tokenını `apps.connections.open` (`connections:write`) ile kontrol eder. Kimlik bilgileri/WebSocket URL'si doğrulanır, kalıcı Socket Mode bağlantısı açılmaz. Uygulamayı oluşturmak için yerel [`slack-app-manifest.yml`](docs/slack-app-manifest.yml) dosyasını indirin. Matrix, bearer tokenı ve yapılandırılmış kullanıcı kimliğini `whoami` ile denetler; yalnızca düz metin odaları desteklenir, şifreli içerik çözülmez. Telegram, Slack ve Matrix odalarına erişim varsayılan olarak reddedilir: yalnız ortak hafıza/model işlemeyi kabul eden üyelerin odalarını açıkça onaylayın. İlk kurulum çalışma zamanını yeniden başlatmadan başlatır; daha sonra Settings'ten platform eklemek kaydetme ve yeniden başlatma gerektirir. Kimlik testleri canlı gateway/oda sağlığını, izinleri, sağlayıcı kredilerini veya başarılı yanıtları kanıtlamaz; ücretli completion yapmaz. Platform tokenlarını ve model anahtarlarını gizli tutun.
-
-Discord'da **`/status`** (Türkçe için `BOT_LANG=tr` seçtiyseniz `/durum`) çalıştırarak doğrulayın, ardından botu etiketlemeyi deneyin. Normal sohbetlere cevap vermeyebilir; geceleri uyur. Docker'ı açık tutun; hatalar için `docker compose logs -f` kullanın.
-
-Compose yalnız host loopback portu 8787'yi açar; atomik ayar kaydı için gerekli olan yazılabilir `./config` **dizinini** ve salt okunur `./photos` dizinini bağlar; hafıza ve panel sahipliğini sabit adlı **`discord-bot-data`** volume'ünde tutar. [Güncellemeden önce yedekleyin](docs/setup-guide.md#back-up-the-memory); `docker compose pull && docker compose up -d` ile güncelleyin. Mevcut kurulumlarda [`env_file` kaldırılmadan önce `.env` özel izinli `config/.env` konumuna taşınmalı ve eski hafıza volume'ü korunmalıdır](docs/setup-guide.md#existing-compose-installations)—başlatma sorununu çözmek için eski veriyi atmayın.
-
-Başka yol mu tercih ediyorsunuz? [Hazır binary (terminal gerekir)](docs/setup-guide.md#download-a-release) · [Kaynaktan derleme](docs/setup-guide.md#build-from-source). Aynı tarayıcı kurulumunu açmak için binary'yi `.env` olmadan çalıştırın. Tarayıcısız kurulum için `discord-bot init` kullanılabilir; paneli kapatmak için `PANEL_ENABLED=off` ayarlayın.
-
-## Panel sınırları ve parola kurtarma
-
-Panel; kurulum/onarıma, çalışma ve bağlantı durumuna, konuşma bazında ruh haline, anahtarları geri göstermeyen doğrulanmış ayarlara, canlı loglara, hesap yönetimine, yardıma, hafıza/kişilik düzenleyicilerine, yönetim eylemlerine ve kullanım raporlamasına sahiptir. Genel bakış sayaçları süreç içidir; parasal maliyet yalnız sağlayıcı bildirirse gösterilir.
-
-İlk kurulum çalışma zamanını yeniden başlatmadan başlatır. Daha sonra Settings içinden yeni bir platform eklemek için kaydedip süreci yeniden başlatın (`docker compose restart bot`); `model.md` içindeki kayıtlı tercih önceliğini korur. Süreç başlangıcında verilen ortam değerleri yapılandırma dosyasına önceliklidir ve panelde salt okunurdur. Canlı loglar sınırlı, hassas değerleri maskelenmiş bir yakın geçmiş tamponudur; **kalıcı denetim kaydı değildir** ve yine de özel sohbet metni içerebilir.
-
-Settings içinde Discord, Telegram, Slack ve Matrix için ayrı, başlangıçta kapalı kimlik bilgisi test kartları, ardından sağlayıcı testi bulunur. Yeni platformun bilgilerini kaydetmeden test edin; alanları boş bırakırsanız kayıtlı etkin yapılandırma kullanılır. Testler ayarları kaydetmez, sihirbaz taslaklarını değiştirmez ve canlı bağlantı/oda sağlığını kanıtlamaz. Matrix tarayıcı testleri erişim tokenı ister; Settings ve CLI üzerinden parola ile giriş desteği korunur.
-
-Genel internete açık port yerine localhost veya SSH tüneli/VPN kullanın. HTTPS ters proxy için açıkça `PANEL_PUBLIC_URL` ayarlanmalı ve Host/Origin başlıkları korunmalıdır; forwarded başlıkları güvenilir kaynak sayılmaz. Ayrıntılar [kurulum rehberinde](docs/setup-guide.md).
-
-Parola kurtarmak için botu durdurun; normal çalışma dizininde, aynı `durum/hafiza.redb` kullanılarak `discord-bot panel reset-password` çalıştırın. Bir kez yazdırılan yeni parolayı kaydedip yeniden başlatın; mevcut sahip kimliği korunur. Docker için:
-
-```sh
-docker compose stop bot
-docker compose run --rm bot panel reset-password
-docker compose up -d
-```
-
-## Sınırlar ve başvuru
-
-- Hafıza getirmenin karakter bütçesi vardır; saklanan malzeme kusursuz hatırlama demek değildir.
-- Bazı kalıcı anahtarlar ve kalan gün adı/ruh hali mantığı Türkçedir. Seyahat Türk tatil takvimini kullanır ve İngilizce modda kapalıdır.
-- `STEALTH`, **azaltılmış bot arayüzü** demektir; insan gibi görünmek değil. Slash etkileşimlerini/arayüz embedlerini kapatır, canlı düzenleme yerine tamamlanmış cevap gönderir. `/status` doğrulaması için kapalı bırakın.
-- Promptlar güvenlik sınırı değildir. Kanal izinleri ve sağlayıcı harcama kontrollerini kullanın.
-
-[Mimari ve ajanlar](docs/architecture.md) · [Hafıza biçimleri](docs/state-files.md) · [Yapılandırma](docs/configuration.md) · [Komutlar](docs/commands.md) · [Dokümantasyon dizini](docs/README.md)
+Bot uyurken de onaylı mesajları gözlemler. **Üye bazında seçici silme desteklenmez**; sohbeti sıfırlamak kişi kayıtlarını, önceki sürümleri, arşivleri veya yedekleri silmez. Kendiniz çalıştırmanız, yapay zeka işlemesinin yerel olduğu anlamına gelmez. [Toplama, saklama ve silme ayrıntıları](docs/setup-guide.md#privacy).
 
 ## Katkı ve lisans
 
-Fork alın, dal oluşturun ve pull request açın. Rust bilmeden de dokümanlar, çeviriler ve tekrarlanabilir hata raporlarıyla katkı verebilirsiniz. Bkz. [CONTRIBUTING.md](CONTRIBUTING.md).
+Dokümanlar, çeviriler ve tekrarlanabilir hata raporlarıyla katkı verebilirsiniz; Rust bilmeniz gerekmez. Kod değişiklikleri için fork alın, dal oluşturun ve pull request açın. [Katkı rehberi](CONTRIBUTING.md) · [Teknik dokümanlar](docs/README.md).
 
 MIT — bkz. [LICENSE](LICENSE).

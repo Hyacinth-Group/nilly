@@ -2,9 +2,9 @@
 
 ## Run and operate
 
-- [Setup guide](setup-guide.md): Discord accounts/intents, Docker, binary/source routes, first `/status` check, privacy and backups.
-- [Configuration](configuration.md): environment settings, scope, reduced UI and upgrades.
-- [Commands](commands.md): slash-command management and its limits.
+- [Setup guide](setup-guide.md): Docker/browser setup, Discord/Telegram/Slack/Matrix requirements, connection checks, privacy, upgrades and backups.
+- [Configuration](configuration.md): platform credentials, approved rooms, panel access and environment settings.
+- [Commands](commands.md): browser actions and platform-specific administration.
 - [Changelog](../CHANGELOG.md): concise release history.
 
 ## Understand and contribute

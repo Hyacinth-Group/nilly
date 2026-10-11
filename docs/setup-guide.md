@@ -1,118 +1,139 @@
-# Your first bot: Discord, Telegram, Slack or Matrix
+# Set up your bot in Docker and a browser
 
-This bot keeps conversation notes and uses them alongside a fixed persona in later replies. You do not need to write code. Start the package from Terminal or PowerShell, then connect your accounts and configure the bot in your browser.
+You do not need to write code. Docker runs the ready-made package; your browser connects the accounts and controls the bot. It can use **Discord, Telegram, Slack or Matrix**, and keeps conversation notes for later replies.
 
-Choose **Discord**, **Telegram**, **Slack** or **Matrix** in step 2 of browser setup. Telegram is recommended for beginners: the wizard tests your BotFather-issued token with Telegram `getMe`, reports the verified bot identity and warns if privacy may block ordinary group-message visibility. Slack tests the `xoxb-` bot token with `auth.test` and checks the `xapp-` app-level token with `apps.connections.open` (`connections:write`); this validates credentials and the returned WebSocket URL but does not open a persistent connection. Download the local Slack app manifest to create the app. Matrix checks `whoami` with the bearer access token and confirms its user matches `MATRIX_USER`; wizard login uses a token, while the existing CLI/Settings password alternative remains supported. Matrix rooms are plaintext-only; encrypted content is never decrypted. These tests are credential checks, not proof of gateway/room health, permissions, provider credit or successful replies. Telegram, Slack and Matrix room access is default-deny. See each platform section below before inviting/joining.
+This guide starts with a **new installation**. Already running an older version? Follow [the upgrade instructions](#upgrading-from-v1-to-v2) before replacing your Compose file or starting the new version.
 
-For an existing installation, open **Settings** and expand the credential-test card for the platform you want to add. Enter its credentials and choose **Test credentials** before saving/restarting; blank fields use the saved effective configuration, including read-only environment values. Tests neither save configuration nor alter setup drafts, and successful authentication is not proof of live room access or message delivery. Matrix browser tests use an access token only; Settings and headless CLI still accept a saved password for runtime login.
+## Start with Docker
 
-## Telegram setup
+### What you need
 
-1. Open the official [@BotFather](https://t.me/botfather) in Telegram and send
-   `/newbot`. Choose a name and a username ending in `bot`; save its token
-   privately. The token is a password, not your personal Telegram login.
-2. Send `/setprivacy` to BotFather, choose the bot and select **Disable** so it
-   can observe ordinary group conversation. **Remove and re-add it to existing
-   groups** after changing privacy. Alternatively add it as a group
-   administrator, which receives ordinary messages regardless of privacy.
-3. Add the bot to a group you administer and give it permission to **send
-   messages**. Tell members that selected messages/notes may leave the host for
-   model processing. Administrator status is also required to receive human
-   reaction updates; sending reactions is limited to the chat's allowed emoji.
-4. Obtain a model key (step 2 below), install Docker or a release binary, and
-   start the package as described in step 5. The panel opens on port **8787**
-   before credentials are required. Open the printed setup link, choose
-   **Telegram** in wizard step 2 and complete the steps. Enter the BotFather
-   token; **Test** calls `getMe`, reports the verified bot identity and warns
-   if privacy may prevent ordinary group-message visibility. Configure the
-   provider/model and language, then explicitly approve Telegram rooms.
-   Blank approval denies every room. No Discord account or token is needed for
-   Telegram alone.
-5. Set `OWNER_KEY` in **Privacy** as `telegram:user:<your numeric user ID>`,
-   for example `telegram:user:42`; this is not `@username` or the group's ID.
-   You can skip it, in which case Telegram administration is denied. For
-   ordinary group visibility, use BotFather `/setprivacy` → **Disable**, then
-   remove and re-add the bot to existing groups; alternatively make it a group
-   administrator.
-6. Finish setup to start the runtime without restarting the process. To add
-   Telegram to an existing installation later, save it under **Settings** and
-   restart (`docker compose restart bot`). Open a private chat with the bot and
-   press **Start** before requesting administrative results, which are delivered
-   privately. In an approved group send `/status` (`/durum` for Turkish).
-   Credential authentication does not prove room visibility or live health.
+- A computer or server with internet access that can stay on while the bot runs.
+- **Docker with Docker Compose**. On Windows or Mac, install and open [Docker Desktop](https://docs.docker.com/desktop/); wait until Docker is running. Use Linux containers on Windows. On Linux, follow [Docker Engine's installation instructions](https://docs.docker.com/engine/install/) for your distribution, including the Compose plugin.
+- A web browser and Terminal (Mac/Linux) or PowerShell (Windows). You will paste a few commands there; no programming is needed.
+- Permission to add a bot to your chosen chat platform, and a model-provider account. You can create the tokens and model key while following browser setup.
 
-To find IDs without forwarding conversations to a third-party ID bot, inspect a
-Bot API `getUpdates` response privately before starting this runner (`from.id`
-for the sender, `chat.id` for the group). Treat the response as private member
-data, never publish it, and do not run a second poller while the bot is running.
-Keep the minus sign on group IDs. Canonical private-chat RoomKeys can also be
-explicitly approved; approval does not automatically grant administrative rights.
+**Before connecting a room:** tell its members that selected conversation text, saved notes and optionally images go to your chosen AI service. The bot reads ordinary conversation, not just mentions, and retains notes locally. All enabled platforms share those notes. [Privacy and retention](#privacy) explains the limits, including the lack of selective member deletion.
 
-Telegram uses outbound HTTPS long polling, so **NAT is fine** and no public
-webhook port is needed. An existing webhook or second process using the same
-token conflicts with polling. There is **no old group-history fetch**: it learns
-future updates and locally retained conversation. Telegram's pending update
-queue lasts at most 24 hours, not fourteen days. Personality name selection
-cannot change a per-group nickname. Forum topic IDs are retained for reply routing,
-but approval is at the **chat** level: approving a group approves its topics;
-`TELEGRAM_ROOMS` cannot grant or deny individual topics. Topic creation, closure
-and other topic administration are not offered.
+### Download the launch settings
 
-Replies are plain text split at 4096 Unicode scalars. Reactions use only allowed
-emoji, not paid/custom emoji. Images follow `IMAGE_ANALYSIS=off` (no download);
-enabled images use a validated `getFile` download without exposing token-bearing
-URLs to the model. Local outgoing files are uploaded directly. For limits,
-tokenless offline authorization smoke and the explicitly ignored live `getMe`
-probe, see [Telegram configuration](configuration.md#telegram).
+Open a terminal and paste:
 
-Official references: [creating a bot](https://core.telegram.org/bots/features#creating-a-new-bot),
-[privacy mode](https://core.telegram.org/bots/features#privacy-mode),
-[Bot API polling](https://core.telegram.org/bots/api#getupdates).
+```sh
+mkdir mybot && cd mybot && curl -O https://raw.githubusercontent.com/krxi/discord-bot/main/docker-compose.yml
+```
 
-For Slack, use [Slack Socket Mode](#slack-socket-mode); for Matrix, use
-[Matrix plaintext room setup](#matrix-plaintext-room-setup). Neither requires a
-Discord account or token. Enabled platform connections share one brain, so
-approve only rooms whose members understand that their information may influence
-replies elsewhere.
+This creates your private working folder and downloads the file that tells Docker how to run the package. Stay in this folder for the remaining Docker commands.
 
-## What you need for Discord
+In Windows PowerShell, use these separate lines (also works in older PowerShell):
 
-- [ ] A Discord account.
-- [ ] A Discord server where you are an administrator.
-- [ ] A computer or a small server with internet access.
-- [ ] A Discord bot token, a model account, and Docker or a release binary.
+```powershell
+mkdir mybot
+cd mybot
+curl.exe -O https://raw.githubusercontent.com/krxi/discord-bot/main/docker-compose.yml
+```
 
-Keep the computer on for the bot to stay online.
+Docker keeps settings and memory in its own persistent volumes; **do not create a host `config` folder or `.env` file** for a new installation. No Linux config-permission preparation is needed. If Docker itself reports `permission denied` on Linux, follow [Docker's Linux post-installation instructions](https://docs.docker.com/engine/install/linux-postinstall/).
 
-> **Before inviting the bot: data flow and privacy**
->
-> - **Stored locally:** person/topic notes, summaries and bounded channel history in `durum/hafiza.redb` (memory database); raw overflow in `durum/arsiv/` (archive), plus your backups.
-> - **Sent to your model service:** selected chat text and saved notes for replies and background analysis. OpenRouter also routes to the serving model provider. Images may be sent; image analysis defaults on (`IMAGE_ANALYSIS=off` disables it).
-> - **Other services:** Firecrawl receives page URLs and search queries when configured.
->
-Tell members which rooms the bot can read. It reads ordinary messages, not only mentions, and observes messages while asleep. Discord's first scan reads up to **14 days** of accessible text history; set `CHANNELS` before first launch. **Blank Discord `GUILD_ID` / `CHANNELS` means every accessible server / channel.** Telegram has no group-history scan and **blank `TELEGRAM_ROOMS` denies all rooms**. Slack requires explicit `SLACK_CHANNELS`; **blank denies all Slack rooms**, and history is bounded/rate-limited. Matrix requires explicit room IDs or owner-approved invitations, ignores unapproved joined rooms, and never decrypts encrypted content. Selective member deletion is not supported, and `/reset` does not erase stored records. [Retention details](#privacy).
+### Start and open the setup link
 
-## What does it cost?
+```sh
+docker compose up -d
+docker compose logs bot
+```
 
-The bot itself is free, open-source software. You bring your own model account. A **model** is the AI that writes the bot's replies.
+The first start downloads the image. The browser panel starts **before chat credentials are required**; you do not need to create an `.env` file first.
 
-**You can try a free model.** The live OpenRouter catalog listed `google/gemma-4-31b-it:free` on 11 October 2026. This is a catalog-verified example, not an end-to-end bot compatibility claim. Availability and limits can change. Copy the exact ID into setup's **Model** field. Leaving it blank selects the provider's **paid** default, not a free model.
+In the logs, find a link like:
 
-Free-model requests are rate-limited; consult [OpenRouter's current limits](https://openrouter.ai/docs/api_reference/limits). A **request** is one model call, not one Discord message. Background analysis makes requests too and can exhaust the free allowance before ordinary chat does.
+```text
+http://localhost:8787/setup#token=...
+```
 
-We have not published a measured running cost yet. Replies and background analysis both use your model key. Start with a provider spending limit and check the provider's usage dashboard. A rented server may have its own bill.
+Open the **actual printed link**, not this example, in your browser on the same computer. Port **8787** is the local browser panel; it is not a public webhook. Compose exposes it only to your computer. For a rented/remote server, first use [an SSH tunnel](#accessing-a-remote-server).
 
-## Slack Socket Mode
+**The setup token lasts 15 minutes and can be used once.** Treat the full link and the log containing it like a password. Claiming consumes the token before the administrator password is saved. If the link expires, or you lose that session before saving a password, run `docker compose restart bot` and use the newly printed link. After you save a password, restarts no longer print a claim link: sign in at `http://localhost:8787` instead.
 
-You need a Slack account, permission to install an app in your workspace (or an administrator who can approve it), a model API key, and a computer/server that stays online. **Socket Mode** opens an outbound WebSocket connection; there is no public webhook server, signing secret, or incoming port to configure.
+## Browser setup
 
-### 1. Create the app from the supplied manifest
+The browser walks you through five steps:
 
-1. Open [Slack's app management page](https://api.slack.com/apps), sign in, and select **Create New App → From a manifest**.
-2. Choose the workspace where the bot will operate.
-3. Choose **YAML**, replace the example with the full contents of [`slack-app-manifest.yml`](slack-app-manifest.yml), review it, and create the app. You may change the display name; do not silently broaden the scopes.
-4. Open **Socket Mode** and check that it is enabled.
-5. Under **OAuth & Permissions → Bot Token Scopes**, check this exact list:
+1. **Claim and protect.** Set a private administrator password of at least **12 characters** and save it in a password manager. This password is only for the panel; it is not a chat-platform token, model API key or bot-owner identity.
+2. **Choose and connect a platform.** Choose [Discord](#discord-setup), [Telegram](#telegram-setup), [Slack](#slack-socket-mode) or [Matrix](#matrix-plaintext-room-setup). Follow that platform's section below to get its credentials, then use the wizard's test button.
+3. **Choose AI.** Select OpenRouter or Mistral, paste your private model key and choose a model. [Model keys and cost](#model-keys-and-cost) explains paid defaults and free-model limits.
+4. **Make it fit.** Choose English (`en`) or Turkish (`tr`), your hours from UTC (for example `3`, `-5` or `5.5`), optional bot owner, and the rooms the bot may read. Set restrictions **before** starting the chat connection. The owner key examples are in each platform section; this identity controls bot commands, not panel sign-in.
+5. **Review and start.** Finish the platform's invitation/access steps, review the privacy notice and start. First setup saves the configuration and starts the selected connection **without a process restart**. Then [verify the connection](#verify-the-connection).
+
+**A green credential test is not a live-health test.** It checks authentication/identity, not a persistent connection, room permissions, ordinary-message visibility or successful replies. Model-provider tests use authenticated GET requests, not a paid completion; they do not prove model compatibility or sufficient credit. Tests do not save the keys to disk or finish setup.
+
+After saving your administrator password, ownership survives interrupted setup: log in to resume. Unsaved credential drafts expire 15 minutes after creation or the latest successful credential test; logout and process restart discard them.
+
+Docker saves tokens and model keys in **`/data/config/.env` inside the `discord-bot-config` volume**, not in your working folder. They are plaintext because the bot needs to use them. Never upload them, put them in Git or include them in a screenshot. Browser saves use private file permissions, not encryption; protect Docker access and [back up both volumes privately](#back-up-the-memory). Rotate leaked tokens/keys with their issuer.
+
+### Model keys and cost
+
+An **API key** is the password that allows the bot to use your model account. The **model** is the AI that writes replies and analyzes conversation for notes.
+
+For OpenRouter:
+
+1. Sign in at [openrouter.ai/keys](https://openrouter.ai/keys).
+2. Create a key, name it and set a spending limit.
+3. Copy it privately into setup. Add credits if choosing a paid model.
+
+Already use Mistral? Choose `mistral` and use your Mistral key instead. OpenRouter's free limits do not apply to Mistral.
+
+**A free model must be chosen explicitly.** The existing catalog check on 11 October 2026 listed `google/gemma-4-31b-it:free`; it is a catalog-verified example, not an end-to-end bot compatibility claim. Availability and limits can change: consult [the live catalog](https://openrouter.ai/api/v1/models) and copy the exact model ID. Leaving **Model** blank selects the provider's **paid default**, not a free model.
+
+Free requests have [rate limits](https://openrouter.ai/docs/api_reference/limits). One request is one model call, not one chat message; background analysis also makes requests and can use the allowance before ordinary chat does.
+
+The software is free and open source. **Running cost has not been measured or published.** Replies and background analysis both use your key; a rented server may have its own bill. Start with provider spending controls and watch the provider's billing dashboard, not just the panel's token counters.
+
+## Connect your chat platform
+
+Choose one platform for first setup. It does not require credentials for the others. To add another later, use protected **Settings**, save and restart; do not rerun `init --force`. Connections share one brain, not separate memories.
+
+### Discord setup
+
+You need a Discord account and a server where you can install the bot and set channel permissions.
+
+1. Sign in to the [Discord Developer Portal](https://discord.com/developers/applications), select **New Application**, give it a name and create it.
+2. Open **Bot**. Under **Token**, use **Reset Token**, confirm the security prompts and save the token privately.
+3. Still on **Bot**, find **Privileged Gateway Intents**. Turn on **Message Content Intent** and **Server Members Intent**. Leave **Presence Intent** off. Save changes if prompted.
+4. In browser setup, choose Discord, paste the token and test it. Use **Add to server** to invite it to your server before starting.
+5. Give it permission to view the intended channels, read message history and send messages. Choose approved channels/server in setup; use Discord permissions to deny access elsewhere as well.
+
+**Blank Discord `GUILD_ID` / `CHANNELS` means every accessible server / channel.** Its first scan can read up to **14 days** of accessible text history. Restrict access before starting; this differs from the default-deny behavior on the other platforms.
+
+To find IDs, turn on **User Settings → Advanced → Developer Mode** in Discord. Right-click a server, channel or your own name and use the appropriate **Copy … ID** option. IDs are numbers, not names. For optional owner commands, enter **`discord:user:<your user ID>`** as `OWNER_KEY`, for example `discord:user:42`. Legacy `OWNER_ID` still accepts a Discord numeric user ID; the browser wizard uses `OWNER_KEY`.
+
+After starting, check **Overview** for the real connection, then send **`/status`** in an accessible channel (`/durum` for Turkish). Keep `STEALTH` off for slash-command verification. A working status card confirms command handling, not a successful model reply. Then mention the bot and say hello; it chooses when to talk and may be asleep.
+
+### Telegram setup
+
+Telegram is the recommended beginner route. You need a Telegram account and a group you administer.
+
+1. Open the official [@BotFather](https://t.me/botfather), send `/newbot` and choose a name and username ending in `bot`. Save its token privately; it is not your personal Telegram login.
+2. Send `/setprivacy` to BotFather, choose the bot and select **Disable** so it can receive ordinary group conversation. **Remove and re-add it to existing groups** after changing privacy. Alternatively, make it a group administrator, which receives ordinary messages regardless of privacy.
+3. Add it to your approved group and allow it to **send messages**. Administrator status is also needed to receive human reaction updates.
+4. Choose Telegram in browser setup and enter the token. Its `getMe` test reports the authenticated bot identity and warns about privacy that may limit ordinary-message visibility; it does not prove a group's permissions.
+5. Explicitly approve the group's ID in **`TELEGRAM_ROOMS`**. **Blank denies every room.** Keep the minus sign on native group IDs, for example `-100123`. Canonical keys such as `telegram:room:-100123` are also accepted. Private chats can be approved explicitly using their canonical keys.
+6. For administration, enter **`OWNER_KEY=telegram:user:<your numeric user ID>`**, for example `telegram:user:42`. This is not your `@username`, group ID or bot ID. Skipping it denies Telegram administration.
+
+To find IDs without forwarding conversations to a third-party ID bot, inspect a Bot API `getUpdates` response privately **before** running this bot: `from.id` is the sender; `chat.id` is the group. The response contains private member data. Do not publish it or run a second poller while the bot is active.
+
+Before checking status, open the bot's **private chat** and press **Start**. Then, as the configured owner, send **`/status`** in an approved group (`/durum` for Turkish); administrative results are delivered privately. Approval alone does not grant owner rights.
+
+Telegram uses outbound HTTPS polling; no public webhook port is needed. Another poller or existing webhook using the same token conflicts with it. It cannot fetch old group history: it learns future updates and retained local text; Telegram's pending queue lasts at most 24 hours. Approval is at the **chat** level, including all forum topics, not per topic. See [Telegram configuration](configuration.md#telegram) for files, reactions and other limits.
+
+### Slack Socket Mode
+
+You need a Slack account and permission to install an app in your workspace (or administrator approval). **Socket Mode** makes an outbound WebSocket connection; there is no public webhook, signing secret or incoming port to configure.
+
+#### Create and install the app
+
+1. Open [Slack app management](https://api.slack.com/apps) and select **Create New App → From a manifest**.
+2. Choose your workspace, select **YAML** and paste the full contents of the supplied [`slack-app-manifest.yml`](slack-app-manifest.yml). You can change its display name; do not broaden permissions silently.
+3. Check **Socket Mode** is enabled. Under **OAuth & Permissions → Bot Token Scopes**, confirm:
    - `app_mentions:read`
    - `channels:history`, `channels:read`
    - `groups:history`, `groups:read`
@@ -120,406 +141,139 @@ You need a Slack account, permission to install an app in your workspace (or an 
    - `files:read`, `files:write`
    - `reactions:read`, `reactions:write`
    - `users:read`
-6. Under **Event Subscriptions**, check the bot events: `app_mention`, `message.channels`, `message.groups`, `member_joined_channel`, `reaction_added`.
+4. Under **Event Subscriptions**, confirm the bot events: `app_mention`, `message.channels`, `message.groups`, `member_joined_channel`, `reaction_added`.
+5. Under **OAuth & Permissions**, select **Install to Workspace** and approve the scopes. Follow your workspace's administrator approval process if required. Reinstall after changing scopes or event subscriptions.
 
-`channels:*` covers public channels; `groups:*` covers private channels the bot has joined. The manifest does not grant direct-message reading, `chat:write.public`, user-token scopes, or slash commands. It contains no credentials. Slack's own `/invite` remains available; it is not a command registered by this bot.
+`channels:*` covers public channels; `groups:*` covers private channels the bot has joined. The manifest does not request direct-message reading, user-token scopes, `chat:write.public` or slash commands, and contains no credentials.
 
-### 2. Install and obtain the two different tokens
+#### Get both tokens and approve channels
 
-1. Under **OAuth & Permissions**, select **Install to Workspace** and approve the requested bot scopes. Follow your workspace's administrator approval process if required.
-2. Copy the **Bot User OAuth Token**, beginning `xoxb-`. This is `SLACK_BOT_TOKEN`, used for Slack Web API calls.
-3. Under **Basic Information → App-Level Tokens**, select **Generate Token and Scopes**.
-4. Name it, add only **`connections:write`**, generate it, and copy the token beginning `xapp-`. This is `SLACK_APP_TOKEN`, used to open Socket Mode.
-5. Keep both tokens private. Reinstall the app after changing bot scopes or event subscriptions so the installation receives the new permissions.
+1. Copy the installed **Bot User OAuth Token** beginning **`xoxb-`** from **OAuth & Permissions**. This is `SLACK_BOT_TOKEN`.
+2. Under **Basic Information → App-Level Tokens**, choose **Generate Token and Scopes**. Add only **`connections:write`**, generate it and copy the **`xapp-`** token. This is `SLACK_APP_TOKEN`. Do not add this scope to bot scopes; the manifest cannot generate this secret.
+3. In each agreed public or private channel, use Slack's **`/invite @your-bot-name`**. Installation alone does not join channels; a private channel needs a member's invitation.
+4. Copy the channel ID from its details or browser URL. Approve native IDs such as **`C01234567,G01234567`** in **`SLACK_CHANNELS`**, not names like `#general`. **Missing/blank approves no channels.**
+5. For the command owner, use **More/… → Copy member ID** on your own profile (`U…`). The workspace ID is the `T…` part of the browser URL `https://app.slack.com/client/T…/C…`. Enter **`OWNER_KEY=slack:user:T01234567:U01234567`** using your real IDs. Skipping this denies Slack administration, including status, but not ordinary chat.
 
-**Do not add `connections:write` to bot scopes.** It is an app-level token scope created separately; the manifest cannot create or contain an app-level secret. Rotate leaked tokens in Slack app management. Never paste them in Slack, a screenshot, a Git commit, or a support log.
+Choose Slack in browser setup, enter **both** tokens from the same app/workspace, approved channel IDs and the correct history tier. The wizard checks `auth.test` and `apps.connections.open` (`connections:write`), including the returned WebSocket URL; it does **not** open a persistent Socket Mode connection or prove channel access. A partial token pair is rejected even if another platform is configured.
 
-### 3. Approve channels, invite the bot, and find the owner identity
+For an internal customer-built or Marketplace-approved app, leave **`SLACK_HISTORY_TIER=internal`**. For a commercially distributed non-Marketplace app, choose **`restricted`** before starting. Self-hosting alone does not establish the app's Slack distribution classification. History is bounded and rate-limited, not a complete workspace/thread export. [Configuration details](configuration.md#slack-and-simultaneous-platforms) explain both tiers.
 
-1. Agree with members which channels may be processed and stored. Start with one trusted test channel.
-2. In each approved public or private channel, use Slack's **`/invite @your-bot-name`**. Installation alone does not join channels. A private channel requires an invitation from a member.
-3. Open channel details and copy the **channel ID** (or take it from the channel's browser URL). IDs begin `C…` or `G…`; `#general` is a name and is not accepted.
-4. Save a comma-separated list, such as `C01234567,G01234567`, for **`SLACK_CHANNELS`**. Missing/blank means **no Slack channel is approved for learning**, not "all channels." Never substitute Discord's `CHANNELS`.
-5. Optionally find your own Slack member ID: open your profile's **More/… → Copy member ID**. It normally begins `U…`. Open Slack in a browser; the workspace ID is the `T…` component of `https://app.slack.com/client/T…/C…`.
-6. Combine them as **`OWNER_KEY=slack:user:T01234567:U01234567`**, using your actual workspace/member IDs. This is a canonical identity, not your username or email. `OWNER_KEY` takes precedence over legacy Discord `OWNER_ID`; an invalid nonblank key does not fall back. The setting is optional for ordinary chat, but leaving it blank denies Slack administration, including `status`.
+After starting, as the configured owner in an invited, approved channel, send **`!status`** or mention the bot followed by **`status`**. **Do not use `/status`: this bot registers no Slack slash commands.** Results are recipient-only ephemeral messages, with no public or direct-message fallback. An ephemeral result is transient, not durable private storage.
 
-All enabled platforms share notes. Source-qualified IDs keep different people's records distinct but do **not** isolate their information from the shared brain. Only trusted, approved allowlisted channels should contribute. Private channel membership does not make model processing local or prevent learned context influencing another approved room.
+Private Slack channels still feed the shared brain and model service. Attached private files can be downloaded within Slack's permissions; enabled image analysis may send images to the model. Slack has no typing indicator, per-channel bot nickname changes or Discord-style interactive menus. See [capability details](architecture.md#slack-socket-mode-boundary).
 
-### 4. Configure and start
+### Matrix plaintext room setup
 
-Install Docker using [step 4 below](#4-install-docker), then follow the download/start commands in [step 5](#5-download-and-start-the-bot). The panel opens on port **8787** before platform credentials are required. Complete **Claim and protect**, choose Slack in wizard step 2, then provide both tokens, native approved channel IDs and the history tier. The wizard checks `auth.test` with `SLACK_BOT_TOKEN` and calls `apps.connections.open` with the `SLACK_APP_TOKEN` (`connections:write`); it validates the tokens and WebSocket URL but does not open a persistent Socket Mode connection or prove channel access/live workspace health. Configure provider/model credentials, language and the qualified owner. Download the [local Slack app manifest](slack-app-manifest.yml) and follow the app setup steps above. Blank channel approval denies all Slack rooms. Finish to start the runtime without restarting. To add Slack later in Settings, save and restart the process (`docker compose restart bot`).
+Matrix is **not an encrypted assistant**. Encrypted rooms and attachments are unsupported, with no decryption or plaintext fallback. It uses outbound HTTP(S) sync, so no public incoming port is needed.
 
-For terminal-only setup, follow [Headless CLI setup](#headless-cli-setup), including its Docker command that writes `config/.env`. With a downloaded release binary, run:
+#### Create a dedicated account and plaintext room
 
-```sh
-discord-bot init
-```
+1. Create a **separate bot account** in a Matrix client such as Element on `matrix.org`, or ask your homeserver administrator. Do not give the bot your personal account credentials.
+2. Save its full user ID, such as **`@mybot:matrix.org`**, and homeserver API base URL, usually `https://matrix.org`. A display name is not a user ID.
+3. Get an **access token** while signed in as the bot. Client account/help/developer tools may expose it; otherwise browser developer tools can show the `Authorization: Bearer ...` header of a Matrix API request. Copy only the token, not `Bearer `. Treat it like a password. For SSO-only accounts, obtain a token from the signed-in client. Settings and CLI also support password login where the homeserver permits it, but browser credential tests require a token.
+4. From your separate **owner** account, create a room with **encryption disabled before creation**. Many clients enable encryption by default. An encrypted room cannot be safely downgraded: create a new plaintext room instead. The homeserver can read plaintext, including private rooms.
+5. Tell members about storage and model processing. Explicitly approve the internal room ID in **`MATRIX_ROOMS`**, for example `!roomid:matrix.org` (modern opaque `!…` IDs also work). Find it in room settings/advanced information; a `#room:server` alias is not an ID. Alternatively, invite the bot from the configured owner's account after setup.
 
-Choose **`slack`** at the new platform question. Enter alone chooses Discord and keeps the existing Discord setup behavior.
+**Blank `MATRIX_ROOMS` approves no already-joined rooms.** Only explicit IDs or invitations sent by the configured owner grant access. Invitation approvals persist across restarts. Membership alone is not approval or memory isolation.
 
-| Slack wizard question | What to enter |
+Choose Matrix in browser setup. Enter the homeserver, full bot user ID, access token and optional room IDs. Its `whoami` test checks that the token's user matches `MATRIX_USER`; it does not prove room access or successful conversation.
+
+For **`OWNER_KEY`**, enter the qualified, encoded identity of your owner account: **`matrix:user:%40owner%3Amatrix.org`** represents `@owner:matrix.org`. Encode `@` as `%40` and `:` as `%3A`; for other reserved characters use uppercase percent-encoding. **The browser requires the canonical key, not the raw Matrix ID.** The headless CLI instead asks for the full owner ID and encodes it for you. Without an owner, invitations cannot approve new rooms and Matrix administration is denied.
+
+Docker and default release/source builds include Matrix. Source builds need Rust 1.96 or newer; a build made with `--no-default-features` omits Matrix and explicitly rejects configured Matrix settings.
+
+#### Verify as the owner
+
+Keep `STEALTH` off. As the owner, send **`!status`** in an approved plaintext room (`!durum` for Turkish); `!help` / `!yardim` lists commands.
+
+The bot invites you to a separate **plaintext admin room** for private results. **Accept the invitation**, keep it unencrypted with only you and the bot, and run `!status` there. This room is excluded from conversational memory. Extra members or encryption make private delivery fail closed; results are never printed publicly as a fallback. The homeserver can still read these plaintext results.
+
+Use the approved group for room-targeted actions such as `!news` and `!reset`; shared-brain actions such as `!status` also work in the admin room. Keep the entire state volume across restarts: Matrix session files contain secrets and preserve the account's device/sync progress. [Matrix configuration](configuration.md#matrix-plaintext-only) and [state paths](state-files.md#matrix-session-and-sync-state) cover advanced options.
+
+## Verify the connection
+
+After **Review and start**, open **Overview** and inspect the actual platform connection and room readiness. The panel being reachable only proves the panel is running.
+
+| Platform | First command | Where the result appears |
+| --- | --- | --- |
+| Discord | `/status` (`/durum` in Turkish), with `STEALTH` off | A status card visible to the caller |
+| Telegram | Owner sends `/status` in an approved group after pressing **Start** in the bot's private chat | The bot's private chat with the owner |
+| Slack | Owner sends `!status` or `@bot status` in an invited, approved channel | A private ephemeral result in that channel; no `/status` |
+| Matrix | Owner sends `!status` in an approved plaintext room, accepts the admin-room invitation, then sends it there | The separate owner/bot plaintext admin room |
+
+A command result confirms that command route, not a model completion or every room's permissions. Then try ordinary conversation or a mention. It chooses when to join, may react instead of replying, and sleeps at night. Normal chat is not a deterministic health check. Name selection is gradual: the established stage starts after at least 10 days and 25 finished chats.
+
+## Everyday controls
+
+Open **`http://localhost:8787`** and sign in with your panel password.
+
+- **Overview:** actual connections, rooms and active conversations; mood is per conversation, not one invented global mood.
+- **Memory:** browse/search people, topics and monthly events; edit supported records without touching the database file. A conflicting save keeps your draft rather than overwriting someone else's edit. Future learning can update manual edits again.
+- **Personality:** read the fixed core and evolving records; edit temperament. The periodic coach can later replace it; this is not model training or a permanent pin.
+- **Actions:** review the destination, arguments and privacy/cost warnings before a command. Queued work is not proof of delivery; closing the browser does not cancel a job, and interruption cannot undo a message already accepted or a write already committed. Results are retained for 30 minutes, not replayed after restart.
+- **Settings:** update credentials/access restrictions. Blank secret inputs keep saved values; use the explicit clear control to remove one. Add other platforms here, save and restart. Credential-test cards test only the selected platform without saving.
+- **Usage:** only calls/tokens actually reported in the current process. Missing values are **Not reported**, not zero. It is not persistent history, measured cost or complete billing; use your provider's dashboard.
+- **Logs:** a bounded recent redacted buffer, lost on restart, not a permanent audit trail. Redaction does not guarantee there is no member data.
+
+Saved Settings need a restart; first setup is the exception. Run these from `mybot`:
+
+| What you want | Command |
 | --- | --- |
-| App-level token | Your `xapp-` token with `connections:write`; hidden on an interactive terminal. |
-| Bot token | Your installed app's `xoxb-` token; hidden on an interactive terminal. |
-| Approved channel IDs | Native comma-separated IDs from step 3; Enter approves none. |
-| Model provider / key / model | OpenRouter or Mistral, your model key, and your selected model ID; see the cost notes above. |
-| Language | `en` or `tr`. |
-| Owner identity | `slack:user:<workspace ID>:<member ID>`, or Enter for no owner (Slack administration, including `status`, is then denied). |
-| UTC offset | Hours from UTC for the sleep schedule, such as `3`, `-5`, or `5.5`. |
+| Watch activity (Ctrl+C stops watching, not the bot) | `docker compose logs -f bot` |
+| Apply saved Settings | `docker compose restart bot` |
+| Stop without deleting saved data | `docker compose down` |
+| Start again | `docker compose up -d` |
+| Update the image and restart | `docker compose pull && docker compose up -d` |
 
-The resulting `.env` is Slack-only: it does not require or write `DISCORD_TOKEN`. The CLI wizard does not contact Slack or prove token validity. Piped input is not hidden. New Slack prompts have English/Turkish translations; `BOT_LANG=tr` selects Turkish prompts when launching the CLI wizard. The selected language is saved for subsequent bot runs. Protect `.env` (Unix mode `600`; on Windows restrict folder access).
+On older PowerShell, run the two update commands separately. Back up before upgrading. Keep Docker Desktop running. For a binary, stop and restart from its original data folder.
 
-Start with `discord-bot`, `cargo run --release`, or `docker compose up -d`, depending on installation. **As the configured `OWNER_KEY` owner**, in an invited, allowlisted channel, send **`!status`** or mention the bot followed by **`status`**. An unset owner means this administration check is denied; ordinary chat does not require an owner. Do not use `/status` in Slack: no Slack slash commands are registered. Administration goes through the shared service and returns **private ephemeral messages** (`chat.postEphemeral`), not public status cards or a direct-message fallback.
+The saved `model.md` selection takes precedence over the default **Model** in Settings; changing that default does not erase the separate saved override. For technical details, see [configuration](configuration.md), [panel behavior](architecture.md#embedded-panel-and-startup) and [platform capabilities](architecture.md#platform-boundary).
 
-To run several platforms simultaneously, add `DISCORD_TOKEN` and/or `TELEGRAM_TOKEN` with their corresponding room restrictions to the same configuration; retain both Slack tokens and `SLACK_CHANNELS`. The wizard configures one platform at a time. Use protected Settings or edit the private file rather than rerunning `init --force` to add a platform, since init overwrites the answers it collects. Each platform keeps its own room permissions and approval settings. A partial Slack app/bot token pair is rejected even if Discord or Telegram credentials are complete.
+## Troubleshooting
 
-### History, files, and capability limits
+### The setup link expired or setup was interrupted
 
-- **Bounded history, not a workspace export:** only explicitly approved rooms the bot can access are eligible. Retrieval is bounded and rate-limited; it is not a guarantee of complete past conversations or a complete thread archive.
-- **Slack history rate policy:** internal customer-built apps and Marketplace-approved apps retain **Tier 3** history limits (50+ requests/minute). Commercially distributed, non-Marketplace apps are limited to **1 request/minute** and **15 messages/request** for `conversations.history` and `conversations.replies` under Slack's newer policy. Internal does not mean "anything self-hosted"; check your app's distribution classification. The adapter defaults to **`SLACK_HISTORY_TIER=internal`**, reserving at least 1 second between history calls with at most 100 messages/page. For the commercial non-Marketplace class, set **`SLACK_HISTORY_TIER=restricted`** before launch: at least 60 seconds between calls and at most 15 messages/page. Both modes honor returned HTTP 429 `Retry-After` and report the rate limit without automatically retrying. Do not raise request volume just because your workspace is paid. [Slack policy](https://docs.slack.dev/changelog/2025/05/29/rate-limit-changes-for-non-marketplace-apps), [history reference](https://docs.slack.dev/reference/methods/conversations.history).
-- **Private files:** `files:read` permits access only within Slack's authorization boundary. Attachments keep a native file ID; when needed, `files.info` resolves a private download and the bot authenticates it. Do not copy signed/authenticated file URLs into memory. Image analysis may send downloaded images to the model provider; set **`IMAGE_ANALYSIS=off`** before launch to disable attached-image processing, including Slack private files.
-- **Supported output:** text and thread-aware replies, uploads within Slack's limits, edits/deletes of the bot's own messages, and reactions using Slack emoji names (including custom names) or a supported known Unicode-to-name mapping. Unknown Unicode reactions are explicitly unsupported, not guessed.
-- **Output length:** a raw chunk is at most 3,900 Unicode scalars; Slack escaping can expand text, so rendered chunks are split safely to stay within a 4,000-scalar target. Longer replies may become several messages.
-- **Not supported:** a typing indicator, per-channel bot nicknames, account-profile mutation as a nickname fallback, interactive Discord-style menus/modals, and Slack slash commands. An ephemeral result is transient and recipient-only, not durable private storage.
+If no administrator password was saved, restart with `docker compose restart bot` and use the new one-use link. If a password was already saved, log in and resume setup. Credential drafts may need to be entered/tested again. Do not delete the data volume to recover setup.
 
-### Optional live tests (not onboarding verification)
+### The bot is online but silent. What should I check?
 
-Ordinary tests are offline. Live Slack tests are **ignored and environment-gated**; they require real `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN`. Set optional `SLACK_TEST_CHANNEL` to an invited test channel only when deliberately permitting channel-scoped probes (which may create/edit/react to/delete bot messages). Keep tokens out of command history and logs:
+Start with **Overview**, then the platform's command in [verification](#verify-the-connection). For Discord, confirm both **Message Content Intent** and **Server Members Intent** in the Developer Portal, channel read/write permissions, approved IDs and `STEALTH=off`; restart after changes. Disabled intents can reject the connection entirely.
 
-```sh
-cargo test --locked slack:: -- --ignored
-```
+For the other platforms:
 
-This is an opt-in command, not evidence that a live workspace was tested. Without real credentials, do not report Slack end-to-end verification. The integration owner separately runs the release startup smoke with fake tokens; that checks startup/failure behavior, not a successful Slack connection.
+- **Telegram:** check the group's negative ID in `TELEGRAM_ROOMS`, send permission and privacy mode (disable then remove/re-add, or make it administrator). Confirm your numeric `OWNER_KEY`, private-chat **Start**, and that no webhook/second poller shares its token.
+- **Slack:** check both tokens belong to the same installed app/workspace, Socket Mode is on, required scopes/events are installed, the bot is invited, the native channel ID is approved and your owner key includes workspace/member IDs. Use `!status`, not `/status`.
+- **Matrix:** check the full IDs/homeserver, token user, room approval, encryption **off**, owner key and accepted plaintext admin-room invitation. Keep `STEALTH` off and only the owner/bot in the admin room.
 
-## Matrix plaintext room setup
+Credential authentication alone does not prove a room is readable. If commands work but chat does not, check provider errors, exhausted limits and the sleep schedule. Unknown visibility is not proof of full access.
 
-Matrix is an alternative chat transport, **not an encrypted assistant**.
-End-to-end encrypted rooms and encrypted attachments are unsupported. This bot
-uses outbound HTTP(S) sync: a home computer behind NAT can run it without port
-forwarding, a tunnel, or a public webhook. Keep the computer on and connected.
+### Configuration is missing or invalid
 
-### 1. Create a separate bot account
+The panel normally remains available when chat credentials are missing/invalid; finish setup or repair **Settings**, save and restart. A partial Slack token pair is rejected; a build without Matrix explicitly rejects its settings. Other platforms alone do not need a Discord token.
 
-1. In a Matrix client such as Element, create a **dedicated bot account** on
-   `matrix.org`, or ask your own homeserver administrator to create one. The bot
-   acts as this account; do not give it your personal account's credentials.
-2. Save its **full user ID**, such as `@mybot:matrix.org`. A display name or just
-   `mybot` is not a user ID. Your homeserver URL is usually `https://matrix.org`
-   for that server; on your own server use its Matrix client API base URL.
-3. Prefer an **access token**. While signed in as the bot, use the client's
-   account/help/developer tools to reveal its access token. Client versions
-   differ; if it is not exposed, browser developer tools can show the
-   `Authorization: Bearer ...` header on a Matrix client API request. Copy only
-   the token, never the `Bearer ` prefix. Treat it as the account's password:
-   do not paste it in chat, screenshots, issue reports or source control.
-4. Password login is supported in Settings and the headless CLI when your
-   homeserver supports it, but browser credential tests require an access token.
-   For SSO-only accounts, obtain a token from a signed-in client instead. Revoke
-   a leaked token/session in your client's session settings; change a leaked password too.
+For Docker, settings are `/data/config/.env` inside the **`discord-bot-config`** volume; there is no default host `config/.env`. Check the volume mount and local save errors. External environment values, including old `env_file` injection, override the file and appear read-only in Settings. A file save cannot override them. [Migrate old configuration](#migrating-an-existing-docker-env) rather than injecting browser-editable fields.
 
-Keep your **owner** account separate. Find its full user ID, for example
-`@owner:matrix.org`; the wizard needs this to approve invitations and commands.
+A bind, configuration-file or database failure can prevent the panel itself opening: inspect local logs. With `PANEL_ENABLED=off`, startup requires valid chat/model settings. For binaries, keep `.env` in the usual launch folder, not `.env.txt`; `init` refuses an existing file unless `--force` is explicit. Back up before overwriting.
 
-### 2. Make an explicitly approved, unencrypted room
-
-1. As the owner, create a room and **disable encryption before creation**. Many
-   clients enable encryption for new rooms or direct messages by default. Check
-   the room's security settings before inviting the bot.
-2. An already encrypted room cannot safely be turned into a plaintext room.
-   Create a new room if encryption is on. The bot cannot decrypt messages or
-   use a key-backup/recovery phrase.
-3. Tell members what the bot reads and stores, and that selected conversation
-   text and saved notes are sent to your model service. It observes ordinary
-   messages in approved rooms, not only mentions. The homeserver can also read
-   plaintext content.
-4. Invite the bot **from the configured owner's account**. Alternatively,
-   explicitly allowlist the room's internal ID in `MATRIX_ROOMS`. Find it in
-   the client's room settings/advanced information: it starts with `!`, for
-   example `!roomid:matrix.org`. A room alias (`#myroom:matrix.org`) is not an ID.
-
-`MATRIX_ROOMS` accepts native room IDs separated by commas. It is an explicit
-allowlist, **not** a list of rooms to search for automatically. A blank value
-allows owner-approved invitations only, not every room the account already
-joined. Previously joined but unapproved rooms are ignored. Owner invitation
-approvals persist across restarts.
-
-**Shared-brain privacy:** approved rooms use the same memories and persona.
-Information learned in one approved room can influence replies in another.
-Do not approve unrelated private communities expecting isolated memory. A room
-invitation, leaving a room, or resetting a chat does not erase stored notes.
-See [privacy and retention](#privacy).
-
-### 3. Configure and launch a Matrix-enabled build
-
-The native `matrix-sdk` **0.19.1** integration is an optional dependency enabled
-by the default `matrix` Cargo feature. Source builds require **Rust 1.96**.
-Default release builds and the Docker image include Matrix; a binary built with
-`--no-default-features` does not offer Matrix in CLI init and rejects configured
-Matrix settings explicitly rather than silently ignoring them.
-
-Install and start using [step 5 below](#5-download-and-start-the-bot). The panel opens on port **8787** before platform credential validation. Complete **Claim and protect**, choose Matrix in wizard step 2, then provide the homeserver URL, full bot user ID, access token and optional room IDs. Its bearer-token `whoami` test checks that the returned user matches `MATRIX_USER`; this authenticates the account but does not prove room access or successful replies. The wizard accepts an access token; the CLI and protected Settings retain the password-login alternative. Matrix supports plaintext rooms only—encrypted rooms and attachments have no decryption or plaintext fallback. Blank room approval does not approve already-joined rooms; explicitly allowlist rooms or use owner-approved invitations. Configure provider/model credentials and language, and set `OWNER_KEY` in **Privacy**. Finish to start the runtime without restarting. To add Matrix later in Settings, save and restart (`docker compose restart bot`).
-
-For terminal-only setup, follow [Headless CLI setup](#headless-cli-setup);
-its Docker command writes `config/.env`. With a release binary run
-`discord-bot init`. For source builds:
-
-```sh
-cargo run --release --features matrix -- init
-cargo run --release --features matrix
-```
-
-Run source commands from the repository folder; saved configuration and state
-are relative to the launch directory. Get a model API key as in
-[step 2 below](#2-get-an-openrouter-key). The CLI wizard asks:
-
-| Question | What to enter |
-| --- | --- |
-| Chat platform | Type `matrix`. Enter keeps Discord. |
-| Homeserver URL | HTTP(S) base URL, e.g. `https://matrix.org`; no embedded credentials, query or fragment. |
-| Bot user ID | Full dedicated account ID, e.g. `@mybot:matrix.org`. |
-| Login method | Enter for preferred `token`, or type `password`. |
-| Token/password | The dedicated bot's credential; interactive terminal input uses hidden `rpassword` entry, while piped input is not hidden. |
-| Approved room IDs | Optional comma-separated native `!id:server` or modern opaque `!id` values; Enter uses owner invitations only. |
-| Provider, API key, model, language | Your model account and preferred language; Enter selects a **paid** default model. |
-| Owner user ID | Your full Matrix ID; the CLI validates it and writes the percent-encoded qualified `OWNER_KEY`. |
-| UTC offset | Your hours from UTC, or Enter for `0`. |
-
-The CLI uses typed config encoding and an atomic patch/save, not raw secret
-interpolation. It does not contact the homeserver to verify credentials.
-Matrix-only output does not require or write `DISCORD_TOKEN`; when editing an
-existing `.env`, leave that token blank if Discord is not wanted. Use protected
-Settings to add other platforms rather than rerunning init.
-
-Protect `.env` (Compose: **`config/.env`**) and the entire state directory.
-Matrix session files contain secrets; never share them as troubleshooting
-attachments. Keep the **`discord-bot-data`** volume between Docker restarts so
-the bot restores the same session and device instead of logging in as a fresh
-device each time. There is no crypto store, decryption, or plaintext fallback
-for encrypted rooms or attachments.
-[Exact state paths](state-files.md#matrix-session-and-sync-state).
-
-### 4. Verify as the owner
-
-With `STEALTH` off, send **`!status`** in an approved plaintext room (`!durum` for
-Turkish UI). `!help` / `!yardim` lists the available commands. Matrix commands
-are **owner-only**; a different member's command is not permission to administer
-the shared brain.
-
-Matrix has no Discord-style ephemeral reply. Commands deliver their private
-results in a separate **plaintext admin room** containing only the bot and owner.
-When the bot invites you to that room, **accept the invitation** and run
-`!status` there to see the result. Keep it unencrypted and do not invite other
-people. This admin room is excluded from conversational memory.
-
-Private results, including mind/settings detail, are denied in public rooms
-rather than printed to everyone. If the private room becomes encrypted or has
-other members, delivery fails closed: there is no public fallback. Plaintext
-admin rooms are not end-to-end confidential; the homeserver can read them too.
-Use the approved group for room-targeted actions such as `!news` and `!reset`;
-shared-brain commands such as `!status` also work in the admin room.
-Do not enable public diagnostics expecting them to be private.
-
-If no reply appears, check that the build has Matrix enabled, the full account
-IDs/homeserver are correct, the owner invited the bot or the room is allowlisted,
-the room is not encrypted, `STEALTH` is off, and you accepted the bot's private
-admin-room invitation. Then inspect local logs without sharing credentials.
-Ordinary chat still depends on the sleep schedule and the
-bot's willingness to reply; `!status` is the setup check.
-
-For developers using a disposable local homeserver, the ignored integration
-test command and `MATRIX_TEST_*` credentials are documented in
-[configuration](configuration.md#disposable-matrix-integration-test).
-
-
-## 1. Create the bot in Discord
-
-Open the [Discord Developer Portal](https://discord.com/developers/applications) and sign in. This is Discord's website for creating bots; you do not need to be a developer.
-
-1. Click **New Application**.
-2. Give it a name, such as `My Bot`. Accept the terms and click **Create**. The bot can choose a nickname later.
-3. Click **Bot** in the left sidebar.
-4. Under **Token**, click **Reset Token** and confirm any security prompt.
-5. Copy the token and keep it somewhere private until setup asks for it. A **token** is the bot's password. Never post it in Discord or share it in a screenshot.
-6. Still on **Bot**, scroll to **Privileged Gateway Intents**. These switches let Discord send the bot messages and member information.
-7. Turn on **Message Content Intent** and **Server Members Intent**. Leave **Presence Intent** off.
-8. Click **Save Changes** if it appears.
-
-- [ ] Both required intent switches are on.
-- [ ] I have saved my bot token privately.
-
-## 2. Get an OpenRouter key
-
-An **API key** is the password that lets the bot use your AI account.
-
-1. Open [openrouter.ai/keys](https://openrouter.ai/keys).
-2. Sign up or sign in.
-3. Create a key. Give it a name such as `Discord bot`, and set a spending limit.
-4. Copy the key and keep it private. You will paste it into browser setup.
-5. If you want a paid model, add credits to your OpenRouter account. If you want to start free, choose a current `:free` model instead.
-
-Already using Mistral? You can use your Mistral API key instead. Choose `mistral` in browser setup. The free limits above are for OpenRouter, not Mistral.
-
-## 3. Find your Discord user ID
-
-This optional step tells the bot who owns it. The owner is always liked and can switch models with `/model`.
-
-1. In the Discord desktop app, click the gear next to your name to open **User Settings**.
-2. Open **Advanced**.
-3. Turn on **Developer Mode**. This only makes extra copy options visible.
-4. Return to your server. Right-click your own name in the member list or on a message.
-5. Click **Copy User ID**. Save the number for setup.
-
-Your user ID is a number, not your username. You can skip it if you prefer.
-
-## 4. Install Docker
-
-**Docker** runs the bot in a ready-made package, so you do not have to install Rust or build anything.
-
-### Windows or Mac
-
-Install [Docker Desktop](https://docs.docker.com/desktop/). Choose the download for your computer, follow its installer, and open Docker Desktop. Wait until it says Docker is running. On Windows, use Linux containers for this bot.
-
-### Linux
-
-Open a terminal and run:
-
-```sh
-curl -fsSL https://get.docker.com | sh
-```
-
-This downloads and runs Docker's installation script. It may ask for your computer password. Docker recommends this shortcut for testing and development; for a production server, use the [official installation instructions](https://docs.docker.com/engine/install/ubuntu/) for your Linux distribution.
-
-If a later Docker command says `permission denied`, put `sudo` before `docker`, or follow Docker's [Linux post-installation instructions](https://docs.docker.com/engine/install/linux-postinstall/).
-
-## 5. Download and start the bot
-
-Open **Terminal** on Mac or Linux, or **PowerShell** on Windows. This is a window where you paste commands. Paste one command at a time and press Enter.
-
-**Upgrading an existing installation?** Complete [the configuration and volume migration](#existing-compose-installations) before downloading the new launch settings or starting the service. Changing Compose's volume name alone would start with different storage.
-
-### Command 1: make a folder
-
-```sh
-mkdir mybot && cd mybot
-```
-
-This creates a folder called `mybot` and moves you into it.
-
-On Windows PowerShell, use these two lines instead, so this also works with older PowerShell versions:
-
-```powershell
-mkdir mybot
-cd mybot
-```
-
-### Command 2: download the launch settings
-
-```sh
-curl -O https://raw.githubusercontent.com/krxi/discord-bot/main/docker-compose.yml
-```
-
-This downloads the file that tells Docker how to run the bot.
-
-On Windows PowerShell, use:
-
-```powershell
-curl.exe -O https://raw.githubusercontent.com/krxi/discord-bot/main/docker-compose.yml
-```
-
-### Command 3: create the editable configuration folder
-
-```sh
-mkdir -p config photos
-```
-
-On Linux, give the container's account access to the private configuration folder:
-
-```sh
-sudo chown 10001:10001 config
-sudo chmod 700 config
-```
-
-On Windows PowerShell: `mkdir config` then `mkdir photos`. Docker Desktop manages mount
-permissions; Linux ownership commands are not required there.
-
-### Command 4: start, then open browser setup
-
-```sh
-docker compose up -d
-docker compose logs bot
-```
-
-The panel starts before checking the bot's credentials, so a new installation does not need an existing `.env`. Open the printed `http://localhost:8787/setup#token=...` link within **15 minutes**. Treat it as a password: do not share it or the log containing it. The claim token is consumed when claimed, before you save a password. If it expires, or you lose that setup session before saving a password, run `docker compose restart bot` and use the new link. Once the password is saved, use it to log in; restarts no longer print a claim link.
-
-### Five browser setup steps
-
-1. **Claim and protect.** Use the one-use link and set an administrator password of at least **12 characters**. Save it in a password manager. The panel administrator password is separate from every platform token and optional bot owner identity.
-2. **Choose and connect a platform.** Select Discord, Telegram, Slack or Matrix and enter that platform's credentials. The tests call Discord's authenticated application API, Telegram `getMe`, Slack `auth.test` plus an app-level Socket Mode token check, or Matrix `whoami`. These tests verify credentials/identity only—not live gateway or room health, room visibility, permissions or successful replies. For Slack, download [`slack-app-manifest.yml`](slack-app-manifest.yml) to create the app. Matrix supports plaintext rooms only; encrypted content is not decrypted.
-3. **Choose AI.** Select `openrouter` or `mistral`, paste its key, and enter a model ID. To start free on OpenRouter, explicitly choose a current `:free` model; leaving **Model** blank uses a paid default. Provider credential checks make authenticated GET requests only, not a paid completion. They do not prove that the model can produce a reply or that you have sufficient credit.
-4. **Make it fit.** Choose `en` (English) or `tr` (Turkish), UTC offset (for example `3` or `5.5`), optional owner identity, news settings and platform-specific access controls. Discord's blank `GUILD_ID` / `CHANNELS` allows every accessible server/channel. Telegram `TELEGRAM_ROOMS`, Slack `SLACK_CHANNELS`, and Matrix `MATRIX_ROOMS` are default-deny: explicitly approve rooms only after considering member privacy.
-5. **Review and start.** Complete the selected platform's required invite/room setup and finish. First setup saves the private configuration and starts the selected runtime **without restarting the process**. Adding another platform later in protected Settings requires saving and restarting (`docker compose restart bot` for Docker, or stop and restart the binary).
-
-Credential tests do not save pasted keys to disk or prove that the bot is live, can read a room, or can answer. The administrator account survives interrupted setup; log in to resume rather than trying to reclaim it. Unfinished credential drafts are session-local, expire 15 minutes after creation or the latest successful credential test, and do not survive logout or process restart.
-
-Keep `config/.env` private: it contains plaintext tokens and keys. Browser saves replace the file atomically and preserve unrelated settings/comments; they do not encrypt it. Never upload it or share it in a screenshot. On Windows restrict folder access in **Properties → Security**. Rotate leaked platform credentials in the corresponding platform account and model keys with their provider.
-
-Keep Docker Desktop running. Panel health is separate from connection health: a successful credential test is not proof that a gateway, room permissions or model replies work.
-
-For a release binary, run it from its private data folder and open the printed browser link; it writes `.env` there. Keep the terminal open. An existing valid configuration starts its configured platform connections automatically alongside the panel. [Headless CLI setup](#headless-cli-setup) remains available if you do not want browser administration.
-
-### Migrating an existing Docker `.env`
-
-Stop the existing service with its **old** Compose file first: `docker compose stop bot`. Preserve its old volume as described under [Existing Compose installations](#existing-compose-installations). Create `config` and `photos`, then copy your existing configuration before removing any `env_file` injection:
-
-```sh
-mkdir -p config photos
-cp .env config/.env
-sudo chown 10001:10001 config config/.env
-sudo chmod 700 config
-sudo chmod 600 config/.env
-```
-
-On Linux, those ownership/mode commands let container UID `10001` read and update the private directory. On Docker Desktop, omit the Unix ownership commands; on Windows use `Copy-Item .env config/.env` and restrict folder access instead.
-
-Only after the copy, download/update Compose. It must mount **the directory** `./config:/data/config`, set `PANEL_CONFIG_PATH=/data/config/.env`, and no longer use `env_file: .env`; atomic saves require a writable directory, not a single-file mount. Complete any old-volume migration before starting it. The new Compose file uses the fixed volume name **`discord-bot-data`**; an old project-prefixed volume is not automatically reused. Keep the old `.env` private as a migration backup.
-
-If you deliberately retain `env_file` or externally injected environment settings,
-the panel shows those fields as externally managed and read-only. Environment values win
-over the file; a browser save cannot override Compose injection.
-
-### Panel safety and everyday settings
-
-Open `http://localhost:8787` after setup and log in. **Overview** distinguishes panel availability from platform connections and shows mood per active conversation, not a fabricated global mood. Its model-call/token counters cover only this process, not durable usage history or measured cost. **Settings** validates supported fields without revealing stored keys. Token/key/password fields are write-only: a blank secret field keeps its saved value, and the explicit clear control removes it. **Settings → Platform** provides Telegram's token and approved rooms, Slack's app/bot tokens, native channel allowlist and history tier, Matrix's homeserver/user/credentials and optional room IDs, and Discord's token. Blank Telegram/Slack approval denies all rooms; Slack requires both tokens. Matrix blank rooms permits only owner-approved invitations, not all joined rooms. Save model credentials as well for any non-Discord-only installation, and restart to apply settings. **Logs** is a bounded recent, redacted in-memory buffer; entries are lost on restart and it is not a permanent audit trail. Redaction is not a guarantee that logs contain no member data.
-
-**Memory** browses every person, topic and monthly event document, with search and pagination. Correct records through their editor rather than editing the database file. Saving retains the previous revision and updates live retrieval; a conflicting save keeps your draft beside the current text without overwriting it. People with unfamiliar stored formats are read-only to avoid losing fields. Monthly Events includes summary prose and raw event lines. Later learning can update manual edits again.
-
-**Personality** distinguishes the compiled core from evolving temperament. You can edit the real temperament prose; profile, self-state, corrections, growth and identity are read-only. The periodic coach can replace a manual temperament edit, so it is not a permanent pin or model training.
-
-**Actions** covers all sixteen administration commands, with destination/argument review and explicit public-message, memory, privacy and possible-cost warnings. Read controls are links; mutations run jobs with actual completion/failure. Duplicate submissions within a login session do not execute twice. Jobs continue if the browser disconnects, keep bounded results for 30 minutes, and are not replayed after restart. Stop/interruption cannot undo a message already accepted or a write already committed. Conversation resets reject busy generations and do not delete learned memory. Official-provider model changes and default restoration require catalogue validation; custom endpoints explain unavailable validation.
-
-**Usage** shows only provider fields actually reported in this process, including background-agent categories when observed. A reported zero stays zero; missing or null values are **Not reported**. Cached input is already included in input tokens. Usage/token observations reported by a stream remain known even if that stream later fails. `counted_successful_calls` counts only decoded successful responses and fully drained streams; reporting counts may exceed successful counts, so they are not a ratio or billing denominator. Cost/currency and complete billing coverage remain unknown; use the provider's billing dashboard and spending controls. There is no persistent usage history or member-erasure operation.
-
-
-Saving settings shows a restart-required banner. Apply them with
-`docker compose restart bot`; a standalone binary must be stopped and started in its
-original data folder. The saved `model.md` override has precedence over the configured default; changing **Model** in Settings does not erase that separate override.
+When asking for help, share only relevant redacted errors: no claim links, passwords, tokens, model keys, session files or private conversation text.
 
 ### Accessing a remote server
 
-Do not publish port 8787 to the internet. Compose publishes `127.0.0.1:8787:8787`, even though the container binds `0.0.0.0`. On your own computer, keep this SSH tunnel open:
+Do not expose port **8787** to the internet. Compose publishes `127.0.0.1:8787:8787` even though the container listens internally on `0.0.0.0`.
+
+On your own computer, keep this tunnel open, replacing the user/server:
 
 ```sh
 ssh -N -L 8787:127.0.0.1:8787 your-user@your-server
 ```
 
-Open `http://localhost:8787` on **your computer**. For first setup, open the server's printed claim link through that tunnel; both ports remain 8787 so the expected origin matches. Do not share the link or tunnel access.
+Open `http://localhost:8787` on **your computer**. For first setup, use the server's printed claim link through the tunnel; keeping both ports at 8787 preserves the expected origin. Do not share the link or tunnel access.
 
-An HTTPS reverse proxy is an advanced alternative: explicitly set `PANEL_PUBLIC_URL` to its HTTPS origin, preserve the matching Host and browser Origin, and restart the service. Forwarded headers are never trusted as authority. Merely forwarding a public HTTP port is not a safe substitute.
+An HTTPS reverse proxy is an advanced alternative: explicitly set `PANEL_PUBLIC_URL` to its HTTPS origin, preserve matching Host/browser Origin and restart. Forwarded headers are not trusted as authority. A publicly forwarded HTTP port is not a safe substitute. See [network configuration](configuration.md).
 
 ### Recovering the administrator account
 
-Forgot the password? Stop the running bot **before** recovery, so two processes do not open the same database:
+Forgot the panel password? Stop the running bot **first** so two processes do not open the same database:
 
 ```sh
 docker compose stop bot
@@ -527,165 +281,199 @@ docker compose run --rm bot panel reset-password
 docker compose up -d
 ```
 
-Save the random replacement password printed **once**, then log in with it. Recovery retains the existing administrator account and conversation memory while invalidating old sessions. For a binary, stop it, run `./discord-bot panel reset-password` (Windows: `.\discord-bot.exe panel reset-password`) in the same data folder, then start it again.
+Save the random replacement password printed **once**, then log in. Recovery preserves the administrator account and memory, and invalidates old sessions. For a binary, stop it, run `./discord-bot panel reset-password` (Windows: `.\discord-bot.exe panel reset-password`) in the same data folder, then restart.
 
-The administrator password is protected with Argon2id in a reserved table in the **same `durum/hafiza.redb` database** as memory, not a separate panel database. A database error fails closed: it does not open anonymous setup or silently replace memory with an empty database. Keys remain plaintext in the private config file because the bot needs them; the password hash does not protect those keys. Treat state-volume and configuration backups as sensitive. A state backup also includes the administrator account; never delete memory as a password-recovery shortcut.
-
-## 6. Invite it to your server
-
-Use **Add to server** in the browser wizard before clicking Start. If you need the invite again, log in to the panel, return to **Setup**, and test the token again. Gateway/member progress appears on **Overview** after starting; a token test alone does not prove that the intents and channel permissions work.
-
-- [ ] The bot appears in my server's member list.
-- [ ] The bot can see and send messages in the channel where I want to talk.
-
-## 7. Verify with a command, then say hi
-
-Run **`/status`** in a channel the bot can access (`/durum` if you selected Turkish). You are done when its status card appears. This command does not depend on its willingness to chat or sleep schedule. Keep `STEALTH` off; reduced UI mode ignores slash interactions.
-
-If no status card appears within 30 seconds, use [the troubleshooting checklist](#the-bot-is-online-but-silent-what-should-i-check). Then try `@My Bot hi!`, choosing the bot from Discord's mention list.
-
-It chooses when to join ordinary conversations, may react instead of replying, and sleeps at night. Name selection is gradual, not an instant setup step: the established stage starts after at least 10 days and 25 finished chats.
-
-## Everyday controls
-
-Run these from the `mybot` folder:
-
-| What you want | Command |
-| --- | --- |
-| See what is happening | `docker compose logs -f` |
-| Stop the bot | `docker compose down` |
-| Start it again | `docker compose up -d` |
-| Update it | `docker compose pull && docker compose up -d` |
-
-On older Windows PowerShell, run the two update commands on separate lines: first `docker compose pull`, then `docker compose up -d`.
-
-## Troubleshooting
-
-### The bot is online but silent. What should I check?
-
-First, check **Bot → Privileged Gateway Intents** in the Developer Portal. Both **Message Content Intent** and **Server Members Intent** must be on. Save changes, then run `docker compose restart` from `mybot`.
-
-If an intent is off, Discord may reject the connection entirely. Check channel read/write permissions, `config/.env` scope filters (or the binary's `.env`), and that `STEALTH` is off; retry `/status`. If status works but chat does not, check logs for provider errors/exhausted limits and consider the sleep schedule. Ordinary chat is not a deterministic health check.
-
-### Telegram is silent. What should I check?
-
-Check `TELEGRAM_ROOMS` first: blank denies all rooms, and discovery is not
-approval. Verify the group's negative ID, the bot's send permission and ordinary
-message visibility (`/setprivacy` → Disable plus remove/re-add, or administrator
-status). A successful `getMe` response from a separate API probe alone does not
-prove a particular group's visibility or permissions; unknown visibility must
-not be treated as ordinary message access. Start the bot's private chat before
-expecting administrative results, and use your source-qualified `OWNER_KEY`,
-not `OWNER_ID`. Check for an existing webhook or another process polling the
-same token. If commands work but
-chat does not, check provider errors/limits and the sleep schedule; normal chat
-is not a deterministic health check.
-
-### Configuration is missing or invalid. What does that mean?
-
-The panel remains available for missing or invalid bot credentials, so log in to finish setup or repair protected Settings. Configure `DISCORD_TOKEN`, `TELEGRAM_TOKEN`, a complete `SLACK_APP_TOKEN` + `SLACK_BOT_TOKEN` pair, Matrix's homeserver/user plus access token or password, or several platforms. Non-Discord platforms alone need no Discord token. A partial Slack pair is rejected even with another platform configured; a build without the Matrix feature rejects configured Matrix settings explicitly. After saving changes to an existing configuration, restart the bot. Panel availability does not mean any platform connection is healthy.
-
-For Compose, check `config/.env` and the writable directory mount's ownership. Process environment values (including retained `env_file` settings) take precedence and are read-only in the panel; a file save cannot override them. A panel bind/config-file/database failure can prevent the panel itself from opening—check the console rather than assuming every failure is recoverable in the browser.
-
-With `PANEL_ENABLED=off`, startup still requires valid bot/model credentials. For a binary, run `init` in its usual working folder to create `.env`; Compose loads `config/.env` through `PANEL_CONFIG_PATH`. Do not rename `.env` to `.env.txt`. `init` refuses an existing file unless you explicitly use `init --force`; back up your settings privately before replacing them.
-
-### How do I see the logs?
-
-Run `docker compose logs -f` from `mybot`. **Logs** are the bot's running activity and error messages. Press Ctrl+C to stop watching. The authenticated panel's **Logs** page shows a bounded recent buffer, not historical container logs. Do not share claim links, passwords, tokens, API keys, or private conversation text when asking for help.
+The password's Argon2id hash lives in the **same `durum/hafiza.redb` database** as memory. Database errors fail closed, not into anonymous setup or empty replacement memory. This hash does not encrypt the plaintext keys in your configuration. State backups include the administrator account: **never delete memory as password recovery**.
 
 ## Where your memories live
 
-Docker keeps **saved bot data** in the explicitly named volume `discord-bot-data`. The Compose key is still `durum` (“state/data”), but the actual volume name no longer depends on your folder. A volume survives stopping or replacing the container. Multiple installations using this Compose file share that name; choose distinct names if intentionally running separate bots.
+Docker uses two persistent named volumes:
 
-Channel history rolls over; larger records are summarized and raw overflow can be archived. `docker compose down` keeps saved data. **Do not use `docker compose down -v`** unless you mean to delete it. Existing project-prefixed volumes need migration below before switching to the new name.
+| Volume | Container path | Private contents |
+|---|---|---|
+| `discord-bot-data` | `/data/durum` | Memory, retained versions/archives, platform session tokens/sync state, and the panel administrator account/password hash |
+| `discord-bot-config` | `/data/config` | `.env` with plaintext chat/model credentials and access/settings choices |
+
+The data volume keeps Compose key `durum`; the config key and explicit name are both `discord-bot-config`. Fresh config volumes inherit the image directory's ownership for the bot account, UID/GID `10001`. Panel browser sessions and unsaved drafts are in memory and are lost on restart; they are not platform session files or backup contents.
+
+Stopping/replacing containers or `docker compose down` keeps **both** volumes. **Do not use `docker compose down -v`** unless you intend to delete both settings and saved data. Multiple installations using this Compose file share these names; deliberately choose distinct names for **both** volumes for separate bots. Old project-prefixed data volumes and host config files are **not** automatically copied. [Existing Compose installations](#existing-compose-installations) explains migration.
+
+For binaries/source builds, saved state is in the launch folder's **`durum/`** directory, and configuration is `.env`. Stop the bot before copying the entire directory. Matrix session files contain secrets and must also be preserved; backing up only the memory database omits those sessions. [Exact state paths](state-files.md) are the advanced reference.
 
 ### Back up the memory
 
-From `mybot`, stop the bot and verify the existing volume and database before copying. `docker volume inspect` fails instead of silently creating a misspelled volume. If inspection or the database check fails, stop and investigate; do not continue to tar.
+Back up **both volumes as a matching pair** while the bot is stopped. From `mybot`, **run each line separately and wait for success; do not paste the whole block at once**. These commands are for an installation that has completed configuration. Stop if **either** `docker volume inspect` fails: a later `docker run -v` could otherwise create an empty volume with the wrong name. If either nonempty-file check or backup fails, stop and locate the original storage; do not continue to the restart.
 
 ```sh
-docker compose down
+docker compose stop bot
 docker volume inspect discord-bot-data
+docker volume inspect discord-bot-config
 docker run --rm -v discord-bot-data:/data:ro ubuntu test -s /data/hafiza.redb
-docker run --rm -v discord-bot-data:/data:ro -v "$PWD:/backup" ubuntu tar czf /backup/durum-backup.tar.gz -C /data .
+docker run --rm -v discord-bot-config:/config:ro ubuntu test -s /config/.env
+docker run --rm -v discord-bot-data:/data:ro -v "$PWD:/backup" ubuntu sh -c 'umask 077; test ! -e /backup/durum-backup.tar.gz && tar czf /backup/durum-backup.tar.gz -C /data .'
+docker run --rm -v discord-bot-config:/config:ro -v "$PWD:/backup" ubuntu sh -c 'umask 077; test ! -e /backup/config-backup.tar.gz && tar czf /backup/config-backup.tar.gz -C /config .'
 docker compose up -d
 ```
 
-On Windows PowerShell, replace the tar command with:
+On PowerShell use `"${PWD}:/backup"` instead of `"$PWD:/backup"` in **both** archive commands. Restrict the backup folder with Windows **Properties → Security**; Unix `umask 077` is not a Windows access-control rule.
 
-```powershell
-docker run --rm -v discord-bot-data:/data:ro -v "${PWD}:/backup" ubuntu tar czf /backup/durum-backup.tar.gz -C /data .
-```
+`durum-backup.tar.gz` contains member data, archives, platform session credentials and the persistent panel account. `config-backup.tar.gz` contains plaintext configuration credentials. Neither encrypts anything. Keep both private and together; archive creation refuses to overwrite an earlier backup. Choose new matching filenames for each backup (and use those names when restoring). Restart only after both copies succeed; `up -d` resumes the stopped service, whereas `restart` would not recreate a removed container.
 
-This writes `durum-backup.tar.gz`, including memory and the panel administrator account. Protect it like member data; use a different filename to keep earlier backups. Save `config/.env` separately and privately (or `.env` for a binary). Restore procedures below have not been exercised in a live deployment.
+For an incomplete first setup, `.env` may not exist yet: the nonempty-file guard deliberately stops this configured-installation recipe. Preserve both volumes rather than treating a missing file as permission to discard them. For binaries, privately save `.env` as well as the complete stopped `durum/` folder.
+
+These are backup/restore instructions, not a claim that a live deployment restore was exercised.
 
 ### Restore a backup
 
-Stop the bot, inspect the destination volume, and save a separate copy of its current contents before replacing them. Restore to an **empty** volume; extracting over an existing archive tree can leave stale files.
+Stop the bot and privately back up the destination's current contents first. **Run each line separately; continue only after success.** Restore the matching archives to **two empty volumes**: extracting over existing files can leave stale archives, session tokens or settings. To retain populated destination volumes, choose new names, update both service mounts and their explicit Compose volume names, and substitute those names below. Do not delete data just to bypass the empty-volume guard.
 
 ```sh
-docker compose down
+docker compose stop bot
+docker volume create discord-bot-data
+docker volume create discord-bot-config
 docker volume inspect discord-bot-data
-docker run --rm -v discord-bot-data:/data -v "$PWD:/backup:ro" ubuntu sh -c 'test -z "$(find /data -mindepth 1 -print -quit)" && tar xzf /backup/durum-backup.tar.gz -C /data && chown -R 10001:10001 /data'
+docker volume inspect discord-bot-config
+docker run --rm -v discord-bot-data:/data -v discord-bot-config:/config -v "$PWD:/backup:ro" ubuntu sh -c 'test -z "$(find /data -mindepth 1 -print -quit)" && test -z "$(find /config -mindepth 1 -print -quit)" && test -s /backup/durum-backup.tar.gz && test -s /backup/config-backup.tar.gz'
+docker run --rm -v discord-bot-data:/data -v discord-bot-config:/config -v "$PWD:/backup:ro" ubuntu sh -c 'test -z "$(find /data -mindepth 1 -print -quit)" && test -z "$(find /config -mindepth 1 -print -quit)" && tar xzf /backup/durum-backup.tar.gz -C /data && tar xzf /backup/config-backup.tar.gz -C /config && test -s /data/hafiza.redb && test -s /config/.env && chown -R 10001:10001 /data /config && chmod 700 /config && chmod 600 /config/.env'
 docker compose up -d
 ```
 
-For PowerShell, use `"${PWD}:/backup:ro"` instead of `"$PWD:/backup:ro"`. The restore assigns the data to the container's UID/GID `10001`, including when the old installation ran as a different user. If the empty-volume check or extraction fails, stop; do not start the new service or bypass the guard. Preserve the current data before choosing a different empty destination. Use `/status` and `/mind` after startup to inspect the result.
+`volume create` intentionally creates missing destinations but does not empty existing ones. If either inspect fails, **stop before mounting**; if either empty-volume check, extraction, expected-file check or ownership change fails, **stop and do not start the bot**. A failed extraction can leave a partial restore: preserve it for diagnosis and use new empty destinations for a retry, not an overwrite. The restore sets UID/GID `10001` for both volumes, including archives from older users.
+
+For PowerShell, use `"${PWD}:/backup:ro"` instead of `"$PWD:/backup:ro"` in both helper commands. Use only trusted private backup archives. After successful startup, use the platform's [status check](#verify-the-connection) and the panel's **Memory** page to inspect the result. Restoring the database restores the administrator account/password at backup time, **not** old browser sessions; use [password recovery](#recovering-the-administrator-account) if needed. Platform sessions and matching configuration are restored separately from that account.
+
+## Upgrading from v1 to v2
+
+There are **two separate migrations**: preserving Docker's volume/configuration is manual; converting the memory database's identities happens automatically.
+
+1. Stop the old version and privately back up its **actual** full state and configuration. For Docker, [existing Compose migration](#existing-compose-installations) locates and backs up the old volume and host settings; do **not** assume an older installation already has the two new named volumes. For binaries, copy the complete stopped `durum/` folder and private `.env`. Keep the old executable/image version available for rollback.
+2. Complete Docker's config/data migration before using the new launch settings. For binaries, use the same private launch folder and preserve its `durum/`.
+3. Start v2 once. It automatically converts old numeric Discord person/room identities into platform-qualified identities. Before conversion it creates a consistent database snapshot and manifest beside `hafiza.redb`, in a directory named `hafiza.redb.migration-v2-…`, containing **`original.redb`** and **`manifest.json`**.
+4. The conversion and schema change are **atomic**: they commit together or leave the active database unchanged. Body text and timestamps are preserved; unknown/malformed records remain and are reported, not invented as people or silently deleted. Conflicts or backup/database errors stop the cutover. Completed migrations are not repeated.
+5. Inspect **Overview**, **Memory** and the platform's status command. Retain the old volume, operator backup, migration snapshot and manifest until the data is confirmed.
+
+The automatic database snapshot is not a replacement for a full stopped-state backup: archives and platform session files live outside the database. See [identity migration and rollback](state-files.md#identity-schema-migration-and-rollback) for the schema contract.
+
+**Rollback:** stop v2, restore the saved **v1** snapshot/backup and run the **old version**. Never point an old binary at the converted v2 database. For Docker, preserve the original old volume and Compose configuration as a rollback route; [restore instructions](#restore-a-backup) cover a full operator backup. Rollback loses changes made after that backup. Migration does not erase member data or archives.
+
+For older 1.0 settings, [configuration](configuration.md#upgrading-from-10) also explains preserving Turkish UI, UTC+3 and owner model control.
+
+### Migrating an existing Docker `.env`
+
+This applies to an old **`./config:/data/config` host bind** as well as an older `.env` supplied by `env_file`. Use the **old Compose file** to stop the service, preserve its actual data volume as described [below](#existing-compose-installations), and keep it stopped throughout copying. **Run each line separately; stop on any failure.**
+
+The example source is the existing **`config/.env`**. The read-only `--mount` refuses a missing source folder instead of creating one. For an older `.env` in the working folder, replace `src="$PWD/config"` with `src="$PWD"` in **both** helper commands. Do not start from an empty/generated replacement file.
+
+```sh
+docker compose stop bot
+docker run --rm --mount type=bind,src="$PWD/config",dst=/old-config,readonly -v "$PWD:/backup" ubuntu sh -c 'umask 077; test -s /old-config/.env && test ! -e /backup/config-before-volume.env && cp /old-config/.env /backup/config-before-volume.env && chmod 600 /backup/config-before-volume.env'
+docker volume create discord-bot-config
+docker volume inspect discord-bot-config
+docker run --rm --mount type=bind,src="$PWD/config",dst=/old-config,readonly -v discord-bot-config:/config ubuntu sh -c 'test -s /old-config/.env && test -z "$(find /config -mindepth 1 -print -quit)" && cp -p /old-config/.env /config/.env && chown -R 10001:10001 /config && chmod 700 /config && chmod 600 /config/.env'
+```
+
+For PowerShell, replace `"$PWD/config"` with `"${PWD}/config"` (or `"${PWD}"` for a root `.env`) and `"$PWD:/backup"` with `"${PWD}:/backup"`. Restrict access to the backup folder on Windows. If inspection fails, stop before the copy command; if the destination is nonempty, stop—it may belong to another installation. Use a different explicit config volume name and matching Compose mount rather than overwriting it.
+
+Only after the private backup and copy succeed, replace/download Compose using **`discord-bot-config:/data/config`**, explicit volume name **`discord-bot-config`**, and **`PANEL_CONFIG_PATH=/data/config/.env`**. Remove old **`env_file: .env`** injection for browser-editable fields; do not add a new one. Keep the source file/folder, **`config-before-volume.env`**, old Compose file and data backup privately for rollback. Finish any data-volume migration before `docker compose up -d`.
+
+If you deliberately keep external environment injection, it wins over file values and those fields appear read-only in Settings. Saving in the browser cannot override them.
+
+### Advanced host folder for settings
+
+Only choose this route if you want to **hand-edit `.env` on the host**. Default browser setup and [CLI setup](#headless-cli-setup) do not need it. Stop the bot and [back up both volumes](#back-up-the-memory), leaving it stopped after the backup rather than running that recipe's final start line.
+
+Create a private host `config` folder (`mkdir config` on PowerShell; `mkdir -p config` on Mac/Linux). For an existing named-volume installation, inspect `discord-bot-config` first and stop on failure, then export privately without printing secrets:
+
+```sh
+docker volume inspect discord-bot-config
+docker run --rm -v discord-bot-config:/config:ro -v "$PWD/config:/host-config" ubuntu sh -c 'umask 077; test -s /config/.env && test ! -e /host-config/.env && cp -p /config/.env /host-config/.env && chown -R 10001:10001 /host-config && chmod 700 /host-config && chmod 600 /host-config/.env'
+```
+
+On PowerShell use `"${PWD}/config:/host-config"`. For a new installation, leave the folder empty and let browser setup or CLI init create `.env`.
+
+Replace **only** the service's config mount with `./config:/data/config`; keep `PANEL_CONFIG_PATH=/data/config/.env`, the data volume, and **no `env_file`**. Mount the writable **directory**, never just `.env`: atomic saves create a neighboring temporary file and rename it. Keep the original named volume/backup until the switch is confirmed.
+
+On **Linux**, the container runs as UID/GID **`10001`**. The host directory and existing file must be private and writable by that identity:
+
+```sh
+sudo chown 10001:10001 config
+sudo chmod 700 config
+sudo chown 10001:10001 config/.env
+sudo chmod 600 config/.env
+```
+
+Skip the last two lines if `.env` does not exist yet. Docker Desktop users do not need these Linux host-ownership commands; on Windows restrict the folder with **Properties → Security**. On Linux, hand-edit with an authorized editor (for example `sudoedit config/.env`) and retain the ownership/private modes afterward, including if the editor replaces the file. Restart with `docker compose up -d` after switching mounts, or `docker compose restart bot` after later file edits. Once using this advanced bind, privately back up the entire host config folder alongside the named data volume; the unused config volume no longer holds the active settings.
 
 ### Existing Compose installations
 
-Changing the volume name does **not** migrate data. Before adopting the new Compose file:
+Changing a volume name does **not** move memory. Before adopting the new Compose file:
 
-1. Stop the service using the **old** Compose file: `docker compose stop bot`.
-2. Identify the volume actually mounted at `/data/durum`: find the old container ID with `docker compose ps -a`, then run `docker inspect --format '{{range .Mounts}}{{println .Destination .Name}}{{end}}' CONTAINER_ID` using that ID and read the `/data/durum` line. It is often `mybot_durum`; do not guess from the folder name. If no container or volume name is found, locate the original storage before continuing. Avoid posting full `docker compose config` or `docker inspect` output: it can expose injected credentials. The examples below use `mybot_durum`—replace it with the name you actually found.
-3. Copy the existing `.env` into the private configuration directory using [Migrating an existing Docker `.env`](#migrating-an-existing-docker-env). Only then remove `env_file` injection when updating Compose.
-4. If the old volume already is `discord-bot-data`, keep using it: back it up, and while the bot is stopped run `docker run --rm -v discord-bot-data:/data ubuntu chown -R 10001:10001 /data` to make it accessible to the new container account. No copy/restore is needed; update Compose's config mounts and start with the same volume. Otherwise inspect and back up the **old** nonempty volume before creating the destination:
+1. Stop the service using the **old** file: `docker compose stop bot`.
+2. Find the old container ID with `docker compose ps -a`. Run `docker inspect --format '{{range .Mounts}}{{println .Destination .Name}}{{end}}' CONTAINER_ID` with that ID and read the `/data/durum` line. Do not guess its volume from the folder name. If there is no container/volume name, locate the original storage before continuing. Do not post full `docker inspect` or `docker compose config` output: it may expose credentials.
+3. [Copy the existing host `config/.env` or `.env` into the named config volume](#migrating-an-existing-docker-env) before removing the old mount/`env_file`. Keep the original and private backup. If already using `discord-bot-config`, inspect it and back it up rather than attempting the empty-destination copy.
+4. If the old data volume is already **`discord-bot-data`**, keep it: inspect it first and stop on failure; while stopped check the database and make its private state backup using the commands below with `discord-bot-data` substituted for `mybot_durum`. Then run `docker run --rm -v discord-bot-data:/data ubuntu chown -R 10001:10001 /data`. Update Compose only after config migration succeeds; no data-volume copy is needed.
+5. Otherwise, inspect/back up the **actual old volume** before creating the destination. **Run each line separately, continuing only after success.** The example uses `mybot_durum`; replace that with the name you found:
 
 ```sh
 docker volume inspect mybot_durum
 docker run --rm -v mybot_durum:/data:ro ubuntu test -s /data/hafiza.redb
-docker run --rm -v mybot_durum:/data:ro -v "$PWD:/backup" ubuntu tar czf /backup/durum-backup.tar.gz -C /data .
+docker run --rm -v mybot_durum:/data:ro -v "$PWD:/backup" ubuntu sh -c 'umask 077; test ! -e /backup/durum-backup.tar.gz && tar czf /backup/durum-backup.tar.gz -C /data .'
 docker volume create discord-bot-data
 ```
 
-5. For a project-prefixed old volume, update Compose to the new directory mounts and fixed volume name. Restore the archive into `discord-bot-data` using the [empty-volume restore procedure](#restore-a-backup), then start the new service. If that name already contains data, stop: it may belong to another bot. Do not overwrite it or bypass the empty-volume check.
-6. Inspect `/status`, `/mind`, and the panel after startup. **Keep the old volume and backup** until the migrated data is confirmed; no step here deletes the original volume. Never use `docker compose down -v` or `docker volume prune` as part of the upgrade.
+If inspection, the database check or backup fails, stop and locate the data. Use a new backup filename if one already exists; keep every earlier backup. For PowerShell use `"${PWD}:/backup"` for the backup mount and restrict Windows folder access.
 
-For PowerShell use `"${PWD}:/backup"` for the backup mount. These instructions are explicit migration steps, not a claim of a tested live migration.
+6. Update/download Compose with both fixed named volumes. If copying from an older data volume, restore **only the data archive** into an empty `discord-bot-data`; the config volume was populated separately in step 3:
 
-For a binary or source build, memory lives in the local `durum/` folder. Stop the bot before copying that folder to your backup location.
+```sh
+docker volume inspect discord-bot-data
+docker run --rm -v discord-bot-data:/data -v "$PWD:/backup:ro" ubuntu sh -c 'test -z "$(find /data -mindepth 1 -print -quit)" && test -s /backup/durum-backup.tar.gz && tar xzf /backup/durum-backup.tar.gz -C /data && test -s /data/hafiza.redb && chown -R 10001:10001 /data'
+```
+
+For PowerShell use `"${PWD}:/backup:ro"`. If inspect, the empty-volume guard, extraction or ownership fails, **stop without starting**. If the destination contains data, it may belong to another bot: choose a different named volume and update Compose instead of overwriting it. Once **both** configuration and data are ready, start with `docker compose up -d`.
+
+7. Check the panel's **Memory** page and platform status. **Keep the old data volume, original settings, old Compose file and private backups.** These steps do not delete the originals. Never use `docker compose down -v` or `docker volume prune` as part of the upgrade.
+
+This is a migration procedure, not a claim that a live migration was tested.
 
 ## Privacy
 
-Tell members before inviting it: Discord's accessible ordinary messages and up to 14 days of first-scan history may be processed, subject to `CHANNELS` and Discord permissions. Telegram processes new updates from explicitly approved `TELEGRAM_ROOMS` and retained local text, not old group history; blank approval denies all rooms. Slack uses an explicit `SLACK_CHANNELS` allowlist (blank denies all), membership permissions and bounded rate-limited history. Matrix processes plaintext rooms approved by explicit IDs or owner invitations; unapproved joined rooms and encrypted content are not readable routes. Observation continues while asleep. Replies and background analysis send selected chat text and saved notes to the chosen model service (including OpenRouter's serving provider). Attached images, including authorized Slack private-file images and plaintext Matrix media, can be sent because image analysis defaults on; `IMAGE_ANALYSIS=off` disables this. Configured Firecrawl receives page URLs and search queries. Enabled platforms share memory, so approve only rooms whose members trust that cross-platform information boundary.
+Before approving rooms, explain these boundaries to members:
 
-Saved data stays on your machine, but processing is **not** local. Channel histories are bounded; derived person/topic notes, summaries and archived raw text can remain after a conversation. **Selective member deletion is not supported.** `/reset` resets channel/chat state, not stored member records or archives. Do not promise members an erasure capability the bot does not have.
+- **Read and stored locally:** ordinary messages, bounded channel histories, summaries and person/topic notes. Overflow raw text may remain in `durum/arsiv/`, plus backups. Observation continues while asleep. [Each platform section](#connect-your-chat-platform) describes access/history limits.
+- **Sent to the model service:** selected chat text and saved notes for replies **and background analysis**. OpenRouter also routes them to the serving model provider. Self-hosting does not make this processing local.
+- **Images:** analysis defaults on. Attached images, including authorized Slack private files and plaintext Matrix media, may be sent to the model. Set **`IMAGE_ANALYSIS=off`** before starting to disable attached-image processing.
+- **Optional web service:** configured Firecrawl receives page URLs and search queries.
+- **Shared brain:** all enabled platforms/approved rooms share notes and persona. Source-qualified IDs prevent identity collisions, not information transfer between communities. A private channel or separate platform is not isolated memory.
+- **No selective erasure:** member-specific deletion is not supported. `/reset` resets chat/channel state, **not** stored member/topic records or archives. Leaving a room or removing permissions does not erase earlier notes. Backups can retain older data.
 
-For a complete local reset, stop the bot, delete its entire saved-data volume (or `durum/` folder for binary/source installs), and remove every backup and exported log/transcript containing the data. This is destructive and removes all members' data **and the panel administrator account**, not one member's. It does not delete copies already processed/retained by model services or Firecrawl; review their retention policies and deletion channels separately. Keep the bot stopped or remove its permissions to avoid recollection.
+A **complete local reset** requires stopping the bot, deleting its entire saved-data volume (or `durum/` for binaries/source), and removing every backup/exported log/transcript containing that data. This deletes **all members' data and the panel account**, not one person's. It cannot delete copies retained by model services or Firecrawl; check their policies and deletion channels separately. Keep the bot stopped or remove permissions to avoid collecting data again.
+
+Matrix plaintext, including its admin room, is also readable to the homeserver. Protect the full state, configuration and backups like credentials. See [retention details](state-files.md#retention-and-deletion).
 
 ## Prefer not to use Docker?
 
-These routes use the same platform token and model key settings described above; Discord also needs the intent settings from steps 1–3.
+All routes use the same browser setup and platform credentials. Run from a private folder and keep the launch folder/state unchanged between starts.
 
 ### Download a release
 
-No Docker or Rust is needed, but a **terminal is required**. Download the matching archive from [GitHub Releases](https://github.com/krxi/discord-bot/releases): Linux x86_64 or arm64, macOS Apple Silicon, or Windows. Extract it into a private folder, open a terminal there, and run:
+No Docker or Rust is needed, but a **terminal is required**. Download the matching archive from [GitHub Releases](https://github.com/krxi/discord-bot/releases): Linux x86_64 or arm64, macOS Apple Silicon, or Windows. Extract it into a private folder, open a terminal there and run:
 
 ```sh
 ./discord-bot
 ```
 
-On Mac or Linux, if the file is not executable, run `chmod +x discord-bot` first. On Windows PowerShell, use:
+On Mac/Linux, use `chmod +x discord-bot` first if needed. On Windows PowerShell:
 
 ```powershell
 .\discord-bot.exe
 ```
 
-Keep this terminal open while the bot runs. Open the printed one-use browser link; complete the five Discord steps above or the protected Settings path for [Telegram](#telegram-setup), [Slack](#4-configure-and-start) or [Matrix](#3-configure-and-launch-a-matrix-enabled-build). Verify `/status` for Discord/Telegram or owner-only `!status` in an approved Slack/Matrix room, following each platform's private-result instructions.
+Keep the terminal open. Open the printed one-use link, follow [browser setup](#browser-setup), then [verify your platform](#verify-the-connection). Configuration is `.env` in this launch folder; state is `durum/`. An existing valid configuration starts its configured connections alongside the panel.
 
 ### Build from source
 
-This route is for people who already have Git and **Rust 1.96 or newer** installed. Matrix is enabled by default; `--no-default-features` removes Matrix without disabling Discord, Telegram or Slack. From a terminal:
+For people with Git and **Rust 1.96 or newer** installed:
 
 ```sh
 git clone https://github.com/krxi/discord-bot.git
@@ -693,40 +481,57 @@ cd discord-bot
 cargo run --release
 ```
 
-The first build takes longer. Keep the terminal open, use the printed browser link, and restrict access before starting any platform. Follow the five Discord steps or the protected Settings path for [Telegram](#telegram-setup), [Slack](#4-configure-and-start) or [Matrix](#3-configure-and-launch-a-matrix-enabled-build). Verify `/status` for Discord/Telegram or owner-only `!status` in an approved Slack/Matrix room, following each platform's private-result instructions.
+Keep the terminal open, follow the printed browser link and [browser setup](#browser-setup). Matrix is enabled by default; `--no-default-features` removes it without disabling Discord, Telegram or Slack. Configuration/state are relative to the launch folder. See [development](development.md) for developer checks and [capabilities](architecture.md#platform-boundary) for adapter details.
 
 ### Headless CLI setup
 
-Browser setup is the default, but `discord-bot init` (or `cargo run -- init`) remains available for headless installations. It first asks for `discord` (Enter), `telegram`, `slack` or feature-enabled `matrix`, then platform credentials, provider, API key, model, language, owner, and UTC offset. Telegram asks for a qualified `OWNER_KEY` and approved rooms instead of a Discord owner ID. Slack asks for both `xapp-` and `xoxb-` tokens, native channel IDs and a workspace-qualified `OWNER_KEY`. Matrix asks for an HTTP(S) homeserver, full bot user ID, token or password, optional native room IDs and a full owner ID, which it encodes into a qualified key. **Token, password and key input use hidden `rpassword` prompts when run interactively in a terminal**; piped input is not hidden. Do not place secrets in shell command arguments or share `.env`.
+Use this if you cannot or do not want to use browser administration. With a release binary run `discord-bot init` (Windows: `.\discord-bot.exe init`); from source run `cargo run --release -- init`.
 
-| Question | What to enter |
-| --- | --- |
-| Platform | Press Enter for `discord`, or type `telegram`, `slack` or feature-enabled `matrix`. |
-| Platform credentials | Discord's token, Telegram's BotFather token, Slack's `xapp-` then `xoxb-` tokens, or Matrix's homeserver/full user ID plus access token or password. |
-| Approved channels/rooms (Slack/Matrix, before provider) | Slack: native `C…` / `G…` IDs; blank denies all. Matrix: native `!…` room IDs; blank allows owner-approved invitations only. |
-| Provider | Press Enter for `openrouter`, or type `mistral`. |
-| API key | Your chosen provider's key from step 2. |
-| Model ID | Choose a current `:free` OpenRouter model explicitly if wanted; Enter uses the provider's **paid** default. |
-| Language | Press Enter for `en` (English), or type `tr` (Turkish). |
-| Owner | Discord: optional numeric user ID. Telegram: optional `telegram:user:<numeric ID>`. Slack: optional `slack:user:<workspace ID>:<member ID>`. Skipping denies that platform's administration. Matrix: full `@owner:server` ID; CLI writes its qualified key. |
-| Approved rooms (Telegram only) | Negative group IDs or canonical Telegram RoomKeys, comma-separated; blank denies all rooms. |
-| UTC offset hours | Your local time difference from UTC, or Enter for `0`; for example `3` means UTC+3. |
+The CLI asks for a platform (Enter defaults to Discord), its credentials, provider/key/model, language, owner and UTC offset. Telegram, Slack and Matrix also ask for explicit room approval. Slack requires both tokens; Matrix asks for a token or password and a **raw full owner ID**, which the CLI encodes into `OWNER_KEY`. Discord asks for the legacy numeric owner ID. Interactive secrets are hidden; **piped input is not hidden**.
 
-The CLI saves `.env` through the same typed configuration validation and atomic patch/save path as the panel, and refuses an existing file unless `--force` is explicit. Back up any existing file privately before overwriting collected settings. Before launching, add `PANEL_ENABLED=off`, set Discord `GUILD_ID`/`CHANNELS` to limit Discord access, explicitly approve Telegram/Slack rooms or Matrix room IDs/owner invitations, and keep the file private (mode `600` on Unix). Blank Discord scope means every accessible server/channel; blank Telegram/Slack rooms deny all; blank Matrix rooms uses owner invitations only. Set `SLACK_HISTORY_TIER=restricted` for commercial non-Marketplace Slack apps; the default is `internal`. A blank model uses the provider's paid default. Discord prints an invite link and intent reminders; unlike browser setup, CLI init does not verify the token's application identity with Discord's API. Telegram prints BotFather privacy, approved-room and private-command reminders; Slack prints Socket Mode, native-channel approval and owner-only status reminders; Matrix prints plaintext-room approval and private admin-room guidance. CLI init performs no live platform authentication.
+CLI init saves `.env` through typed validation/atomic save but performs **no live platform authentication**. It refuses an existing file unless `--force` is explicit; back up privately before overwriting. To add another platform, edit the protected configuration or use Settings rather than rerunning `init --force`.
 
-For Docker, first create the private `config`/`photos` directories and complete any existing-volume migration above. Run `docker compose run --rm -it --workdir /data/config bot init` to write `config/.env` as container UID `10001`, then add `PANEL_ENABLED=off` and your access scope to that file before `docker compose up -d`. Do not reintroduce `env_file` if you want the file to remain browser-editable later. To re-enable the panel, remove or change `PANEL_ENABLED=off` and restart.
+Before launching:
+
+- Add **`PANEL_ENABLED=off`** if you want no browser panel.
+- Set Discord `GUILD_ID`/`CHANNELS` and platform permissions before first scan; blanks allow all accessible Discord rooms.
+- Approve Telegram/Slack rooms explicitly (blank denies all); Matrix uses explicit room IDs or owner-approved invitations, not every joined room.
+- Set a qualified `OWNER_KEY` for non-Discord administration. Use the examples in your platform section; legacy `OWNER_ID` is Discord-only.
+- Set the correct Slack history tier, and choose a model explicitly if you want a free one; a blank model uses a paid default.
+- Keep `.env` private (Unix mode `600`; restrict Windows access), and keep secrets out of command arguments/history.
+
+For Docker, download Compose as in [Docker setup](#start-with-docker) and complete any existing-storage migration first; **do not create a host config folder**. Stop any running bot before init. Then:
+
+```sh
+docker compose run --rm -it --workdir /data/config bot init
+```
+
+CLI init hardcodes **`.env` in its working directory**; it does **not** use `PANEL_CONFIG_PATH` to choose its output. The explicit `--workdir /data/config` writes `/data/config/.env` **inside `discord-bot-config`** as container UID `10001`, not `config/.env` on the host.
+
+Before starting, add the no-panel setting inside that same volume. For a **fresh CLI-created file**, run this once:
+
+```sh
+docker compose run --rm --entrypoint sh bot -c 'test -s /data/config/.env && printf "\nPANEL_ENABLED=off\n" >> /data/config/.env'
+```
+
+For **Discord**, also set its scope before the first history scan. Replace both placeholders with your actual nonsecret IDs, then run this once for the fresh file:
+
+```sh
+docker compose run --rm --entrypoint sh bot -c 'test -s /data/config/.env && printf "\nGUILD_ID=YOUR_SERVER_ID\nCHANNELS=YOUR_CHANNEL_ID\n" >> /data/config/.env'
+```
+
+Telegram/Slack/Matrix room approval is already prompted by CLI init; review those choices before launch. These append commands are for adding missing fields, not editing an existing value or duplicating keys. For later changes, use Settings (when enabled) or the [advanced host-folder route](#advanced-host-folder-for-settings) for hand editing; do not reintroduce a bind or `env_file` just to perform default CLI setup. Keep secrets out of command arguments/history.
+
+Now run `docker compose up -d`. Headless startup requires valid chat/model settings. To enable the panel later, change/remove `PANEL_ENABLED=off` in the active configuration and restart. Verify using [your platform's command](#verify-the-connection).
+
+For advanced settings and optional integration-test recipes, use [configuration](configuration.md), not onboarding credential tests as proof of live health.
 
 ## Sources
 
-The free model ID was checked against the live catalog on **11 October 2026**. Platform documentation links below explain setup; buttons, available free models, limits, and pricing can change.
+Platform website labels, free models, limits and prices can change. These links support the instructions; they are not evidence of a live bot deployment or measured cost.
 
-- [Discord's official getting-started guide](https://discord.com/developers/docs/quick-start/getting-started) — application creation, **Bot**, **Reset Token**, token safety, and server installation.
-- [Member Counter's Developer Portal walkthrough](https://docs.membercounter.app/custom-bot/creating-a-discord-bot-account) — **New Application**, **Create**, **Privileged Gateway Intents**, **Message Content Intent**, **Server Members Intent**, and **Save Changes** labels. Its own bot needs different switches; follow this guide's choices for discord-bot.
-- [Discord's official user ID instructions](https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID) — **User Settings → Advanced → Developer Mode** and **Copy User ID**.
-- [OpenRouter rate limits](https://openrouter.ai/docs/api_reference/limits) — `:free` variants and the published free request limits.
-- [OpenRouter live model catalog](https://openrouter.ai/api/v1/models) — catalog verification of the example free model; no running-cost measurement.
-- [OpenRouter authentication guide](https://openrouter.ai/docs/api_reference/authentication) — creating keys, naming them, and setting spending limits.
-- [OpenRouter key page](https://openrouter.ai/keys) — sign-in and sign-up entry point.
-- [Docker Desktop documentation](https://docs.docker.com/desktop/) — Mac/Windows installation links, bundled Docker Compose, and Linux-container support on Windows.
-- [Docker Engine installation documentation](https://docs.docker.com/engine/install/ubuntu/#install-using-the-convenience-script) — the `get.docker.com` installer, privilege requirements, and production-use warning.
-- [Docker volume documentation](https://docs.docker.com/engine/storage/volumes/#back-up-restore-or-migrate-data-volumes) — persistent storage and using a helper container to make a backup archive.
+- [Discord getting started](https://discord.com/developers/docs/quick-start/getting-started) and [copying IDs](https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID).
+- [Telegram bot creation](https://core.telegram.org/bots/features#creating-a-new-bot), [privacy mode](https://core.telegram.org/bots/features#privacy-mode) and [Bot API polling](https://core.telegram.org/bots/api#getupdates).
+- [Slack app management](https://api.slack.com/apps); supplied [local app manifest](slack-app-manifest.yml).
+- [OpenRouter keys](https://openrouter.ai/keys), [authentication](https://openrouter.ai/docs/api_reference/authentication), [model catalog](https://openrouter.ai/api/v1/models) and [rate limits](https://openrouter.ai/docs/api_reference/limits). The free-model example above is the existing 11 October 2026 catalog check, not a bot compatibility test.
+- [Docker Desktop](https://docs.docker.com/desktop/), [Docker Engine installation](https://docs.docker.com/engine/install/) and [volume backup/restore](https://docs.docker.com/engine/storage/volumes/#back-up-restore-or-migrate-data-volumes).
