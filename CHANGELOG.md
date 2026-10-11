@@ -2,37 +2,34 @@
 
 Notable changes are recorded here in [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) style. Git history retains earlier implementation details.
 
-## [Unreleased]
+## [2.0.0] - Unreleased
 
 ### Added
-- Telegram Bot API adapter with NAT-friendly long polling, explicit default-deny room approval, qualified owner administration and private administrative results.
-- Discord/Telegram/Slack/Matrix CLI setup selection, bilingual onboarding and honest platform capability/history/privacy notices.
-- Telegram safe media resolution/local uploads, native topic/reply routing, chat-allowed emoji reactions and a durable redb polling cursor; offline coverage and an ignored opt-in `getMe` probe.
-- Slack Socket Mode adapter with explicitly approved `SLACK_CHANNELS`, workspace-qualified identities, thread-aware replies, native private-file resolution, bounded history and supported Slack reactions.
-- Five-step browser setup now selects Discord, Telegram, Slack or Matrix, tests credentials (`getMe`, Slack `auth.test`/`apps.connections.open`, Matrix `whoami`), and starts first setup without a restart; later platform additions through Settings require restart.
-- Concurrent configured platform connections sharing the brain, with private Slack text-administration replies and no Slack slash-command registration.
-- Offline Slack wizard/manifest coverage and opt-in ignored environment-gated live-test documentation; no live-workspace verification is implied.
-- Default-enabled, removable `matrix` feature using native `matrix-sdk` 0.19.1 for plaintext sync, explicit room approval, owner-only prefix administration and stable persisted session/device state; source MSRV 1.96.
-- Feature-gated Matrix CLI setup with hidden access-token/password entry, typed atomic patch/save, qualified owner identity, bilingual guidance, and a beginner plaintext-room/privacy guide; encrypted rooms and attachments have no decryption or plaintext fallback.
-- Opt-in ignored `matrix_live` integration tests for session restoration, native transport operations and encryption rejection on disposable homeservers.
-- Independent room-level attachment-sending capabilities, separate from optional upload ceilings, using native Discord/Telegram/Slack/Matrix permissions and safe unavailable defaults.
-- Browser memory browsing, search and structured/full-document editing with revision conflicts, preserved pre-edit history, and atomic index/cache publication; background writers use the same revision discipline.
-- Browser personality inspection with revision-checked temperament editing, all sixteen shared administration actions with destination/side-effect review and bounded jobs, and honest process-local usage reporting.
-- A full-height responsive administration shell, one product-name source, and friendly unfinished-setup states.
+- A shared multi-platform core: Discord, Telegram, Slack and Matrix connections can run together with source-qualified user, room and thread identities.
+- Telegram long polling with explicit approved rooms, privacy-mode guidance, allowed emoji reactions and private owner administration.
+- Slack Socket Mode with two-token setup, explicit channel approval, thread-aware replies, native file handling and private administrative results.
+- Matrix plaintext-room support, enabled in default builds, with explicit room approval, persisted sessions and owner administration. Encrypted rooms and attachments are unsupported.
+- An embedded local web admin panel on port 8787: five-step browser setup, connection overview, searchable/editable memory, personality, actions, usage, logs and settings. No separate web app is required.
+- Revision-checked memory and temperament editing with preserved previous versions and shared coordination with background writers.
+- Automatic, atomic migration of legacy Discord memory to the platform-qualified identity schema, preceded by a consistent database backup and migration manifest.
+- Real admin panel screenshots, with fictional sample memory clearly labeled.
 
 ### Changed
-- Default prompts identify the bot honestly and omit a fictional university biography and fixed political identity.
-- Shorter bilingual READMEs explain the memory mechanism, collection scope, external processing, and unmeasured running cost.
-- Contributor and reference documentation describe current behavior rather than development sessions.
-- Setup hides credentials on a terminal, explains paid defaults, and ends with numbered verification steps.
-- CLI setup uses typed secret encoding and atomic config patches. Browser step 2 selects Discord, Telegram, Slack or Matrix; Telegram is recommended for beginners, and Telegram/Slack/Matrix room access is default-deny. Credential tests are not proof of live platform health.
-- Browser platform selection uses a balanced desktop card grid, full-width readable beginner instructions and secondary help links; credential testing remains the primary action. Native language changes preserve the platform choice, while mobile navigation and checkbox labels offer 44-pixel touch targets.
-- Settings offers separate collapsed Discord/Telegram/Slack/Matrix credential tests before the provider test, using supplied or saved effective values without saving or changing wizard drafts. Later additions can be tested before save/restart; Matrix browser tests require an access token and preserve saved runtime passwords. Probes are not live-health checks.
-- Compose uses the stable saved-data volume name `discord-bot-data`.
+- The default persona answers AI/bot identity questions honestly; its fictional university biography and fixed political identity are removed. `STEALTH` means reduced bot UI, not human impersonation.
+- Browser setup can start the first configured platform without restarting. Later Settings changes need a restart; credential checks are not proof of live room access.
+- Compose mounts writable `./config` at `/data/config`, uses `PANEL_CONFIG_PATH=/data/config/.env`, and publishes the panel only on `127.0.0.1:8787:8787`. Saved data keeps the explicit `discord-bot-data` volume.
+- README and setup docs lead with Docker and browser configuration, with platform-specific requirements, collection boundaries and unmeasured-cost disclosure.
+- Usage shows observed process-local calls/tokens; missing monetary charges stay “Not reported,” not estimated. Provider dashboards remain the billing source.
 
 ### Removed
-- Tracked generated code graphs and public session/launch drafts; prior versions remain in Git history.
-- Signature-restating source comment templates and unsupported setup-time/cost claims.
+- Tracked generated code graphs, public session/launch drafts, signature-restating comment templates, and unsupported setup-time/cost claims. Earlier material remains in Git history.
+
+### Upgrading from 1.x
+- Stop the old bot and make a private backup of the entire saved-data directory/volume before launching v2. First startup automatically creates a migration snapshot/manifest and commits identity changes atomically; unresolved legacy material is retained, not silently deleted.
+- Keep the migration backup and old binary for rollback. Stop v2 and restore its pre-migration snapshot before using the old binary; do not run v1 against the migrated database. See [memory migration and rollback](docs/state-files.md#identity-schema-migration-and-rollback).
+- Replace the old Compose file. Copy the existing `.env` to `config/.env` and mount the **directory**, not a single file; remove old `env_file` injection for browser-editable settings. Port 8787 is local-only. Do not discard an old project-prefixed volume: [migrate it explicitly](docs/setup-guide.md#existing-compose-installations).
+- Set optional `OWNER_KEY` to a canonical platform-qualified user identity for Telegram/Slack/Matrix administration. It takes precedence over legacy Discord-only `OWNER_ID`; invalid nonblank values fail validation. See [configuration](docs/configuration.md).
+- All connected platforms share memory/personality. Only approve trusted rooms; use separate installations for unrelated groups.
 
 ## [1.1.0] - 2026-10-11
 
@@ -62,5 +59,5 @@ This version was marked by commit [`7472fb9`](https://github.com/krxi/discord-bo
 - English and Turkish prompt/UI dispatch, OpenRouter and Mistral model support, and a terminal chat bench.
 - Sleep schedules, staged growth and name selection, image commentary, and reaction observation.
 
-[Unreleased]: https://github.com/krxi/discord-bot/compare/v1.1.0...HEAD
+[2.0.0]: https://github.com/krxi/discord-bot/compare/v1.1.0...HEAD
 [1.1.0]: https://github.com/krxi/discord-bot/releases/tag/v1.1.0
