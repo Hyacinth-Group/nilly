@@ -4,12 +4,13 @@ mod setup;
 mod views;
 
 use crate::{config, Bot, BotError, Handler, SHUTTING_DOWN};
+use parking_lot::Mutex;
 use serde::Serialize;
 use serenity::all::{Client, GatewayIntents, ShardManager};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -34,6 +35,7 @@ impl Lifecycle {
 
 pub struct Runtime {
     lifecycle: Lifecycle,
+    attempted: bool,
     bot: Option<Arc<Bot>>,
     manager: Option<Arc<ShardManager>>,
     cache: Option<Arc<serenity::cache::Cache>>,
@@ -127,8 +129,12 @@ async fn run(config: config::Config) -> Result<(), BotError> {
     let valid = config.validate_runtime().is_ok();
     let initial = if valid {
         Lifecycle::ConfiguredStarting
-    } else {
+    } else if config.get("DISCORD_TOKEN").is_empty()
+        || (config.get("OPENROUTER_KEY").is_empty() && config.get("MISTRAL_KEY").is_empty())
+    {
         Lifecycle::Unconfigured
+    } else {
+        Lifecycle::ConfigurationError
     };
     let (start, receiver) = mpsc::channel(1);
     let (stop_sender, stop) = watch::channel(false);
@@ -139,6 +145,7 @@ async fn run(config: config::Config) -> Result<(), BotError> {
         config: Mutex::new(config.clone()),
         runtime: Mutex::new(Runtime {
             lifecycle: initial,
+            attempted: false,
             bot: None,
             manager: None,
             cache: None,
@@ -161,11 +168,7 @@ async fn run(config: config::Config) -> Result<(), BotError> {
     )
     .with_graceful_shutdown(async move {
         crate::wait_for_shutdown().await;
-        shutdown_app
-            .runtime
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .lifecycle = Lifecycle::Stopping;
+        shutdown_app.runtime.lock().lifecycle = Lifecycle::Stopping;
         SHUTTING_DOWN.store(true, Ordering::SeqCst);
         let _ = stop_sender.send(true);
     });
@@ -187,14 +190,12 @@ async fn runtime_owner(
         config = starts.recv() => match config { Some(config) => config, None => return Ok(()) },
         _ = stop.changed() => return Ok(()),
     };
+    app.runtime.lock().attempted = true;
     config::activate(config.clone())?;
     let bot = match Bot::setup() {
         Ok(bot) => bot,
         Err(_) => {
-            app.runtime
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .lifecycle = Lifecycle::ConfigurationError;
+            app.runtime.lock().lifecycle = Lifecycle::ConfigurationError;
             let _ = stop.changed().await;
             return Ok(());
         }
@@ -214,16 +215,13 @@ async fn runtime_owner(
     let mut client = match built {
         Ok(client) => client,
         Err(_) => {
-            app.runtime
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .lifecycle = Lifecycle::ConfigurationError;
+            app.runtime.lock().lifecycle = Lifecycle::ConfigurationError;
             let _ = stop.changed().await;
             return Ok(());
         }
     };
     {
-        let mut runtime = app.runtime.lock().unwrap_or_else(|e| e.into_inner());
+        let mut runtime = app.runtime.lock();
         runtime.bot = Some(bot);
         runtime.manager = Some(client.shard_manager.clone());
         runtime.cache = Some(client.cache.clone());
@@ -231,7 +229,7 @@ async fn runtime_owner(
     }
     tokio::select! {
         result = client.start() => {
-            if result.is_err() { app.runtime.lock().unwrap_or_else(|e| e.into_inner()).lifecycle = Lifecycle::ConfigurationError; }
+            if result.is_err() { app.runtime.lock().lifecycle = Lifecycle::ConfigurationError; }
             if !*stop.borrow() { let _ = stop.changed().await; }
         },
         _ = stop.changed() => { client.shard_manager.shutdown_all().await; },

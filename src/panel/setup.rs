@@ -7,6 +7,7 @@ pub struct Draft {
     pub values: HashMap<String, String>,
     pub application: Option<Application>,
     pub provider_verified: bool,
+    pub fit_completed: bool,
     pub expires: Instant,
     pub revision: String,
 }
@@ -34,8 +35,21 @@ impl Draft {
             values,
             application: None,
             provider_verified: false,
+            fit_completed: false,
             expires: Instant::now() + Duration::from_secs(900),
             revision: config.revision().to_owned(),
+        }
+    }
+
+    pub fn step(&self) -> usize {
+        if self.application.is_none() {
+            2
+        } else if !self.provider_verified {
+            3
+        } else if !self.fit_completed {
+            4
+        } else {
+            5
         }
     }
 }

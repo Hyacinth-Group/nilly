@@ -432,6 +432,7 @@ dependencies = [
  "dotenvy",
  "futures-util",
  "log",
+ "parking_lot",
  "rand 0.8.8",
  "redb",
  "reqwest",

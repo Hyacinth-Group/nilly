@@ -20,6 +20,7 @@ async fn fixture() -> (Arc<App>, tempfile::TempDir) {
             config: Mutex::new(config),
             runtime: Mutex::new(Runtime {
                 lifecycle: Lifecycle::Unconfigured,
+                attempted: false,
                 bot: None,
                 manager: None,
                 cache: None,
@@ -242,4 +243,135 @@ fn setup_state_machine_has_honest_transitions() {
     assert!(state.start().is_err());
     state = Lifecycle::Stopping;
     assert!(state.start().is_err());
+}
+
+fn ready_draft(app: &App, session: &str) {
+    use sha2::Digest;
+    let config = app.config.lock();
+    let mut draft = setup::Draft::new(&config);
+    draft
+        .values
+        .insert("DISCORD_TOKEN".into(), "private-discord-token".into());
+    draft
+        .values
+        .insert("OPENROUTER_KEY".into(), "private-provider-key".into());
+    draft.values.insert("BOT_LANG".into(), "tr".into());
+    draft.values.insert("TZ_OFFSET".into(), "5.5".into());
+    draft.application = Some(setup::Application { id: "42".into(), name: "Verified test application".into(), invite_url: "https://discord.com/oauth2/authorize?client_id=42&permissions=67226688&scope=bot%20applications.commands".into() });
+    draft.provider_verified = true;
+    draft.fit_completed = true;
+    app.drafts.lock().insert(
+        format!("{:x}", sha2::Sha256::digest(session.as_bytes())),
+        draft,
+    );
+}
+
+#[tokio::test]
+async fn wizard_cannot_skip_tests_and_finish_checkbox_submits_correct_value() {
+    let (app, _directory) = fixture().await;
+    let admin = owner(&app).await;
+    let router = routes::router(app.clone());
+    let response = router
+        .clone()
+        .oneshot(request("GET", "/setup?step=5", Some(&admin.token), ""))
+        .await
+        .unwrap();
+    let body = String::from_utf8(
+        to_bytes(response.into_body(), 128 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(body.contains("platform-form"));
+    assert!(!body.contains("complete-form"));
+    ready_draft(&app, &admin.token);
+    let response = router
+        .oneshot(request("GET", "/setup?step=5", Some(&admin.token), ""))
+        .await
+        .unwrap();
+    let body = String::from_utf8(
+        to_bytes(response.into_body(), 128 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(body.contains("name=\"intents\" value=\"on\""));
+    assert!(body.contains("href=\"https://discord.com/oauth2/authorize?client_id=42"));
+    assert!(!body.contains("private-discord-token"));
+    assert!(!body.contains("private-provider-key"));
+}
+
+#[tokio::test]
+async fn wizard_finishes_into_first_runtime_snapshot_without_environment_mutation() {
+    let (mut app, directory) = fixture().await;
+    let (start, mut receiver) = mpsc::channel(1);
+    Arc::get_mut(&mut app).unwrap().start = start;
+    let admin = owner(&app).await;
+    ready_draft(&app, &admin.token);
+    let original_language = std::env::var("BOT_LANG");
+    let router = routes::router(app.clone());
+    let body = format!("csrf={}&intents=on", admin.info.csrf);
+    let response = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/ui/setup/complete",
+            Some(&admin.token),
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let runtime_config = receiver.recv().await.unwrap();
+    assert_eq!(runtime_config.get("BOT_LANG"), "tr");
+    assert_eq!(runtime_config.get("TZ_OFFSET"), "5.5");
+    assert_eq!(std::env::var("BOT_LANG"), original_language);
+    assert!(directory.path().join(".env").is_file());
+    assert_eq!(app.runtime.lock().lifecycle, Lifecycle::ConfiguredStarting);
+    assert!(!app
+        .config
+        .lock()
+        .fields()
+        .iter()
+        .any(|field| field.pending_restart));
+    let before = std::fs::read(directory.path().join(".env")).unwrap();
+    let duplicate = router
+        .oneshot(request(
+            "POST",
+            "/ui/setup/complete",
+            Some(&admin.token),
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert!(duplicate.status().is_client_error());
+    assert_eq!(
+        std::fs::read(directory.path().join(".env")).unwrap(),
+        before
+    );
+}
+
+#[tokio::test]
+async fn rejected_runtime_restart_never_writes_configuration() {
+    let (app, directory) = fixture().await;
+    let admin = owner(&app).await;
+    ready_draft(&app, &admin.token);
+    {
+        let mut runtime = app.runtime.lock();
+        runtime.lifecycle = Lifecycle::ConfigurationError;
+        runtime.attempted = true;
+    }
+    let response = routes::router(app)
+        .oneshot(request(
+            "POST",
+            "/ui/setup/complete",
+            Some(&admin.token),
+            &format!("csrf={}&intents=on", admin.info.csrf),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(!directory.path().join(".env").exists());
 }

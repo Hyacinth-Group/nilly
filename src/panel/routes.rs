@@ -369,6 +369,16 @@ async fn setup_page(
     if info.scope == auth::SessionScope::Admin && step == 1 {
         step = 2;
     }
+    if info.scope == auth::SessionScope::Admin {
+        refresh_config(app.clone()).await?;
+        let config = app.config.lock();
+        let mut drafts = app.drafts.lock();
+        drafts.retain(|_, draft| draft.expires > Instant::now());
+        let draft = drafts
+            .entry(draft_key(&token))
+            .or_insert_with(|| setup::Draft::new(&config));
+        step = step.min(draft.step());
+    }
     page.setup_steps(step).map_err(|_| WebError::validation())?;
     let mut card = section(lang, &format!("panel.setup.step{step}"));
     if info.scope == auth::SessionScope::Preauth {
@@ -398,8 +408,8 @@ async fn setup_page(
         ));
     } else {
         let values = {
-            let config = app.config.lock().unwrap_or_else(|e| e.into_inner());
-            let mut drafts = app.drafts.lock().unwrap_or_else(|e| e.into_inner());
+            let config = app.config.lock();
+            let mut drafts = app.drafts.lock();
             drafts.retain(|_, draft| draft.expires > Instant::now());
             let draft = drafts
                 .entry(draft_key(&token))
@@ -410,7 +420,13 @@ async fn setup_page(
         match step {
             2 => {
                 card.description = t(lang, "panel.setup.platform");
-                let mut input = field(lang, "DISCORD_TOKEN", "DISCORD_TOKEN", "password", "");
+                let mut input = field(
+                    lang,
+                    "DISCORD_TOKEN",
+                    "panel.settings.DISCORD_TOKEN.label",
+                    "password",
+                    "",
+                );
                 input.help = t(lang, "panel.setup.keep_secret");
                 card.forms.push(form(
                     "platform-form",
@@ -459,7 +475,33 @@ async fn setup_page(
                     "NEWS_CHANNEL",
                     "NEWS_RSS",
                 ] {
-                    fields.push(field(lang, key, key, "text", get(key)));
+                    let mut input = field(
+                        lang,
+                        key,
+                        &format!("panel.settings.{key}.label"),
+                        "text",
+                        get(key),
+                    );
+                    input.help = t(lang, &format!("panel.settings.{key}.help"));
+                    if key == "BOT_LANG" {
+                        input.kind = "select".into();
+                        input.choices = ["en", "tr"]
+                            .into_iter()
+                            .map(|value| views::Choice {
+                                value: value.into(),
+                                label: t(
+                                    lang,
+                                    if value == "en" {
+                                        "panel.language.en"
+                                    } else {
+                                        "panel.language.tr"
+                                    },
+                                ),
+                                selected: get(key) == value,
+                            })
+                            .collect();
+                    }
+                    fields.push(input);
                 }
                 card.forms.push(form(
                     "fit-form",
@@ -474,7 +516,6 @@ async fn setup_page(
                 let application = {
                     app.drafts
                         .lock()
-                        .unwrap_or_else(|e| e.into_inner())
                         .get(&draft_key(&token))
                         .and_then(|draft| draft.application.clone())
                 };
@@ -501,6 +542,13 @@ async fn setup_page(
                 ));
             }
         }
+    }
+    if step > 2 {
+        card.items.push(Item {
+            value: t(lang, "panel.action.back"),
+            href: format!("/setup?step={}&lang={}", step - 1, lang.code()),
+            ..Default::default()
+        });
     }
     page.sections.push(card);
     let response = html(&page)?;
@@ -603,10 +651,7 @@ async fn api_login(
 async fn logout(app: &App, headers: &HeaderMap, input: AuthInput) -> WebResult<Response> {
     let session = token(headers)?;
     app.auth.logout(&session, &input.csrf)?;
-    app.drafts
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(&draft_key(&session));
+    app.drafts.lock().remove(&draft_key(&session));
     let mut response = Redirect::to("/login").into_response();
     response.headers_mut().insert(
         header::SET_COOKIE,
@@ -646,7 +691,7 @@ async fn password(
             peer.ip(),
         )
         .await?;
-    app.drafts.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    app.drafts.lock().clear();
     Ok(issue)
 }
 async fn ui_password(
@@ -680,7 +725,7 @@ async fn setup_status(State(app): State<Arc<App>>, headers: HeaderMap) -> WebRes
     if info.scope == auth::SessionScope::Preauth {
         return Err(auth::AuthError::Required.into());
     }
-    let runtime = app.runtime.lock().unwrap_or_else(|e| e.into_inner());
+    let runtime = app.runtime.lock();
     Ok(Json(
         json!({"lifecycle":runtime.lifecycle,"scope":info.scope}),
     ))
@@ -703,8 +748,8 @@ async fn test_platform(
         .filter(|value| !value.is_empty())
         .cloned();
     let token = {
-        let config = app.config.lock().unwrap_or_else(|e| e.into_inner());
-        let mut drafts = app.drafts.lock().unwrap_or_else(|e| e.into_inner());
+        let config = app.config.lock();
+        let mut drafts = app.drafts.lock();
         drafts.retain(|_, draft| draft.expires > Instant::now());
         let draft = drafts
             .entry(draft_key(&session))
@@ -725,7 +770,7 @@ async fn test_platform(
         )
     })?;
     {
-        let mut drafts = app.drafts.lock().unwrap_or_else(|e| e.into_inner());
+        let mut drafts = app.drafts.lock();
         let draft = drafts
             .get_mut(&draft_key(&session))
             .ok_or_else(WebError::validation)?;
@@ -766,8 +811,8 @@ async fn test_provider(
         .try_acquire_owned()
         .map_err(|_| auth::AuthError::Busy)?;
     let (provider, key, model) = {
-        let config = app.config.lock().unwrap_or_else(|e| e.into_inner());
-        let mut drafts = app.drafts.lock().unwrap_or_else(|e| e.into_inner());
+        let config = app.config.lock();
+        let mut drafts = app.drafts.lock();
         let draft = drafts
             .entry(draft_key(&session))
             .or_insert_with(|| setup::Draft::new(&config));
@@ -808,7 +853,7 @@ async fn test_provider(
             )
         })?;
     {
-        let mut drafts = app.drafts.lock().unwrap_or_else(|e| e.into_inner());
+        let mut drafts = app.drafts.lock();
         let draft = drafts
             .get_mut(&draft_key(&session))
             .ok_or_else(WebError::validation)?;
@@ -823,6 +868,7 @@ async fn test_provider(
         );
         draft.values.insert("MODEL".into(), model);
         draft.provider_verified = true;
+        draft.fit_completed = false;
         draft.expires = Instant::now() + std::time::Duration::from_secs(900);
     }
     Ok(())
@@ -868,12 +914,15 @@ async fn ui_fit(
             );
         }
     }
-    let mut drafts = app.drafts.lock().unwrap_or_else(|e| e.into_inner());
+    let mut drafts = app.drafts.lock();
     let draft = drafts
         .get_mut(&draft_key(&session))
-        .filter(|draft| draft.expires > Instant::now())
+        .filter(|draft| {
+            draft.expires > Instant::now() && draft.application.is_some() && draft.provider_verified
+        })
         .ok_or_else(WebError::validation)?;
     draft.values.extend(values);
+    draft.fit_completed = true;
     Ok(Redirect::to("/setup?step=5"))
 }
 async fn complete(
@@ -886,13 +935,14 @@ async fn complete(
         return Err(WebError::validation());
     }
     let (values, revision) = {
-        let drafts = app.drafts.lock().unwrap_or_else(|e| e.into_inner());
+        let drafts = app.drafts.lock();
         let draft = drafts
             .get(&draft_key(&session))
             .filter(|draft| {
                 draft.expires > Instant::now()
                     && draft.application.is_some()
                     && draft.provider_verified
+                    && draft.fit_completed
             })
             .ok_or_else(WebError::validation)?;
         (draft.values.clone(), draft.revision.clone())
@@ -906,15 +956,22 @@ async fn complete(
         .clone()
         .try_acquire_owned()
         .map_err(|_| auth::AuthError::Busy)?;
+    let previous;
     {
-        let mut runtime = app.runtime.lock().unwrap_or_else(|e| e.into_inner());
-        if runtime.lifecycle != Lifecycle::Unconfigured {
+        let mut runtime = app.runtime.lock();
+        if runtime.attempted
+            || !matches!(
+                runtime.lifecycle,
+                Lifecycle::Unconfigured | Lifecycle::ConfigurationError
+            )
+        {
             return Err(WebError::new(
                 StatusCode::CONFLICT,
                 "already_started",
                 "panel.error.starting",
             ));
         }
+        previous = runtime.lifecycle;
         runtime
             .lifecycle
             .start()
@@ -930,7 +987,7 @@ async fn complete(
                 "panel.state.stopping",
             ));
         }
-        let mut config = app_save.config.lock().unwrap_or_else(|e| e.into_inner());
+        let mut config = app_save.config.lock();
         let patch: Patch = patch
             .into_iter()
             .filter(|(key, _)| {
@@ -961,9 +1018,9 @@ async fn complete(
     let next = match next {
         Ok(next) => next,
         Err(error) => {
-            let mut runtime = app.runtime.lock().unwrap_or_else(|e| e.into_inner());
+            let mut runtime = app.runtime.lock();
             if runtime.lifecycle == Lifecycle::ConfiguredStarting {
-                runtime.lifecycle = Lifecycle::Unconfigured;
+                runtime.lifecycle = previous;
             }
             return Err(error);
         }
@@ -975,10 +1032,7 @@ async fn complete(
             "panel.error.starting",
         )
     })?;
-    app.drafts
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(&draft_key(&session));
+    app.drafts.lock().remove(&draft_key(&session));
     Ok(())
 }
 async fn ui_complete(
@@ -1000,7 +1054,7 @@ async fn api_complete(
 
 async fn snapshot(app: &App) -> Value {
     let (lifecycle, bot, manager, cache) = {
-        let runtime = app.runtime.lock().unwrap_or_else(|e| e.into_inner());
+        let runtime = app.runtime.lock();
         (
             runtime.lifecycle,
             runtime.bot.clone(),
@@ -1023,7 +1077,7 @@ async fn snapshot(app: &App) -> Value {
     } else {
         "offline"
     };
-    let config = app.config.lock().unwrap_or_else(|e| e.into_inner());
+    let config = app.config.lock();
     let mut result = json!({"lifecycle":lifecycle,"panel":"healthy","connection":connection,"spaces":cache.map_or(0,|cache|cache.guild_count()),"provider":config.selected_provider(),"model":config.get("MODEL"),"model_health":"not_reported","pending_restart":config.fields().iter().any(|field|field.pending_restart),"updated_at":crate::now_unix()});
     if let Some(bot) = bot {
         let state = bot.state();
@@ -1192,7 +1246,7 @@ async fn refresh_config(app: Arc<App>) -> WebResult<()> {
         .map_err(|_| auth::AuthError::Busy)?;
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        let mut config = app.config.lock().unwrap_or_else(|e| e.into_inner());
+        let mut config = app.config.lock();
         config.refresh_saved().map_err(|_| {
             WebError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -1209,7 +1263,7 @@ async fn refresh_config(app: Arc<App>) -> WebResult<()> {
 async fn settings_api(State(app): State<Arc<App>>, headers: HeaderMap) -> WebResult<Json<Value>> {
     admin(&app, &headers)?;
     refresh_config(app.clone()).await?;
-    let config = app.config.lock().unwrap_or_else(|e| e.into_inner());
+    let config = app.config.lock();
     Ok(Json(
         json!({"fields":config.fields(),"revision":config.revision(),"unknown_keys":config.unknown_keys(),"config_path":config.path().display().to_string()}),
     ))
@@ -1226,7 +1280,7 @@ async fn settings_page(
     let mut page = page(lang, "panel.title.settings", "settings")?;
     page.authenticated = true;
     page.description = t(lang, "panel.settings.restart");
-    let config = app.config.lock().unwrap_or_else(|e| e.into_inner());
+    let config = app.config.lock();
     if config.fields().iter().any(|field| field.pending_restart) {
         page.notice = t(lang, "panel.settings.pending");
     }
@@ -1331,7 +1385,7 @@ async fn save_settings(
 ) -> WebResult<Value> {
     mutation(&app, headers, &input.csrf)?;
     tokio::task::spawn_blocking(move || {
-        let mut config = app.config.lock().unwrap_or_else(|e| e.into_inner());
+        let mut config = app.config.lock();
         let candidate = config
             .validate_patch(&input.patch)
             .map_err(|_| WebError::validation())?;
@@ -1370,12 +1424,7 @@ async fn ui_settings(
     let csrf = input.remove("csrf").unwrap_or_default();
     let revision = input.remove("revision").unwrap_or_default();
     let validate_only = input.remove("operation").as_deref() == Some("validate");
-    let config_fields = {
-        app.config
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .fields()
-    };
+    let config_fields = { app.config.lock().fields() };
     let mut patch = Patch::new();
     for view in config_fields {
         if view.read_only {
