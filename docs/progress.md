@@ -1038,3 +1038,12 @@ reaches Discord) is exempt, see AGENTS.md item 8.
   Competitor star counts and launch traction were not turned into product claims.
 - **Pending starter work:** custom emoji reactions, English travel calendar, English sleep
   weekday/mood keywords, and the obsession keyword hook.
+
+## 2026-10-11 · release notes published once
+
+- Replaced the duplicated v1.1.0 release body with one set of highlights, upgrade settings,
+  and the full commit-list link. The existing tag and four release archives are unchanged.
+- Binary matrix jobs now upload `bin-<target>` artifacts. A single `publish` job waits for
+  all binaries, downloads their archives, and generates release notes once.
+- `actionlint` passed. This publication path will be exercised by the next release;
+  v1.1.0 was not retagged.

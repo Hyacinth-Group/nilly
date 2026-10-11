@@ -46,6 +46,22 @@ jobs:
           else
             tar czf "$name.tar.gz" "$name"
           fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.target }}
+          path: |
+            discord-bot-*.tar.gz
+            discord-bot-*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bin-*
+          merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
           files: |
