@@ -319,7 +319,7 @@
   "panel.help.body": "This bot is software, not a person. It uses your AI provider and may incur charges. Conversation content is sent to that provider and learned memories are retained; tell members before connecting.\n\nStart with Overview to distinguish panel health from platform connection and model readiness. If the bot is offline, check token, privileged intents, server membership, channel permissions and access filters. A token test alone does not prove the gateway is ready. Sleep still listens and learns; stealth hides Discord commands, not this authenticated panel.\n\nGrowth depends on both lifetime days and finished conversations. It is not model training. A chosen name normally appears only at the established stage. Moods belong to conversations, not the whole installation.\n\nMemory browsing/editing, personality editing, action buttons and usage reporting are not available in this panel yet. Disabled navigation is intentional. Existing Discord slash commands remain available where permitted; no browser action is pretending to execute them.\n\nSettings show active and saved values and their source. Environment-managed settings are read-only. Secret fields are write-only: blank keeps the existing value. File changes require restarting the process; with Compose use docker compose restart bot. Never reset or discard the memory database to apply settings.\n\nKeep the panel on localhost or use an SSH tunnel/VPN. Public exposure requires a reviewed HTTPS proxy configuration; a password alone is not a security perimeter. Logs are bounded and can contain private information even after secret redaction.\n\nIf you lose the panel password, use discord-bot panel reset-password locally on the bot machine. Do not share setup links, provider keys, bot tokens or configuration files.",
   "panel.help.commands": "Discord command reference",
   "panel.help.commands_body": "Read: /status, /help, /mind and /settings. Runtime controls: /wake, /sleep, /thinking, /model and /debug. Learning and browsing: /mind test=true, /agents and /wander may write memory or spend provider money. Public posting: /news, /problem, /prank and /hack post in chat where supported. Reset: /reset clears conversation state; all=true affects all conversations, not learned memory. Use /help in Discord for current localized command names and options. These are command descriptions, not executable browser buttons.",
-  "panel.error.validation": "Some values need attention. Review the highlighted fields; nothing was saved.",
+  "panel.error.validation": "Some values need attention. Go back and review your entries; nothing was saved.",
   "panel.error.save": "Could not save changes. Your active configuration has not been replaced.",
   "panel.error.test": "The credential test failed. Check the supplied values and network access.",
   "panel.error.expired": "Your session expired. Sign in again or request a fresh setup link locally.",
@@ -435,5 +435,13 @@
   "panel.usage.calls": "Calls with reported usage",
   "panel.usage.input": "Input tokens",
   "panel.usage.cached": "Cached input tokens",
-  "panel.usage.output": "Output tokens"
+  "panel.usage.output": "Output tokens",
+  "panel.settings.auto": "Automatic",
+  "panel.settings.validated": "The supplied settings are valid. Nothing was saved.",
+  "panel.settings.unknown": "Other configuration entries",
+  "panel.settings.unknown_help": "These entries are not managed by the panel. Their values and comments are preserved when you save.",
+  "panel.settings.tests": "Test credentials without saving",
+  "panel.settings.tests_help": "Blank keeps the saved credential for this test. These tests check Discord or the official AI provider; they do not test custom endpoints, privileged intents or paid completions.",
+  "panel.settings.use_saved": "Use saved settings",
+  "panel.settings.test_passed": "Credential check passed. Nothing was saved. Gateway permissions and model completions are separate checks."
 }

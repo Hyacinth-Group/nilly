@@ -1,4 +1,4 @@
-use super::{auth, dashboard, setup, views, App, Lifecycle};
+use super::{auth, dashboard, settings, setup, views, App, Lifecycle};
 use crate::config::{Patch, PatchValue};
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -16,27 +16,42 @@ use std::time::Instant;
 use views::{Button, Field, Form as ViewForm, Item, Language, Page, Section};
 
 pub(super) type WebResult<T> = Result<T, WebError>;
+#[derive(Clone)]
 pub(super) struct WebError {
     status: StatusCode,
     code: String,
     key: String,
+    fields: HashMap<String, String>,
 }
-#[derive(Clone)]
-struct ErrorDisplay(String);
 impl WebError {
-    fn new(status: StatusCode, code: &str, key: &str) -> Self {
+    pub(super) fn new(status: StatusCode, code: &str, key: &str) -> Self {
         Self {
             status,
             code: code.into(),
             key: key.into(),
+            fields: HashMap::new(),
         }
     }
-    fn validation() -> Self {
+    pub(super) fn validation() -> Self {
         Self::new(
             StatusCode::UNPROCESSABLE_ENTITY,
             "validation_failed",
             "panel.error.validation",
         )
+    }
+
+    pub(super) fn config(error: crate::config::ConfigError) -> Self {
+        use crate::config::ConfigError;
+        let status = match &error {
+            ConfigError::Field { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+            ConfigError::Conflict | ConfigError::AlreadyActive => StatusCode::CONFLICT,
+            _ => StatusCode::SERVICE_UNAVAILABLE,
+        };
+        let mut result = Self::new(status, error.code(), error.code());
+        if let ConfigError::Field { key, code } = error {
+            result.fields.insert(key, code.into());
+        }
+        result
     }
 }
 impl From<auth::AuthError> for WebError {
@@ -59,8 +74,8 @@ impl From<auth::AuthError> for WebError {
 impl IntoResponse for WebError {
     fn into_response(self) -> Response {
         let message = views::text(Language::En, &self.key).unwrap_or(&self.code);
-        let mut response = (self.status, Json(json!({"code":self.code,"message":message,"field_errors":{},"request_id":request_id()}))).into_response();
-        response.extensions_mut().insert(ErrorDisplay(self.key));
+        let mut response = (self.status, Json(json!({"code":self.code,"message":message,"field_errors":self.fields,"request_id":request_id()}))).into_response();
+        response.extensions_mut().insert(self);
         response
     }
 }
@@ -84,7 +99,7 @@ pub(super) fn admin(app: &App, headers: &HeaderMap) -> WebResult<String> {
     app.auth.require_admin(&token)?;
     Ok(token)
 }
-fn mutation(app: &App, headers: &HeaderMap, csrf: &str) -> WebResult<String> {
+pub(super) fn mutation(app: &App, headers: &HeaderMap, csrf: &str) -> WebResult<String> {
     let token = admin(app, headers)?;
     app.auth.mutation(&token, csrf, auth::SessionScope::Admin)?;
     if *app.stop.borrow() {
@@ -121,13 +136,13 @@ fn cookie_response(
     );
     Ok(response)
 }
-fn button(lang: Language, key: &str) -> Button {
+pub(super) fn button(lang: Language, key: &str) -> Button {
     Button {
         label: t(lang, key),
         ..Default::default()
     }
 }
-fn field(lang: Language, name: &str, key: &str, kind: &str, value: &str) -> Field {
+pub(super) fn field(lang: Language, name: &str, key: &str, kind: &str, value: &str) -> Field {
     Field {
         name: name.into(),
         label: t(lang, key),
@@ -136,7 +151,13 @@ fn field(lang: Language, name: &str, key: &str, kind: &str, value: &str) -> Fiel
         ..Default::default()
     }
 }
-fn form(id: &str, action: &str, csrf: &str, fields: Vec<Field>, buttons: Vec<Button>) -> ViewForm {
+pub(super) fn form(
+    id: &str,
+    action: &str,
+    csrf: &str,
+    fields: Vec<Field>,
+    buttons: Vec<Button>,
+) -> ViewForm {
     ViewForm {
         id: id.into(),
         action: action.into(),
@@ -197,7 +218,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/", get(dashboard::overview))
         .route("/setup", get(setup_page))
         .route("/login", get(login_page))
-        .route("/settings", get(settings_page))
+        .route("/settings", get(settings::view))
         .route("/logs", get(logs_page))
         .route("/account", get(account_page))
         .route("/help", get(help_page))
@@ -210,7 +231,9 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/ui/auth/login", post(ui_login))
         .route("/ui/auth/logout", post(ui_logout))
         .route("/ui/auth/password", post(ui_password))
-        .route("/ui/settings", post(ui_settings))
+        .route("/ui/settings", post(settings::ui))
+        .route("/ui/settings/test-platform", post(settings::platform_ui))
+        .route("/ui/settings/test-provider", post(settings::provider_ui))
         .route("/api/v1/setup/claim", post(api_claim))
         .route("/api/v1/setup/status", get(setup_status))
         .route("/api/v1/setup/test-platform", post(api_platform))
@@ -221,10 +244,19 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/v1/auth/password", post(api_password))
         .route("/api/v1/auth/session", get(auth_session))
         .route("/api/v1/status", get(dashboard::status_api))
-        .route("/api/v1/settings", get(settings_api).patch(api_settings))
-        .route("/api/v1/settings/validate", post(api_validate))
-        .route("/api/v1/settings/test-platform", post(api_platform))
-        .route("/api/v1/settings/test-provider", post(api_provider))
+        .route(
+            "/api/v1/settings",
+            get(settings::api).patch(settings::patch),
+        )
+        .route("/api/v1/settings/validate", post(settings::validate))
+        .route(
+            "/api/v1/settings/test-platform",
+            post(settings::platform_api),
+        )
+        .route(
+            "/api/v1/settings/test-provider",
+            post(settings::provider_api),
+        )
         .route("/api/v1/logs", get(logs_api))
         .route("/api/v1/logs/stream", get(log_stream))
         .layer(DefaultBodyLimit::max(32 * 1024))
@@ -251,37 +283,72 @@ async fn security(
             .find_map(|part| part.strip_prefix("lang="))
             .unwrap_or("en"),
     );
+    let identifier = request_id();
     let mut response = match app.origin.check(request.headers(), write) {
         Ok(()) => next.run(request).await,
         Err(error) => WebError::from(error).into_response(),
     };
-    if !path.starts_with("/api/") && response.status().is_client_error() {
+    if response.status().is_client_error() || response.status().is_server_error() {
         let status = response.status();
-        let key = response
+        let error = response
             .extensions()
-            .get::<ErrorDisplay>()
-            .map_or("panel.error.validation", |error| error.0.as_str());
-        let (title, back) = if path.contains("/auth/login") {
-            ("panel.title.login", "/login")
-        } else if path.contains("/settings") {
-            ("panel.title.settings", "/settings")
-        } else if path.contains("/setup") {
-            ("panel.title.setup", "/setup")
+            .get::<WebError>()
+            .cloned()
+            .unwrap_or_else(WebError::validation);
+        let key = error.key.as_str();
+        if path.starts_with("/api/") {
+            let fields: HashMap<_, _> = error
+                .fields
+                .iter()
+                .map(|(field, key)| (field, t(language, key)))
+                .collect();
+            response = (status, Json(json!({"code":error.code,"message":t(language,key),"field_errors":fields,"request_id":identifier}))).into_response();
         } else {
-            ("panel.title.account", "/account")
-        };
-        if let Ok(mut error_page) = Page::new(language, title, "") {
-            error_page.error = t(language, key);
-            error_page.sections.push(Section {
-                items: vec![Item {
-                    value: t(language, "panel.action.back"),
-                    href: format!("{back}?lang={}", language.code()),
+            let (title, back) = if path.contains("/auth/login") {
+                ("panel.title.login", "/login")
+            } else if path.contains("/settings") {
+                ("panel.title.settings", "/settings")
+            } else if path.contains("/setup") {
+                ("panel.title.setup", "/setup")
+            } else {
+                ("panel.title.account", "/account")
+            };
+            if let Ok(mut error_page) = Page::new(language, title, "") {
+                error_page.error = t(language, key);
+                for (field, key) in &error.fields {
+                    error_page.error.push_str(&format!(
+                        "\n{}: {}",
+                        t(language, &format!("panel.settings.{field}.label")),
+                        t(language, key)
+                    ));
+                }
+                error_page.sections.push(Section {
+                    items: vec![Item {
+                        value: t(language, "panel.action.back"),
+                        href: format!("{back}?lang={}", language.code()),
+                        ..Default::default()
+                    }],
                     ..Default::default()
-                }],
-                ..Default::default()
-            });
-            if let Ok(body) = views::render(&error_page) {
-                response = (status, Html(body)).into_response();
+                });
+                if let Ok(body) = views::render(&error_page) {
+                    response = (status, Html(body)).into_response();
+                }
+            }
+        }
+    }
+    if path.starts_with("/ui/") && language == Language::Tr && response.status().is_redirection() {
+        if let Some(location) = response
+            .headers()
+            .get(header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| value.starts_with('/') && !value.contains("lang="))
+        {
+            let location = format!(
+                "{location}{}lang=tr",
+                if location.contains('?') { "&" } else { "?" }
+            );
+            if let Ok(location) = HeaderValue::from_str(&location) {
+                response.headers_mut().insert(header::LOCATION, location);
             }
         }
     }
@@ -291,7 +358,7 @@ async fn security(
     ] { response.headers_mut().insert(name,HeaderValue::from_static(value)); }
     response.headers_mut().insert(
         "x-request-id",
-        HeaderValue::from_str(&request_id()).expect("hex request ID"),
+        HeaderValue::from_str(&identifier).expect("hex request ID"),
     );
     response
 }
@@ -370,7 +437,7 @@ async fn setup_page(
         step = 2;
     }
     if info.scope == auth::SessionScope::Admin {
-        refresh_config(app.clone()).await?;
+        settings::refresh(app.clone()).await?;
         let config = app.config.lock();
         let mut drafts = app.drafts.lock();
         drafts.retain(|_, draft| draft.expires > Instant::now());
@@ -1050,225 +1117,6 @@ async fn api_complete(
 ) -> WebResult<Json<Value>> {
     complete(app, &headers, input).await?;
     Ok(Json(json!({"lifecycle":"configured_starting"})))
-}
-
-async fn refresh_config(app: Arc<App>) -> WebResult<()> {
-    let permit = app
-        .tests
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| auth::AuthError::Busy)?;
-    tokio::task::spawn_blocking(move || {
-        let _permit = permit;
-        let mut config = app.config.lock();
-        config.refresh_saved().map_err(|_| {
-            WebError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "config_read_failed",
-                "panel.error.save",
-            )
-        })?;
-        super::register_secrets(&config).map_err(|_| WebError::validation())
-    })
-    .await
-    .map_err(|_| WebError::validation())?
-}
-
-async fn settings_api(State(app): State<Arc<App>>, headers: HeaderMap) -> WebResult<Json<Value>> {
-    admin(&app, &headers)?;
-    refresh_config(app.clone()).await?;
-    let config = app.config.lock();
-    Ok(Json(
-        json!({"fields":config.fields(),"revision":config.revision(),"unknown_keys":config.unknown_keys(),"config_path":config.path().display().to_string()}),
-    ))
-}
-async fn settings_page(
-    State(app): State<Arc<App>>,
-    headers: HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-) -> WebResult<Response> {
-    let session = admin(&app, &headers)?;
-    let info = app.auth.session(&session)?;
-    refresh_config(app.clone()).await?;
-    let lang = lang(&query);
-    let mut page = page(lang, "panel.title.settings", "settings")?;
-    page.authenticated = true;
-    page.description = t(lang, "panel.settings.restart");
-    let config = app.config.lock();
-    if config.fields().iter().any(|field| field.pending_restart) {
-        page.notice = t(lang, "panel.settings.pending");
-    }
-    let mut settings = section(lang, "panel.title.settings");
-    let mut fields = Vec::new();
-    for view in config.fields() {
-        let mut input = field(
-            lang,
-            view.spec.key,
-            view.spec.key,
-            if view.spec.secret { "password" } else { "text" },
-            view.saved.value.as_deref().unwrap_or(""),
-        );
-        let choices: &[&str] = match view.spec.kind {
-            crate::config::FieldKind::Bool => &["on", "off"],
-            crate::config::FieldKind::Provider => &["openrouter", "mistral"],
-            crate::config::FieldKind::Language => &["en", "tr"],
-            crate::config::FieldKind::LogLevel => {
-                &["off", "error", "warn", "info", "debug", "trace"]
-            }
-            crate::config::FieldKind::LogColor => &["auto", "on", "off"],
-            _ => &[],
-        };
-        if !choices.is_empty() {
-            input.kind = "select".into();
-            input.choices = choices
-                .iter()
-                .map(|value| views::Choice {
-                    value: (*value).into(),
-                    label: (*value).into(),
-                    selected: input.value == *value,
-                })
-                .collect();
-        }
-        input.label = t(lang, &format!("panel.settings.{}.label", view.spec.key));
-        input.help = t(lang, view.spec.help_key);
-        input.read_only = view.read_only;
-        input.source = t(
-            lang,
-            match view.source {
-                crate::config::Source::Environment => "panel.field.environment",
-                crate::config::Source::File => "panel.field.file",
-                crate::config::Source::Default => "panel.field.default",
-            },
-        );
-        input.configured = t(
-            lang,
-            if view.effective.configured {
-                "panel.settings.configured"
-            } else {
-                "panel.settings.empty"
-            },
-        );
-        input.effective = view.effective.value.unwrap_or_default();
-        input.saved = view.saved.value.unwrap_or_default();
-        input.default = view.default.value.unwrap_or_default();
-        fields.push(input);
-        if view.spec.secret && !view.read_only {
-            fields.push(field(
-                lang,
-                &format!("clear_{}", view.spec.key),
-                "panel.settings.clear_secret",
-                "checkbox",
-                "on",
-            ));
-        }
-    }
-    let mut settings_form = form(
-        "settings-form",
-        "/ui/settings",
-        &info.csrf,
-        fields,
-        vec![
-            button(lang, "panel.action.save"),
-            Button {
-                label: t(lang, "panel.action.validate"),
-                name: "operation".into(),
-                value: "validate".into(),
-                secondary: true,
-                ..Default::default()
-            },
-        ],
-    );
-    settings_form
-        .hidden
-        .push(("revision".into(), config.revision().into()));
-    settings.forms.push(settings_form);
-    page.sections.push(settings);
-    html(&page)
-}
-#[derive(Deserialize)]
-struct SettingsInput {
-    csrf: String,
-    revision: String,
-    patch: Patch,
-}
-async fn save_settings(
-    app: Arc<App>,
-    headers: &HeaderMap,
-    input: SettingsInput,
-    validate_only: bool,
-) -> WebResult<Value> {
-    mutation(&app, headers, &input.csrf)?;
-    tokio::task::spawn_blocking(move || {
-        let mut config = app.config.lock();
-        let candidate = config
-            .validate_patch(&input.patch)
-            .map_err(|_| WebError::validation())?;
-        if !validate_only {
-            super::register_secrets(&candidate).map_err(|_| WebError::validation())?;
-            config
-                .save_patch(&input.revision, &input.patch)
-                .map_err(|_| {
-                    WebError::new(StatusCode::CONFLICT, "config_conflict", "panel.error.save")
-                })?;
-        }
-        Ok(json!({"valid":true,"restart_required":!validate_only,"revision":config.revision()}))
-    })
-    .await
-    .map_err(|_| WebError::validation())?
-}
-async fn api_settings(
-    State(app): State<Arc<App>>,
-    headers: HeaderMap,
-    Json(input): Json<SettingsInput>,
-) -> WebResult<Json<Value>> {
-    Ok(Json(save_settings(app, &headers, input, false).await?))
-}
-async fn api_validate(
-    State(app): State<Arc<App>>,
-    headers: HeaderMap,
-    Json(input): Json<SettingsInput>,
-) -> WebResult<Json<Value>> {
-    Ok(Json(save_settings(app, &headers, input, true).await?))
-}
-async fn ui_settings(
-    State(app): State<Arc<App>>,
-    headers: HeaderMap,
-    Form(mut input): Form<HashMap<String, String>>,
-) -> WebResult<Response> {
-    let csrf = input.remove("csrf").unwrap_or_default();
-    let revision = input.remove("revision").unwrap_or_default();
-    let validate_only = input.remove("operation").as_deref() == Some("validate");
-    let config_fields = { app.config.lock().fields() };
-    let mut patch = Patch::new();
-    for view in config_fields {
-        if view.read_only {
-            continue;
-        }
-        let value = input.remove(view.spec.key).unwrap_or_default();
-        let operation = if input
-            .get(&format!("clear_{}", view.spec.key))
-            .is_some_and(|value| value == "on")
-        {
-            PatchValue::Clear
-        } else if view.spec.secret && value.is_empty() {
-            PatchValue::Keep
-        } else {
-            PatchValue::Replace { value }
-        };
-        patch.insert(view.spec.key.to_owned(), operation);
-    }
-    save_settings(
-        app,
-        &headers,
-        SettingsInput {
-            csrf,
-            revision,
-            patch,
-        },
-        validate_only,
-    )
-    .await?;
-    Ok(Redirect::to("/settings").into_response())
 }
 
 async fn account_page(

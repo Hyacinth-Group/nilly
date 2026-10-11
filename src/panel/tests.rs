@@ -444,3 +444,151 @@ fn both_panel_languages_have_the_same_complete_key_set() {
         .filter(|(key, _)| key.starts_with("panel."))
         .all(|(_, value)| !value.is_empty()));
 }
+
+fn settings_fixture(app: &App) {
+    let path = app.config.lock().path().to_owned();
+    std::fs::write(&path,"# keep this comment\nDISCORD_TOKEN=settings-private-discord-credential\nOPENROUTER_KEY=settings-private-provider-credential\nBOT_LANG=en\nSTEALTH=false\nCUSTOM_SETTING='untouched # value'\n").unwrap();
+    *app.config.lock() = config::Config::load(path, &HashMap::new()).unwrap();
+}
+
+#[tokio::test]
+async fn settings_forms_preserve_unposted_groups_and_never_echo_credentials() {
+    let (app, directory) = fixture().await;
+    settings_fixture(&app);
+    let admin = owner(&app).await;
+    let router = routes::router(app.clone());
+    let response = router
+        .clone()
+        .oneshot(request("GET", "/settings", Some(&admin.token), ""))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 256 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(!html.contains("settings-private"));
+    assert!(html.contains("value=\"off\" selected"));
+    assert!(html.contains("/ui/settings/test-platform"));
+    assert!(html.contains("Other configuration entries"));
+    let revision = app.config.lock().revision().to_owned();
+    let body = format!("csrf={}&revision={revision}&BOT_LANG=tr", admin.info.csrf);
+    let response = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/ui/settings?lang=tr",
+            Some(&admin.token),
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers()[header::LOCATION],
+        "/settings?saved=1&lang=tr"
+    );
+    let saved = std::fs::read_to_string(directory.path().join(".env")).unwrap();
+    assert!(saved.contains("# keep this comment"));
+    assert!(saved.contains("CUSTOM_SETTING='untouched # value'"));
+    assert!(saved.contains("DISCORD_TOKEN=settings-private-discord-credential"));
+    assert!(saved.contains("OPENROUTER_KEY=settings-private-provider-credential"));
+    assert_eq!(app.config.lock().get("BOT_LANG"), "en");
+    assert!(
+        app.config
+            .lock()
+            .fields()
+            .iter()
+            .find(|view| view.spec.key == "BOT_LANG")
+            .unwrap()
+            .pending_restart
+    );
+    let response = router
+        .oneshot(request("GET", "/api/v1/settings", Some(&admin.token), ""))
+        .await
+        .unwrap();
+    let value: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 256 * 1024).await.unwrap()).unwrap();
+    assert!(!value.to_string().contains("settings-private"));
+    let secret = value["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|view| view["spec"]["key"] == "OPENROUTER_KEY")
+        .unwrap();
+    assert!(secret["saved"]["configured"].as_bool().unwrap());
+    assert!(secret["saved"]["value"].is_null());
+}
+
+#[tokio::test]
+async fn settings_validation_returns_localized_field_errors_with_matching_request_id() {
+    let (app, directory) = fixture().await;
+    settings_fixture(&app);
+    let admin = owner(&app).await;
+    let original = std::fs::read(directory.path().join(".env")).unwrap();
+    let body=serde_json::json!({"csrf":admin.info.csrf,"revision":app.config.lock().revision(),"patch":{"TZ_OFFSET":{"operation":"replace","value":"99"}}}).to_string();
+    let mut request = request(
+        "POST",
+        "/api/v1/settings/validate?lang=tr",
+        Some(&admin.token),
+        &body,
+    );
+    request
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+    let response = routes::router(app.clone()).oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let identifier = response.headers()["x-request-id"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let value: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap()).unwrap();
+    assert_eq!(value["request_id"], identifier);
+    assert!(value["field_errors"]["TZ_OFFSET"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty() && !value.starts_with("panel.")));
+    assert_eq!(
+        std::fs::read(directory.path().join(".env")).unwrap(),
+        original
+    );
+}
+
+#[tokio::test]
+async fn settings_tests_reject_invalid_credentials_without_saving_or_mutating_wizard() {
+    let (app, directory) = fixture().await;
+    settings_fixture(&app);
+    let admin = owner(&app).await;
+    let original = std::fs::read(directory.path().join(".env")).unwrap();
+    let body = format!(
+        "csrf={}&PROVIDER=invalid&key=supplied-secret",
+        admin.info.csrf
+    );
+    let response = routes::router(app.clone())
+        .oneshot(request(
+            "POST",
+            "/ui/settings/test-provider",
+            Some(&admin.token),
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(!html.contains("supplied-secret"));
+    assert!(html.contains("/settings?lang=en"));
+    assert!(app.drafts.lock().is_empty());
+    assert_eq!(
+        std::fs::read(directory.path().join(".env")).unwrap(),
+        original
+    );
+}

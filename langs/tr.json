@@ -319,7 +319,7 @@
   "panel.help.body": "Bu bot bir insandan ziyade yazılımdır. Seçtiğin yapay zekâ sağlayıcısını kullanır ve ücret doğurabilir. Sohbet içeriği sağlayıcıya gönderilir ve öğrenilen bilgiler saklanır; bağlamadan önce üyelere bildir.\n\nPanel sağlığını platform bağlantısından ve modelin hazır olmasından ayırmak için Genel bakıştan başla. Bot çevrimdışıysa tokeni, ayrıcalıklı intentleri, sunucu üyeliğini, kanal izinlerini ve erişim filtrelerini kontrol et. Token testi tek başına ağ geçidinin hazır olduğunu göstermez. Uyku sırasında dinleme ve öğrenme sürer; gizlilik modu Discord komutlarını gizler, kimlik doğrulamalı bu paneli değil.\n\nGelişim hem toplam güne hem tamamlanan sohbetlere dayanır. Model eğitimi değildir. Seçilen isim normalde yerleşmiş aşamasında ortaya çıkar. Ruh hâli kurulumun bütününe değil, sohbetlere aittir.\n\nHafıza görüntüleme/düzenleme, kişilik düzenleme, işlem düğmeleri ve kullanım raporlama bu panelde henüz yoktur. Devre dışı gezinme öğeleri kasıtlıdır. İzin verilen yerlerde mevcut Discord eğik çizgi komutları kullanılabilir; hiçbir tarayıcı işlemi bunları yapıyormuş gibi davranmaz.\n\nAyarlar etkin ve kaydedilen değerlerle kaynaklarını gösterir. Ortamdan yönetilen ayarlar salt okunurdur. Gizli alanlar yalnızca yazılabilir: boş bırakmak mevcut değeri korur. Dosya değişiklikleri sürecin yeniden başlatılmasını gerektirir; Compose için docker compose restart bot kullan. Ayar uygulamak için hafıza veritabanını sıfırlama veya atma.\n\nPaneli localhost üzerinde tut veya SSH tüneli/VPN kullan. Herkese açık erişim incelenmiş HTTPS vekil yapılandırması gerektirir; tek başına parola bir güvenlik sınırı değildir. Günlükler sınırlıdır ve gizli değerler ayıklansa bile özel bilgi içerebilir.\n\nPanel parolasını kaybedersen bot makinesinde yerel olarak discord-bot panel reset-password kullan. Kurulum bağlantılarını, sağlayıcı anahtarlarını, bot tokenlerini veya yapılandırma dosyalarını paylaşma.",
   "panel.help.commands": "Discord komut rehberi",
   "panel.help.commands_body": "Okuma: /status, /help, /mind ve /settings. Çalışma kontrolleri: /wake, /sleep, /thinking, /model ve /debug. Öğrenme ve gezinme: /mind test=true, /agents ve /wander hafızaya yazabilir veya sağlayıcı ücreti doğurabilir. Herkese açık paylaşım: /news, /problem, /prank ve /hack desteklendiğinde sohbete gönderir. Sıfırlama: /reset sohbet durumunu temizler; all=true tüm sohbetleri etkiler, öğrenilmiş hafızayı değil. Güncel yerelleştirilmiş komut adları ve seçenekler için Discord’da /yardim kullan. Bunlar komut açıklamalarıdır; çalıştırılabilir tarayıcı düğmeleri değildir.",
-  "panel.error.validation": "Bazı değerlerin düzeltilmesi gerekiyor. İşaretli alanları gözden geçir; hiçbir şey kaydedilmedi.",
+  "panel.error.validation": "Bazı değerlerin düzeltilmesi gerekiyor. Geri dönüp girdiklerini kontrol et; hiçbir şey kaydedilmedi.",
   "panel.error.save": "Değişiklikler kaydedilemedi. Etkin yapılandırman değiştirilmedi.",
   "panel.error.test": "Kimlik bilgisi testi başarısız oldu. Girilen değerleri ve ağ erişimini kontrol et.",
   "panel.error.expired": "Oturumun sona erdi. Tekrar giriş yap veya yerel olarak yeni kurulum bağlantısı iste.",
@@ -435,5 +435,13 @@
   "panel.usage.calls": "Kullanım bildiren çağrılar",
   "panel.usage.input": "Girdi tokenları",
   "panel.usage.cached": "Önbellek girdi tokenları",
-  "panel.usage.output": "Çıktı tokenları"
+  "panel.usage.output": "Çıktı tokenları",
+  "panel.settings.auto": "Otomatik",
+  "panel.settings.validated": "Gönderilen ayarlar geçerli. Hiçbir şey kaydedilmedi.",
+  "panel.settings.unknown": "Diğer yapılandırma girdileri",
+  "panel.settings.unknown_help": "Bu girdiler panelden yönetilmez. Kaydederken değerleri ve yorumları korunur.",
+  "panel.settings.tests": "Kimlik bilgilerini kaydetmeden dene",
+  "panel.settings.tests_help": "Boş alan bu test için kaydedilmiş bilgiyi kullanır. Testler Discord veya resmî yapay zekâ sağlayıcısını denetler; özel uç noktaları, ayrıcalıklı intentleri veya ücretli yanıtları denemez.",
+  "panel.settings.use_saved": "Kaydedilmiş ayarları kullan",
+  "panel.settings.test_passed": "Kimlik bilgisi denetimi başarılı. Hiçbir şey kaydedilmedi. Ağ geçidi izinleri ve model yanıtları ayrı denetimlerdir."
 }

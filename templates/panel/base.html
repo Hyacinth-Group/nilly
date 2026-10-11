@@ -92,11 +92,9 @@
             <p class="field-error" id="{{ form.id }}-{{ field.name }}-error">{{ field.error }}</p>
             {% if !field.configured.is_empty() %}<p class="field-state">{{ chrome.configured }}: {{ field.configured }}</p>{% endif %}
             {% if !field.source.is_empty() %}<p class="field-state">{{ chrome.source }}: {{ field.source }}</p>{% endif %}
-            {% if field.kind != "password" %}
               {% if !field.effective.is_empty() %}<p class="field-state">{{ chrome.effective }}: {{ field.effective }}</p>{% endif %}
               {% if !field.saved.is_empty() %}<p class="field-state">{{ chrome.saved }}: {{ field.saved }}</p>{% endif %}
               {% if !field.default.is_empty() %}<p class="field-state">{{ chrome.default }}: {{ field.default }}</p>{% endif %}
-            {% endif %}
           </div>
           {% endfor %}
           <div class="form-actions">
