@@ -1,0 +1,40 @@
+name: Bug report
+description: Report something that is not working as expected.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened?
+      description: Describe the problem and what you were doing.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: "`/status` output"
+      description: Paste the output here, removing any sensitive information.
+      render: text
+    validations:
+      required: false
+  - type: input
+    id: model
+    attributes:
+      label: Model id
+      placeholder: e.g. openai/gpt-4o-mini
+    validations:
+      required: false
+  - type: input
+    id: environment
+    attributes:
+      label: OS / Docker
+      placeholder: e.g. Ubuntu 24.04, Docker Compose
+    validations:
+      required: true

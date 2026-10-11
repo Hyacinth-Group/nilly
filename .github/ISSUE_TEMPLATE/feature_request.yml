@@ -1,0 +1,19 @@
+name: Feature request
+description: Suggest a problem worth solving or an improvement.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Explain what is difficult or missing today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What is your idea?
+      description: Describe the change you would like to see.
+    validations:
+      required: true
