@@ -43,11 +43,7 @@ include!("bot/cycle/cycle.rs");
 include!("bot/handler/handler.rs");
 include!("bot/setup.rs");
 
-/// Process entry point. Input: none (reads `.env`, CLI args, `DISCORD_TOKEN`). Output:
-/// `Result<(), BotError>` — only returns on a startup failure or clean shutdown; runs the
-/// Discord client (or the CLI chat bench) until then. Uses: `logging::init`, `Bot::setup`,
-/// `Bot::chat_cli` (`chat_cli.rs`), `setting`, `Handler`, `wait_for_shutdown`,
-/// `SHUTTING_DOWN`, `client.start` (serenity).
+/// Runs the Discord client or terminal chat bench until shutdown or failure.
 #[tokio::main]
 async fn main() -> Result<(), BotError> {
     dotenvy::dotenv().ok();

@@ -1,13 +1,6 @@
 impl Bot {
     /// Parses raw model text and sends it via the non-streaming, line-by-line protocol.
-    /// Input: `&self`; `ctx: &Context`; `channel: &RoomKey`; `raw: &str` — unparsed model
-    /// output; `reply_to`/`reaction_target: Option<&MessageKey>`; `ping: Option<&UserKey>`.
-    /// Output: `Option<String>` — `Some(protocol_text)` if anything was sent, `None` if
-    /// silent/empty. Uses: `strip_name`, `parse_reply`, `send_reply`. Used by: the
-    /// stream-less fallback in `chat_reply.rs`, `Bot::post_problem`/`post_news`
-    /// (`cycle_news.rs`), `poke_cycle` (`cycle_background.rs`),
-    /// `handler_event.rs`'s `guild_member_addition`, `Bot::sleep_transition`/`evaluate_waking`
-    /// (`cycle_sleep.rs`), `Bot::pick_name` (`cycle_growth.rs`).
+    /// Returns protocol text if anything was sent, or `None` for silence/empty output.
     async fn send_lines(
         &self,
         ctx: &Context,
@@ -26,13 +19,8 @@ impl Bot {
     // send_lines's body, operating on an already-parsed Reply: callers that already have a
     // parsed (and de-duplicated) reply on hand shouldn't have to go back to text and re-parse it
     /// Sends an already-parsed `Reply` line by line, with a typing delay between lines, then
-    /// the reaction (if any). Input: `&self`; `ctx`/`channel` as above; `reply: Reply`
-    /// (consumed, `reaction` may be cleared if `reaction_target` is `None`);
-    /// `reply_to`/`reaction_target`/`ping` as above. Output: `Option<String>` —
-    /// `Some(reply.protocol_text())` if anything went out, `None` if there was nothing to
-    /// send. Uses: `self.send` (per line), `ctx.http.create_reaction`, `self.state()`,
-    /// `channel_note`. Used by: `send_lines` above, and directly by the fallback path in
-    /// `chat_reply.rs` (which already has a de-duplicated `Reply` on hand).
+    /// the reaction (if any). Without a reaction target, the reaction is dropped.
+    /// Returns protocol text if anything was sent, or `None` otherwise.
     async fn send_reply(
         &self,
         ctx: &Context,

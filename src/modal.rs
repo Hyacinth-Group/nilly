@@ -42,9 +42,7 @@ pub struct Section {
 }
 
 impl Section {
-    /// Input: `label`/`custom_id: impl Into<String>`; `content: String`. Output: `Self`,
-    /// with `content` fitted to `MODAL_LIMIT`. Uses: `fit_to_limit`. Used by every modal
-    /// builder below.
+    /// Fits the content to `MODAL_LIMIT`.
     fn new(label: impl Into<String>, custom_id: impl Into<String>, content: String) -> Self {
         Self {
             label: label.into(),
@@ -55,10 +53,6 @@ impl Section {
 }
 
 // text over the limit is cut at the last line break/space + a note; the body always fits within the limit
-/// Input: `text: &str`; `limit: usize`. Output: `String` — `text` unchanged if it fits,
-/// else cut at the last line break/space within `limit` and a trailing `TRIM_NOTE`
-/// appended (the total is always `<= limit`). Uses: `TRIM_NOTE`. Used by: `Section::new`
-/// above, `info_embed`/`dash_if_empty`/`status_message` below.
 fn fit_to_limit(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
         return text.to_string();
@@ -75,9 +69,6 @@ fn fit_to_limit(text: &str, limit: usize) -> String {
 }
 
 // "2026-09" -> "Eylül 2026"; returns the input unchanged if it can't be parsed
-/// Input: `month: &str` — `"YYYY-MM"`. Output: `String` — a `"<Month> YYYY"` label (month
-/// name from `strings::t`, keys `month.1`..`month.12`), or `month` unchanged if it doesn't
-/// parse. Used by: `events_modal` below.
 fn month_name(month: &str) -> String {
     let mut parts = month.splitn(2, '-');
     match (parts.next(), parts.next()) {
@@ -97,8 +88,6 @@ fn month_name(month: &str) -> String {
 }
 
 // categories sorted by total tokens: "sohbet: 120 giriş + 80 çıkış · ..."
-/// Input: `metrics: &Metrics`. Output: `String` — `metrics.categories` sorted by total
-/// tokens descending, joined `" · "`. Used by: `summary_modal`/`status_message` below.
 fn token_breakdown(metrics: &Metrics) -> String {
     use std::fmt::Write as _;
     let mut sorted: Vec<(&'static str, &Usage)> = metrics
@@ -123,8 +112,6 @@ fn token_breakdown(metrics: &Metrics) -> String {
 
 // "{calls} çağrı · {input} giriş ({cache} önbellek) + {output} çıkış", the token summary
 // line shared by /durum and /zihin's bot-summary modal.
-/// Input: `metrics: &Metrics`. Output: `String`. Uses: `strings::t`. Used by:
-/// `summary_modal`/`status_message` below.
 fn token_summary(metrics: &Metrics) -> String {
     strings::t("common.token_template")
         .replace("{calls}", &metrics.calls.to_string())
@@ -150,9 +137,6 @@ fn travel_word() -> String {
 // ---------- /zihin: embed card + menu/buttons ----------
 
 // the mind card: three columns (people / topics / events) + counters in the footer
-/// Input: `state: &State`. Output: `Vec<CreateEmbed>` — a single-element vec (one embed).
-/// Uses: `memory::person_summaries`/`topic_summaries`/`event_months`/`trim`, `growth::stage`/
-/// `days`, `dash_if_empty`. Used by: `mind_message` below.
 pub fn mind_embeds(state: &State) -> Vec<CreateEmbed> {
     let people = memory::person_summaries();
     let topics = memory::topic_summaries();
@@ -241,9 +225,6 @@ pub fn mind_embeds(state: &State) -> Vec<CreateEmbed> {
 // the short acknowledgment/status reply for commands: this always goes out instead of
 // plain text (e.g. "haber bulamadım", "tamam, <model>", "debug açık"); wrapped by
 // reply_info/report_result in command.rs
-/// Input: `title`/`description: &str`. Output: `CreateEmbed`. Uses: `fit_to_limit`. Used
-/// by: `command/registration_helpers.rs`'s `reply_info`/`report_result`, `cycle_news.rs`'s
-/// `run_prank`, `handler_event.rs`'s `guild_create`.
 pub fn info_embed(title: &str, description: &str) -> CreateEmbed {
     CreateEmbed::new()
         .title(title)
@@ -252,8 +233,7 @@ pub fn info_embed(title: &str, description: &str) -> CreateEmbed {
 }
 
 // an empty section shows as "—" on the card: faint, but the layout doesn't break
-/// Input: `s: &str`. Output: `String` — `"—"` if `s` is blank, else `fit_to_limit(s,
-/// FIELD_LIMIT)`. Used by: `mind_embeds` above.
+/// Non-empty fields are capped at `FIELD_LIMIT`.
 fn dash_if_empty(s: &str) -> String {
     let t = s.trim();
     if t.is_empty() {
@@ -264,8 +244,7 @@ fn dash_if_empty(s: &str) -> String {
 }
 
 // person detail menu: most recently changed, label name + score, description holds tags/note
-/// Input: none. Output: `Vec<CreateSelectMenuOption>` — up to `PERSON_MENU_LIMIT` options.
-/// Uses: `memory::person_summaries`/`trim`. Used by: `mind_components` below.
+/// Offers at most `PERSON_MENU_LIMIT` people.
 fn person_options() -> Vec<CreateSelectMenuOption> {
     memory::person_summaries()
         .into_iter()
@@ -295,10 +274,6 @@ fn person_options() -> Vec<CreateSelectMenuOption> {
         .collect()
 }
 
-/// Input: none. Output: `Vec<CreateActionRow>` — the person select-menu row (if any people
-/// exist) plus the Topics/Events/Bot-summary button row. Uses: `person_options`,
-/// `MIND_PERSON_PICK`/`MIND_TOPICS`/`MIND_EVENTS`/`MIND_SUMMARY`. Used by: `mind_message`
-/// below.
 pub fn mind_components() -> Vec<CreateActionRow> {
     let mut rows: Vec<CreateActionRow> = Vec::new();
     let options = person_options();
@@ -322,9 +297,6 @@ pub fn mind_components() -> Vec<CreateActionRow> {
     rows
 }
 
-/// Input: `state: &State`. Output: `CreateInteractionResponseMessage` — the ephemeral
-/// `/zihin` reply. Uses: `mind_embeds`, `mind_components`. Used by: `Bot::cmd_mind`
-/// (`command/cards.rs`), the only caller.
 pub fn mind_message(state: &State) -> CreateInteractionResponseMessage {
     CreateInteractionResponseMessage::new()
         .ephemeral(true)
@@ -334,10 +306,7 @@ pub fn mind_message(state: &State) -> CreateInteractionResponseMessage {
 
 // ---------- detail modals: each topic in its own labeled field ----------
 
-/// Input: `title`/`custom_id: &str`; `sections: Vec<Section>` (consumed). Output:
-/// `CreateModal` — one `InputText` field per non-empty section, or a single placeholder
-/// field (`modal.empty_value`) if all were empty. Uses: `memory::trim`. Used by:
-/// `person_modal`/`topics_modal`/`events_modal`/`summary_modal` below.
+/// Empty sections are omitted; if all are empty, supplies a single placeholder field.
 fn build_modal(title: &str, custom_id: &str, sections: Vec<Section>) -> CreateModal {
     let filled: Vec<Section> = sections
         .into_iter()
@@ -377,9 +346,6 @@ fn build_modal(title: &str, custom_id: &str, sections: Vec<Section>) -> CreateMo
 }
 
 // person card: identity / impression / tags / facts / recent events in separate fields
-/// Input: `id: &UserKey` — a platform user identity. Output: `CreateModal`. Uses:
-/// `memory::read_person`, `Section::new`, `build_modal`. Used by:
-/// `Handler::interaction_create` (`handler_event.rs`), for the `MIND_PERSON_PICK` select.
 pub fn person_modal(id: &UserKey) -> CreateModal {
     let p = memory::read_person(id);
     // Keep Discord's visible ID and modal ID unchanged; selectors carry domain keys.
@@ -457,9 +423,6 @@ pub fn person_modal(id: &UserKey) -> CreateModal {
 }
 
 // topics: most recently changed with their notes, the rest as a plain name list
-/// Input: none. Output: `CreateModal`. Uses: `memory::topic_summaries`, `Section::new`,
-/// `build_modal`. Used by: `Handler::interaction_create` (`handler_event.rs`), for the
-/// `MIND_TOPICS` button.
 pub fn topics_modal() -> CreateModal {
     let topics = memory::topic_summaries();
     let mut sections: Vec<Section> = Vec::new();
@@ -493,9 +456,6 @@ pub fn topics_modal() -> CreateModal {
 }
 
 // events: one field per month, each month's most recent entries
-/// Input: none. Output: `CreateModal`. Uses: `memory::event_months`, `month_name`,
-/// `Section::new`, `build_modal`. Used by: `Handler::interaction_create`
-/// (`handler_event.rs`), for the `MIND_EVENTS` button.
 pub fn events_modal() -> CreateModal {
     let mut sections: Vec<Section> = Vec::new();
     for (month, lines) in memory::event_months(3) {
@@ -518,10 +478,6 @@ pub fn events_modal() -> CreateModal {
 }
 
 // bot summary: status / tokens / myself / agenda in separate fields
-/// Input: `state: &State`. Output: `CreateModal`. Uses: `growth::stage`/`days`,
-/// `sleep::is_awake`, `travel::now`, `token_summary`, `memory::trim`, `Section::new`,
-/// `build_modal`. Used by: `Handler::interaction_create` (`handler_event.rs`), for the
-/// `MIND_SUMMARY` button.
 pub fn summary_modal(state: &State) -> CreateModal {
     let growth = &state.growth;
     let metrics = &state.metrics;
@@ -567,10 +523,6 @@ pub fn summary_modal(state: &State) -> CreateModal {
 
 // ---------- /durum and /yardim ----------
 
-/// Input: `state: &State`. Output: `CreateInteractionResponseMessage` — the ephemeral
-/// `/durum` reply. Uses: `growth::stage`/`days`, `sleep::is_awake`, `travel::now`,
-/// `version_text`, `token_summary`, `fit_to_limit`. Used by: `Bot::cmd_status`
-/// (`command/cards.rs`), the only caller.
 pub fn status_message(state: &State) -> CreateInteractionResponseMessage {
     let metrics = &state.metrics;
     let growth = &state.growth;
@@ -621,10 +573,6 @@ pub fn status_message(state: &State) -> CreateInteractionResponseMessage {
         .embed(embed)
 }
 
-/// Input: none. Output: `CreateInteractionResponseMessage` — the ephemeral `/yardim` reply.
-/// Uses: `strings::t` (`help.text`, `command/registration_table.rs`'s Rust `HELP` const is
-/// gone — the text lives in `langs/tr.json` now). Used by: `Bot::cmd_help`
-/// (`command/cards.rs`), the only caller.
 pub fn help_message() -> CreateInteractionResponseMessage {
     CreateInteractionResponseMessage::new()
         .ephemeral(true)
@@ -643,8 +591,6 @@ pub fn help_message() -> CreateInteractionResponseMessage {
 
 // ---------- settings panel (buttons) ----------
 
-/// Input: `state: &State`. Output: `CreateEmbed` — the settings panel's description/footer.
-/// Uses: `sleep::is_awake`, `version_text`, `travel::now`. Used by: `settings_message` below.
 pub fn settings_embed(state: &State) -> CreateEmbed {
     let sleep_status = if sleep::is_awake(state) {
         if state.forced_awake_until > now_unix() {
@@ -677,10 +623,7 @@ pub fn settings_embed(state: &State) -> CreateEmbed {
         .footer(CreateEmbedFooter::new(strings::t("settings.footer")))
 }
 
-/// Input: `state: &State`. Output: `Vec<CreateActionRow>` — the thinking-mode button row
-/// (highlighting the active mode) plus the debug/wake/sleep button row. Uses:
-/// `ThinkingMode::file_value`, `SETTING_THINKING`/`SETTING_DEBUG`/`SETTING_WAKE`/
-/// `SETTING_SLEEP`, `sleep::is_awake`. Used by: `settings_message` below.
+/// Highlights the current thinking mode and offers debug/wake/sleep controls.
 pub fn settings_components(state: &State) -> Vec<CreateActionRow> {
     // same words as /dusunme's own choice labels (cmd.dusunme.choice.*), not
     // ThinkingMode::label() — that returns the descriptive form ("gizli"/"kapalı") used in
@@ -731,10 +674,6 @@ pub fn settings_components(state: &State) -> Vec<CreateActionRow> {
 }
 
 // /ayarlar (ephemeral) and the in-place refresh after a button press (UpdateMessage) share this body
-/// Input: `state: &State`; `ephemeral: bool`. Output: `CreateInteractionResponseMessage`.
-/// Uses: `settings_embed`, `settings_components`. Used by: `Bot::cmd_settings`
-/// (`command/cards.rs`, `/ayarlar`), `Handler::setting_button` (`handler_buttons.rs`,
-/// panel refresh).
 pub fn settings_message(state: &State, ephemeral: bool) -> CreateInteractionResponseMessage {
     CreateInteractionResponseMessage::new()
         .ephemeral(ephemeral)
@@ -747,9 +686,6 @@ pub fn settings_message(state: &State, ephemeral: bool) -> CreateInteractionResp
 // guild commands: called on every ready, overwrites what's on Discord (idempotent); a
 // guild command shows up instantly, a global command is delayed. The list comes from
 // command.rs's definitions() table — a single source, never kept in two places by hand.
-/// Input: `http: &Http`; `guild: GuildId`. Output: `Result<(), BotError>`. Uses:
-/// `command::definitions`. Used by: `Handler::ready` (`handler_event.rs`), once per guild
-/// on every connect/reconnect.
 pub async fn register_commands(http: &Http, guild: GuildId) -> Result<(), BotError> {
     let commands: Vec<CreateCommand> = command::definitions()
         .iter()

@@ -1,167 +1,104 @@
 # Architecture
 
-## One sentence
-Discord events → chat engine (short chats of 12 messages) → each reply's "system message" =
-core personality + what the agents have taught it + what's retrieved from memory for that
-chat + the task; a finished chat → agents update memory and personality →
-`durum/hafiza.redb` (+ `durum/arsiv/`).
+Discord events enter the chat engine. Replies combine the core persona, evolving notes, retrieved memory, and the current task. Finished chats are queued for background memory analysis. This changes reply context, not model weights; there is no fixed 12-message conversation limit.
 
-## Layers
+## Data boundaries
 
-```
-┌──────────────────────── discord (serenity) ────────────────────────┐
-│ ready · guild_create · guild_member_addition · message              │
-└───────────────┬────────────────────────────────────────────────────┘
-                ▼
-┌──────────────────────── chat engine (main.rs) ──────────────────────┐
-│ State (single Mutex) · Chat{history,counter,hacked} · reply() · generate()│
-│ cycles: news · poke · prank · wanderer · sleep                      │
-└───────┬───────────────────────┬────────────────────────────────────┘
-        ▼                       ▼
-┌── openrouter (ask_raw) ───┐  ┌── memory (memory.rs) ──────────────────┐
-│ ask → generate (with personality)│  │ INDEX.md · kisiler/ · konular/ ·  │
-│ ask → analyze (no personality)│     │ olaylar/ · arsiv/ · retrieve() · limits │
-└──────────────────────────┘  └───────────────────────────────────────┘
-        ▲                       ▲
-┌── agents (agents.rs, agenda.rs) ──────────────────────────────────┐
-│ profiler · diarist · coach · critic · summarizer · news_agent ·     │
-│ image_commenter · wanderer                                          │
-└─────────────────────────────────────────────────────────────────────┘
-        ▲
-┌── calendar (sleep.rs, travel.rs) ── holds no state, computes from the clock ──┐
-└─────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    Discord[Discord events / accessible history] --> Chat[Chat engine]
+    Clock[Sleep and growth stages] --> Chat
+    Chat --> Model[OpenRouter / Mistral / configured endpoint]
+    Model --> Reply[Replies / silence / reactions]
+    Reply --> Discord
+    Discord --> Agents[Background analysis]
+    Web[News / page reading] --> Agents
+    Agents --> Model
+    Agents --> Memory[Local redb records]
+    Memory --> Chat
+    Memory --> Agents
+    Memory --> Archive[Local overflow archive]
 ```
 
-## File map
-| File | Lines | Role |
+Selected messages, saved notes, and optionally images leave the host for model processing. A first scan reads up to 14 days of accessible text history, subject to configured scope and permissions. Observation continues while asleep. Firecrawl receives URLs/search queries when configured. [Privacy and retention](setup-guide.md#privacy) are deployment concerns, not properties supplied by redb.
+
+## Source layout
+
+| Entry point | Responsibility |
+|---|---|
+| `src/main.rs`, `src/bot/setup.rs` | process/configuration and startup |
+| `src/bot/types/` | shared state and limits |
+| `src/bot/handler/` | Discord events, scope filters, willingness decisions |
+| `src/bot/chat/` | conversation turns and research |
+| `src/bot/provider/` | requests, personality/analysis split, streaming and send paths |
+| `src/bot/text/` | pure reply parsing and text helpers |
+| `src/bot/cycle/` | background loops, memory queues and actions |
+| `src/command.rs`, `src/command/`, `src/modal.rs` | slash registration, handlers and UI cards |
+| `src/agents.rs`, `src/agenda.rs` | analysis and web/news work |
+| `src/memory.rs`, `src/migrate.rs` | redb records, retrieval, summarization/archive support and legacy import |
+| `src/growth.rs`, `src/sleep.rs`, `src/travel.rs` | growth stages, clock/sleep, Turkish calendar |
+| `src/prompts.rs`, `src/strings.rs`, `src/lang.rs` | language dispatch; `BOT_LANG` defaults to `en`, fixed for the process |
+| `src/chat_cli.rs`, `src/init.rs` | terminal bench and configuration wizard |
+
+The grouped bot files compile through `include!` in the root module, and command files similarly share their parent scope. This preserves access to private items and macros without duplicating imports. The tradeoff is that a file boundary is not a Rust module boundary; find the aggregator before changing visibility or moving definitions. Detailed navigation: [modules](modules.md).
+
+## State and concurrency
+
+Serenity is vendored under `vendor/serenity` for planned in-tree changes; the Cargo registry patch keeps builds using that tree.
+
+`Bot` owns a `Mutex<State>` and an HTTP client. State includes open chats, channel histories, memory context, sleep plans, queued observations and runtime flags. Take a short lock to snapshot inputs, drop it before network/model awaits, and take another short lock to apply results. **No state/cache lock crosses `.await`.** A per-channel RAII busy guard clears reply ownership on normal exit or unwinding.
+
+Conversation uses `generate` / `generate_stream`, with the persona and evolving context. Background extraction/evaluation uses `analyze`, without the conversational persona. Image commentary is intentionally a talking path.
+
+## Context and storage
+
+A reply combines the fixed language-specific persona, growth stage, temperament, group profile, memory index, bounded retrieved person/topic/event records, agenda, current self-state, clock/travel context, corrections, mood, and task. Retrieval has a 6,000-character budget; the index and fixed profile context are additional. Model output is parsed as a bounded line protocol: text, silence, or Unicode reaction. [Protocol details](flows.md#output-protocol-every-reply-with-personality-goes-through-this).
+
+`durum/hafiza.redb` stores text under path-like keys; person keys use Discord user IDs, topic keys use slugs. Overflow archives in `durum/arsiv/` are real files for human inspection, not bot retrieval. Channel history is bounded separately. See [state files](state-files.md).
+
+## Background work
+
+| Agent | When | Produces |
 |---|---|---|
-| `src/main.rs` | ~90 | `mod`/`use` header, `include!("bot/<group>/<group>.rs")`, `main` |
-| `src/bot/<group>/*.rs` | 7 subfolders, ~38 files, most <200 | main.rs's former content split by topic (below) |
-| `src/command.rs` + `src/command/*.rs` | ~10 files, all <200 | slash command handler (below) |
-| `src/modal.rs` | ~710 | embed/component/modal builders (`/zihin` card, detail modals, settings panel, `info_embed`), slash registration `register_commands` |
-| `src/chat_cli.rs` | ~170 | `cargo run -- chat`: discord-less terminal chat rig (`impl Bot`), for trying out the output protocol |
-| `src/agents.rs` | ~420 | background agents (`impl Bot` block), `News`, `random_image` |
-| `src/memory.rs` | ~1025 | redb memory (`durum/hafiza.redb`): read/write/archive, `Person` format, index, retrieval, limits, dates |
-| `src/migrate.rs` | ~210 | one-time migration from the old `durum/` markdown tree to `hafiza.redb` (`cargo run -- migrate-durum`) |
-| `src/agenda.rs` | ~265 | Sözcü RSS, html cleanup, firecrawl, `wander` agent, `gundem.md` |
-| `src/sleep.rs` | ~130 | sleep schedule, local time, sleepless night, "ŞU AN" line |
-| `src/travel.rs` | ~240 | yearly event calendar, travel window, "ŞU AN" addendum |
-| `src/prompts.rs` | 33 | `include_str!` constant for each prompt |
-| `prompts/tr/*.md` | 31 files | prompt texts (file name+content stay Turkish, see AGENTS.md item 8) |
-| `langs/tr.json` | 1 file | Discord-facing text (command name/description, embed, button — see `docs/prompts.md`) |
-| `Cargo.toml` | | serenity(cache), tokio, reqwest(rustls), serde, serde_json, dotenvy, rand, base64 |
+| profiler | first-join scan and awake 6h cycle | group profile (`profil.md`) |
+| diarist | finished chats and queued observations | person/topic/event notes and self-state |
+| coach | startup when temperament is missing, awake 6h cycle | temperament/interests (`huy.md`) |
+| critic | finished chats | correction notes (`duzeltmeler.md`) |
+| summarizer | record exceeds its limit | shorter record, raw overflow archive |
+| news_agent | 6h cycle, with sleep-time stash | group-relevant news from Hacker News/configured RSS |
+| wanderer | 4h cycle while awake | news opinions (`gundem.md`) |
+| image_commenter | image-prank time | personality-aware image comment |
+| mood | chat opens, then every 4 turns | transient chat mood |
 
-Modules are children of `main.rs`; they reach the root's private items (constants, `State`,
-`Bot`, helpers) via `use super::*`. Within the same crate, `impl Bot` blocks are spread across
-files.
+Schedules can skip work while asleep/traveling. Growth thresholds are defined in `src/growth.rs`, not learned; name selection is gradual and depends on the established stage. Travel runs only for Turkish. All reply and analysis calls count toward provider usage.
 
-### `src/bot/*.rs` and `src/command/*.rs`: `include!`, not a real `mod`
-Both split the former single-file content of main.rs (respectively command.rs) into files by
-topic, mostly under 200 lines — but wired in with `include!`, not `mod` (see
-`docs/decisions.md`): so that visibility, `use super::*`, and the `reply_budget!` macro's scope
-never change anywhere, the files compile as if they were written in the same (root) module; the
-other six sibling modules (`agents.rs, agenda.rs, command.rs, modal.rs, chat_cli.rs, sleep.rs`)
-were never touched. Once `src/bot/` had piled up 38 files in a single folder (2026-09-03) it was
-moved into 7 topic-based subfolders — each subfolder has its own aggregator file
-(`<group>/<group>.rs`, carrying the same name as the folder), which in turn collects the other
-files in that folder via `include!("...")` (relative to the folder, no `bot/` prefix); `main.rs`
-only calls `include!("bot/<group>/<group>.rs")`:
-`types/` (constants+`State`/`Bot`/`Chat`/`ChatMessage`/`ThinkingMode`), `text/` (pure
-text/protocol helpers, `Reply`, `parse_reply`), `provider/` (the AI call layer — split across
-six separate `impl Bot` blocks, from `ask_raw` to `send_reply`), `chat/` (the `reply` loop,
-`research`), `cycle/` (growth+memory scanning+background cycles+actions), `handler/` (discord
-events — `handler_event.rs`+`handler_buttons.rs`; since `impl EventHandler for Handler` has to
-be a single trait impl, `handler_event.rs` stayed at 423 lines, a Rust E0119 constraint),
-`tests/` (main.rs's former test module, `tests_1..4.rs`). `setup.rs` (`Bot::setup`, startup)
-stayed folderless, directly under `src/bot/`, since it's a single file. `src/command/` groups
-(not put into folders, 7 files is already few): `registration_*` (registration table+helpers),
-`cards.rs`/`actions.rs`/`settings.rs` (command bodies), `remaining.rs`
-(`wake`/`put_to_sleep`/`set_debug`/`model_exists`).
-
-### Discord boundary characterization (step 0)
-The runtime is still Discord-only, with Serenity types and `include!` shared scope. Step 0
-adds characterization fixtures around the existing ingress and UI builders; it does not
-introduce domain IDs, a transport trait, a memory-key migration, or another platform.
-
-- **Ingress (`src/bot/tests/tests_4.rs`):** bot/webhook/DM exclusions and configured
-  guild/channel scope, Serenity's safe-content decoding, option-based global-name fallback,
-  custom-reaction labels, and first-image selection. Image eligibility is the case-sensitive
-  `image/` MIME prefix, not filename extension or dimensions; analysis-off leaves the
-  original safe text without image markers. Image-only messages retain the existing Turkish
-  marker even when the UI language is English.
-- **Slash registration (`src/command.rs`):** the ordered 16-command table and serialized
-  `CreateCommand`/option shape. All six arguments are optional; sleep has minimum 1 and no
-  maximum. Thinking choices keep `goster/gizle/sessiz/kapat` and debug keeps `ac/kapat`
-  on the wire while their labels and argument names follow `BOT_LANG`. The registration
-  itself supplies no owner permission restriction; `/model` ownership is enforced by its
-  existing executor.
-- **Private UI (`src/modal.rs`):** status, help, mind, and the initial settings card serialize
-  with ephemeral flag 64, one rich embed, empty attachments, and no plain-text content or
-  explicit allowed-mentions field. The settings refresh uses `UpdateMessage` (type 7) with
-  explicit flags 0, otherwise the same card/components. Its two button rows retain the
-  Turkish thinking-mode suffixes, active-mode/debug styles, and awake/asleep disabled states.
-  The mind detail buttons retain their existing IDs; the person-menu row is optional.
-  Status adds the token breakdown only when categories exist. Info-embed descriptions fit
-  1024 Unicode scalar values, including the existing Turkish truncation marker.
-
-These fixtures are offline builder/decoder characterizations, not live Discord API probes.
-The existing 93-test baseline is retained as an acceptance requirement; integration checks
-are recorded separately in the progress log.
-
-### Domain ingress (step 1)
+## Platform boundary
 
 `platform::types` owns opaque, case-sensitive, shared `Arc<str>` identities:
 `UserKey`, `SpaceKey`, `RoomKey`, `MessageKey`, `ThreadKey`, and `EventKey`.
-Each durable key carries the platform and native scope, not credentials or a display
-name. `ConnectionId` selects a configured session and is deliberately separate.
-Typed constructors escape UTF-8 components reversibly; parsers reject unsafe or
-noncanonical representations. A Slack timestamp stays text, and a Telegram group
-ID can remain negative. The CLI bench uses `terminal:room:local:bench`.
+Durable identity contains the platform and native scope, never credentials or a
+display name. `ConnectionId` identifies a configured session independently.
+Typed constructors reversibly escape UTF-8 components, and parsers reject unsafe
+or noncanonical representations. Slack timestamps stay text, Telegram room IDs
+can remain negative, and the CLI bench uses `terminal:room:local:bench`.
 
-Discord decoding lives in `platform::discord::events`: native authors, safe text,
-mentions, replies, first-image descriptors and enriched reactions become domain
-payloads before personality decisions. `IncomingMessage`, `ReactionEvent`,
-`UserRef`, `RoomRef`, `MessageRef`, `ChatEvent`, and `EventEnvelope` are the shared
-ingress contract. `ConversationKey` includes optional topic/thread identity for
-future adapters; ordinary Discord routes retain their existing room behavior.
-Account identity is tracked per `ConnectionId`. Temporary native conversion
-helpers are restricted to Discord-facing transport/UI and v1 storage edges during
-the staged cutover; no other transport is enabled by this extraction.
+`platform::discord::events` converts SDK/cache data into normalized users, rooms,
+safe text, structured mentions/replies, attachments and enriched reactions before
+personality decisions. Shared ingress types are `IncomingMessage`, `ReactionEvent`,
+`ChatEvent`, and `EventEnvelope`; account identity is connection-local.
+`ConversationKey` includes optional topic/thread scope for adapter routing.
+During the staged extraction, explicit native conversions remain only at
+Discord-facing transport/UI and the v1 storage boundary. Discord is the only
+enabled runtime transport.
 
-`platform::capabilities::Capabilities` describes room-visible permissions and
-features, including history/decryption, text count units and limits, edit cadence,
-nickname scope, commands/components, private result delivery and uploads.
-Unknown permissions use `Capabilities::unavailable()`, not optimistic success.
-`OutputLimits::DISCORD` retains the 1900-Unicode-scalar protocol budget.
+Capabilities describe usable room permissions: ordinary-message visibility,
+history/decryption, replies/threads, sending/reactions/edits/deletes/typing,
+nickname scope, private results, rich UI, output count units/limits, edit cadence
+and upload constraints. Unknown rooms use unavailable capabilities, not assumed
+success. Discord retains a 1900-Unicode-scalar output budget.
 
-
-## Shared state
-A single `Mutex<State>` (`Bot::state()` is poison-resilient). Inside it: bot name, favorite's
-name, agent outputs (profile, temperament, corrections, myself, index, agenda), raw memory
-(`VecDeque<String>`, 2000 lines), the bot's own messages (50), open chats, busy channels,
-banned channels, channels awaiting news, posted news ids, scanned guilds, sleep schedules,
-mentions received while asleep, travel-announcement flags. The lock is never held across a
-single `.await`.
-
-## Every reply's system message (system_text)
-In order, empty ones are skipped:
-1. `kisilik.md` (`{ad}`, `{favori_satiri}` filled in)
-2. HUYUN — `huy.md` (coach)
-3. BU GRUP HAKKINDA BİLDİKLERİN — `profil.md` (profiler)
-4. HAFIZA DİZİNİ — `INDEX.md` (index: person+score+tag, topics, event count)
-5. BU SOHBET İÇİN HAFIZADAN GETİRİLENLER — `memory::retrieve` (budget 6000 chars)
-6. GÜNDEM — `gundem.md` last 3 entries (wanderer)
-7. SENİN SON HALİN — `kendim.md` (diarist)
-8. ŞU AN — date/time/day + travel status (sleep is only a reply gate in code)
-9. KENDİNE NOTLAR — `duzeltmeler.md` (critic)
-10. ŞU ANKİ GÖREVİN — that call's instruction (farewell, hack, welcome, message from the
-    road...)
-
-## Agent schedule
-| When | Agents |
-|---|---|
-| on connecting to a guild (once per guild) | read_history → profiler → coach (if temperament is empty) |
-| 10 min after startup, then every 4 hours (while awake) | wander |
-| every 6 hours (while awake) | profiler → diarist(observation) → coach → news_agent+share; if traveling, only profiler+coach |
-| every finished chat | diarist(chat) → summarizer → critic |
-| once a minute | sleep-schedule check, reply to pending mentions on waking |
+Offline characterization tests preserve input exclusions, first MIME image/off
+selection, safe content, welcome and reply-user mentions, custom emoji labels,
+thought/stealth rendering, slash registration and private UI builder semantics.
+They are not live Discord network probes. Persisted settings-button `kapali`
+remains distinct from slash option `kapat`; existing Discord quirks are retained.

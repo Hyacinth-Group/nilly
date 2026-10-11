@@ -19,9 +19,8 @@ mod en {
     pub const RAW: &str = include_str!("../langs/en.json");
 }
 
-/// Input: `lang: Lang`. Output: `&'static HashMap<String, String>` — that language's parsed
-/// table, built once and reused. Panics on malformed JSON (a build-time asset, not user
-/// input — should fail loudly, not degrade silently). Used by: `t` below.
+/// Parses each language table once. Malformed bundled JSON is a programming error
+/// and panics rather than silently degrading.
 fn table(lang: Lang) -> &'static HashMap<String, String> {
     static TR: OnceLock<HashMap<String, String>> = OnceLock::new();
     static EN: OnceLock<HashMap<String, String>> = OnceLock::new();
@@ -35,11 +34,9 @@ fn table(lang: Lang) -> &'static HashMap<String, String> {
     }
 }
 
-/// Looks up a UI string by key in the active language's table. Input: `key: &'static str`.
-/// Output: `&'static str` — the value, or `key` itself (logged once as an error) if the key
-/// is missing — a typo'd key degrades visibly instead of panicking command registration.
-/// Used by: `command/*.rs`, `modal.rs`, and every other Discord-facing text call site (was
-/// a Turkish string literal before the language split).
+/// Looks up a UI string in the active language.
+/// Missing keys return the key itself and log once, making typos visible without
+/// panicking during command registration.
 pub fn t(key: &'static str) -> &'static str {
     match table(Lang::current()).get(key) {
         Some(v) => v.as_str(),

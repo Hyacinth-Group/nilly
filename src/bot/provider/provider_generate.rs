@@ -1,10 +1,5 @@
 impl Bot {
     /// Builds the fixed/variable system-message pair for a chat reply.
-    /// Input: `&self`; `history: &[ChatMessage]` — the chat so far (used to find who's
-    /// talking); `instruction: &str` — this turn's task text. Output: `(fixed, variable,
-    /// bot_name): (String, String, String)`. Uses: `memory::keywords`, `self.state()`,
-    /// `memory::retrieve`, `system_text`. Used by: `generate`/`generate_stream` below —
-    /// their shared setup step.
     fn chat_system(&self, history: &[ChatMessage], instruction: &str) -> (String, String, String) {
         let mut participants: Vec<String> = Vec::new();
         let mut texts: Vec<String> = Vec::new();
@@ -31,13 +26,6 @@ impl Bot {
     // budget None means max_tokens isn't sent; chat replies get their budget from reply_budget!.
     // category only feeds the token metrics breakdown (!durum), it has no effect on the request.
     /// The single non-streaming personality-generation entry point (see AGENTS.md rule 6).
-    /// Input: `&self`; `history: &[ChatMessage]`; `instruction: &str`; `budget: Option<u32>`;
-    /// `category: &'static str`. Output: `Result<String, BotError>` — the cleaned reply text.
-    /// Uses: `chat_system`, `self.ask_split`, `clean`. Used by: fallback/repeat paths in
-    /// `chat_reply.rs`/`provider_send_stream.rs`, `Bot::post_problem`/`post_news`/
-    /// `run_prank`/`pick_name` (`cycle_news.rs`, `cycle_growth.rs`), `poke_cycle`
-    /// (`cycle_background.rs`), `handler_event.rs`'s `guild_member_addition`,
-    /// `Bot::evaluate_waking` (`cycle_sleep.rs`), `Bot::chat_cli` (`chat_cli.rs`).
     async fn generate(
         &self,
         history: &[ChatMessage],
@@ -54,10 +42,7 @@ impl Bot {
 
     // opens the chat reply as a stream; chunks are read from the reader as they arrive
     /// The streaming counterpart of `generate` (see AGENTS.md rule 6).
-    /// Input: same as `generate`. Output: `Result<(StreamReader, String), BotError>` — the
-    /// open reader plus the bot's current name (for `strip_name` while streaming). Uses:
-    /// `chat_system`, `self.ask_raw_stream`. Used by: `Bot::reply` (`chat_reply.rs`), the
-    /// only caller.
+    /// Also returns the bot's current name for stripping the prefix while streaming.
     async fn generate_stream(
         &self,
         history: &[ChatMessage],
@@ -74,11 +59,6 @@ impl Bot {
 
     // personality-free, plain analysis: used by the agents
     /// The single personality-free analysis entry point (see AGENTS.md rule 6).
-    /// Input: `&self`; `text: &str` — the material to analyze; `instruction: &str` — the
-    /// task; `max_tokens: u32`; `category: &'static str`. Output: `Result<String, BotError>`.
-    /// Uses: `user`, `ANALYST` (`prompts.rs`), `self.ask`. Used by: `Bot::profiler`/`diarist`/
-    /// `coach`/`critic`/`summarizer`/`news_agent` (`agents.rs`), `Bot::wander`
-    /// (`agenda.rs`), `Bot::evaluate_waking` (`cycle_sleep.rs`).
     async fn analyze(
         &self,
         text: &str,
@@ -97,11 +77,7 @@ impl Bot {
     // profile+index are in the fixed block (cache_control): they overlap with the same
     // content used in the main chat, and only change every 6 hours — kept separate so
     // they aren't sent at full price on every single message.
-    /// Input: `&self` (reads recent messages + profile/index/name from `self.state()`).
-    /// Output: `Option<(u8, String)>` — (score 0-10, reason), or `None` if there's no
-    /// context yet or the call fails. Uses: `recent_messages`, `WILLINGNESS`/`ANALYST`
-    /// (`prompts.rs`), `self.ask_split`, `parse_willingness` (`text_3.rs`). Used by:
-    /// `Handler::message` (`handler_event.rs`), the only caller.
+    /// Returns a 0–10 score and reason, or `None` without context or on failure.
     async fn willingness(&self) -> Option<(u8, String)> {
         let (context, profile, index, bot_name) = {
             let s = self.state();
@@ -135,10 +111,7 @@ impl Bot {
     // among the pending names.
     // instruction is in the fixed block (cache_control): it doesn't include profile/index,
     // but at least it's constant on its own.
-    /// Input: `&self`; `waiting: &[String]` — names of people whose messages haven't been
-    /// answered yet. Output: `Option<String>` — the chosen name, or `None` on failure. Uses:
-    /// `recent_messages`, `TARGET_PICK`/`ANALYST` (`prompts.rs`), `self.ask_split`,
-    /// `extract_target` (`text_3.rs`). Used by: `Bot::reply` (`chat_reply.rs`).
+    /// Returns `None` if target selection fails.
     async fn pick_target(&self, waiting: &[String]) -> Option<String> {
         let (context, bot_name) = {
             let s = self.state();
@@ -163,11 +136,6 @@ impl Bot {
     // determines this chat's mood: a cheap mini call, only made by `reply` when a chat
     // opens and every few turns after (not on every message). Neutral/low intensity or an
     // error -> None, which the caller treats as "no clear mood".
-    /// Input: `&self`; `history: &[ChatMessage]` — the chat so far (images stripped before
-    /// sending, see comment below). Output: `Option<String>` — `"<state> (<intensity>)"`,
-    /// or `None` if empty history / neutral / call failure. Uses: `MOOD`/`ANALYST`
-    /// (`prompts.rs`), `self.ask_split`, `extract_mood` (`text_3.rs`). Used by: `Bot::reply`
-    /// (`chat_reply.rs`).
     async fn determine_mood(&self, history: &[ChatMessage]) -> Option<String> {
         if history.is_empty() {
             return None;
@@ -198,13 +166,8 @@ impl Bot {
 
     // mentions always go out disabled: even if the model writes @everyone, nobody gets pinged.
     // everything sent lands in own_messages, which the coach and critic read from.
-    /// Sends one plain Discord message and records it. Input: `&self`, `ctx: &Context`,
-    /// `channel: &RoomKey`, `text: &str`, `ping: Option<&UserKey>` (the one user allowed to
-    /// be mentioned), `file: Option<&PathBuf>` (attachment), `reply_to: Option<&MessageKey>`
-    /// (Discord reply-to target). Output: none (logs and returns early on failure). Uses:
-    /// `CreateAllowedMentions`/`CreateMessage`/`CreateAttachment`, `self.state()`,
-    /// `channel_note`. Used by: `send_lines`/`send_reply` (`provider_send_line.rs`), and
-    /// directly wherever a single message goes out outside the line-by-line protocol.
+    /// Sends one message and records it; send failures are logged.
+    /// `ping` is the only user allowed to be mentioned.
     async fn send(
         &self,
         ctx: &Context,

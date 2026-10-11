@@ -1,6 +1,3 @@
-/// Input: `api_url: &str`. Output: `bool` — whether `api_url` points at OpenRouter (the only
-/// target `cache_control` is added for, see the file-end comment). Used by: `system_json`
-/// below.
 fn supports_cache(api_url: &str) -> bool {
     api_url.contains("openrouter.ai")
 }
@@ -8,10 +5,6 @@ fn supports_cache(api_url: &str) -> bool {
 // turns the system message into an OpenAI-compatible block: plain text if variable is
 // empty, otherwise a fixed+variable two-block text array; the fixed block is only marked
 // with cache_control when the request is going to openrouter
-/// Input: `fixed`/`variable: &str` — the two system-message parts (see `system_text`);
-/// `api_url: &str` — decides whether to mark `fixed` with `cache_control`. Output:
-/// `serde_json::Value` — the `{"role":"system", "content": ...}` request block. Uses:
-/// `supports_cache`. Used by: `Bot::ask_split`/`ask_raw_stream` (`provider_ask.rs`).
 fn system_json(fixed: &str, variable: &str, api_url: &str) -> serde_json::Value {
     if variable.is_empty() {
         return serde_json::json!({ "role": "system", "content": fixed });
@@ -30,12 +23,6 @@ fn system_json(fixed: &str, variable: &str, api_url: &str) -> serde_json::Value 
 // index... changes when an agent runs, this is where the prompt cache pays off) and
 // VARIABLE (retrieved memory, time, task)
 /// Assembles the fixed/variable system-message text (see `docs/architecture.md`'s numbered list).
-/// Input: `state: &State` (reads `bot_name`, `favorite_name`, `growth`, `temperament`,
-/// `profile`, `index`, `agenda`, `myself`, `corrections`); `instruction: &str` — this call's
-/// task; `retrieved: &str` — memory retrieved for this chat (empty for agent calls).
-/// Output: `(fixed, variable): (String, String)`. Uses: `FAVORITE_LINE`/`PERSONALITY`
-/// (`prompts.rs`), `growth::stage_text`, `sleep::status_text`, `travel::status_text`. Used
-/// by: `Bot::chat_system` (`provider_generate.rs`), `Bot::image_commenter` (`agents.rs`).
 fn system_text(state: &State, instruction: &str, retrieved: &str) -> (String, String) {
     let p = prompts::current();
     let favorite_line = match &state.favorite_name {
@@ -104,14 +91,6 @@ fn system_text(state: &State, instruction: &str, retrieved: &str) -> (String, St
 
 /// Opens (or returns the existing) `Chat` for a channel, seeding fresh history from the
 /// channel's recent lines and, if given, an already-sent opening message.
-/// Input: `state: &mut State`; `channel: &RoomKey`; `opening: Option<String>` — an opening
-/// reply already sent line-by-line, to fold into history as one assistant turn without
-/// duplication (see comment below). Output: `&mut Chat` — the (new or existing) chat.
-/// Uses: `state.channel_history`, `assistant`/`user`. Used by: `Handler::message`
-/// (`handler_event.rs`), `Bot::post_problem`/`send_news`/`post_news`/`run_prank`
-/// (`cycle_news.rs`), `poke_cycle` (`cycle_background.rs`), `guild_member_addition`,
-/// `sleep_transition`/`evaluate_waking` (`cycle_sleep.rs`), `pick_name` (`cycle_growth.rs`),
-/// `chat_cli.rs`.
 fn start_chat<'a>(state: &'a mut State, channel: &RoomKey, opening: Option<String>) -> &'a mut Chat {
     let mut chat = Chat::default();
     // start from the channel's recent lines, so it knows what's already been discussed
@@ -154,19 +133,13 @@ fn start_chat<'a>(state: &'a mut State, channel: &RoomKey, opening: Option<Strin
     state.chats.entry(channel.clone()).or_insert(chat)
 }
 
-/// Input: `state: &mut State`; `channel: &RoomKey`. Output: `Option<Chat>` — the removed
-/// chat, if one existed (also clears `state.awaiting_comment` for the channel). Used by:
-/// `Bot::close_timed_out` (`cycle_growth.rs`), `Handler::message`'s expired-news-window path
-/// (`handler_event.rs`).
+/// Removes the chat and clears its awaiting-comment flag.
 fn end_chat(state: &mut State, channel: &RoomKey) -> Option<Chat> {
     state.awaiting_comment.remove(channel);
     state.chats.remove(channel)
 }
 
-/// Input: `state: &State`; `channel: &RoomKey`; `generated_incoming: u32` — the
-/// `Chat.incoming` count captured when a reply started generating. Output: `bool` — whether
-/// a newer user message has arrived since then. Used by: `Bot::reply` (`chat_reply.rs`), to
-/// decide whether to loop for another turn instead of exiting.
+/// Detects a user message arriving after reply generation captured `Chat.incoming`.
 fn new_message_arrived(state: &State, channel: &RoomKey, generated_incoming: u32) -> bool {
     state
         .chats

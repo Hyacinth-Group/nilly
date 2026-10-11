@@ -20,9 +20,8 @@ pub enum Lang {
 static CURRENT: OnceLock<Lang> = OnceLock::new();
 
 impl Lang {
-    /// Input: `raw: &str` - `BOT_LANG`'s raw value. Output: `Lang` - empty/`"en"` (any case)
-    /// selects English, `"tr"` selects Turkish; anything else falls back to English with a
-    /// warning. Used by: `current` below.
+    /// Accepts en/tr case-insensitively; empty or unknown values use English,
+    /// with a warning for unknown values.
     fn parse(raw: &str) -> Lang {
         match raw.trim().to_lowercase().as_str() {
             "tr" => Lang::Tr,
@@ -36,8 +35,7 @@ impl Lang {
 
     /// The process-wide language, resolved once (from `BOT_LANG`) and reused for every
     /// later call — first caller wins, matching every other `.env` setting's fixed-at-startup
-    /// behavior. Input: none. Output: `Lang`. Used by: `prompts::current`, `strings::t`,
-    /// `Bot::setup` (to log the choice).
+    /// behavior.
     pub fn current() -> Lang {
         *CURRENT.get_or_init(|| Self::parse(&std::env::var("BOT_LANG").unwrap_or_default()))
     }

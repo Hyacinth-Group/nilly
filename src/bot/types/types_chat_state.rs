@@ -41,9 +41,6 @@ enum ThinkingMode {
 
 impl ThinkingMode {
     /// The Turkish token this mode is persisted as in `durum/dusunme.md`.
-    /// Input: `self`. Output: `&'static str` (`"goster"`/`"gizle"`/`"sessiz"`/`"kapali"`).
-    /// Inverse of `read`. Used by: `handler_buttons.rs`'s `setting_button`,
-    /// `command/settings.rs`'s `cmd_thinking` (both write this back to disk after a change).
     fn file_value(self) -> &'static str {
         match self {
             ThinkingMode::Show => "goster",
@@ -54,8 +51,7 @@ impl ThinkingMode {
     }
 
     /// Loads the persisted thinking mode from disk at startup.
-    /// Input: none. Output: `Self` — parsed from `durum/dusunme.md`, defaulting to `Show` if
-    /// the file is empty or unrecognized. Uses: `memory::read`. Used by: `State::load` below.
+    /// Empty or unrecognized values default to Show.
     fn read() -> Self {
         match memory::read("dusunme.md").trim() {
             "gizle" => ThinkingMode::Hide,
@@ -67,10 +63,6 @@ impl ThinkingMode {
 
     // mode from a command argument; None if not recognized
     /// Parses a `/dusunme` command argument or a settings-panel button id suffix into a mode.
-    /// Input: `arg: &str` — one of the Turkish tokens Discord users type/click (`"göster"`,
-    /// `"gizle"`, `"sessiz"`, `"kapat"`, plus a few spelling/ASCII variants and `"on"`/`"off"`).
-    /// Output: `Option<Self>` — `None` if `arg` isn't recognized. Used by:
-    /// `command/settings.rs`'s `cmd_thinking`, `handler_buttons.rs`'s `setting_button`.
     fn from_arg(arg: &str) -> Option<Self> {
         match arg {
             "göster" | "goster" | "aç" | "ac" | "on" => Some(ThinkingMode::Show),
@@ -82,8 +74,6 @@ impl ThinkingMode {
     }
 
     /// The Turkish display label shown to users (in `/durum`, `/ayarlar`, `/zihin`).
-    /// Input: `self`. Output: `&'static str` (`"göster"`/`"gizli"`/`"sessiz"`/`"kapalı"`).
-    /// Used by: `modal.rs`'s `mind_embeds`/`summary_modal`/`status_message`/`settings_embed`.
     fn label(self) -> &'static str {
         match self {
             ThinkingMode::Show => "göster",
@@ -169,11 +159,7 @@ struct State {
 impl State {
     // reads from disk on restart, so it doesn't start over from nothing
     /// Builds the initial `State` at startup by reading everything persisted under `durum/`.
-    /// Input: none (reads files via `memory::read` and friends). Output: `Self`, with the
-    /// fields listed in the struct doc above populated and everything else left at its
-    /// `Default`. Uses: `memory::read`, `memory::refresh_index`, `agenda::latest_agenda`,
-    /// `growth::load`, `memory::load_channel_history`, `ThinkingMode::read`.
-    /// Used by: `Bot::setup` (`setup.rs`), which wraps the result in `Mutex::new`.
+    /// Non-persisted fields retain their defaults.
     fn load() -> Self {
         State {
             profile: memory::read("profil.md"),
@@ -200,10 +186,7 @@ impl State {
     // links a thought to its reply's message id, so the button in hide mode can find it;
     // the store is capped, oldest entries drop first
     /// Records a reply's thought so the "Show Thought Process" button can retrieve it later.
-    /// Input: `&mut self`; `message` — the domain message key the thought belongs to;
-    /// `thought` — the collapsed thought text. Output: none (mutates `self.thought_store`/
-    /// `self.thought_order`, evicting the oldest entry once there are more than 50).
-    /// Used by: `Bot::send_stream` (`provider_send_stream.rs`), when in `ThinkingMode::Hide`.
+    /// Evicts the oldest thought once the store exceeds 50 entries.
     fn link_thought(&mut self, message: MessageKey, thought: String) {
         self.thought_store.insert(message.clone(), thought);
         self.thought_order.push_back(message);

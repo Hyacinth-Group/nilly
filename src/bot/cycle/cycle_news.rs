@@ -1,9 +1,5 @@
 /// The 6-hourly background cycle: runs the profiler/coach, queues a general observation,
 /// and posts a news item (or stashes one while asleep/skips while traveling).
-/// Input: `bot: Arc<Bot>`; `ctx: Context`. Output: none (runs forever until shutdown).
-/// Uses: `sleep::is_awake`, `bot.news_agent`, `travel::now`, `bot.profiler`/`coach`,
-/// `bot.check_growth`, `recent_messages`, `default_channel`, `bot.send_news`/`post_news`.
-/// Used by: `Handler::ready` (`handler_event.rs`), via `run_cycle("news", ...)`.
 async fn news_cycle(bot: Arc<Bot>, ctx: Context) {
     loop {
         sleep(NEWS_INTERVAL).await;
@@ -65,10 +61,6 @@ async fn news_cycle(bot: Arc<Bot>, ctx: Context) {
 
 impl Bot {
     // posts a small, made-up but believable software gripe, asking "how do I fix this"
-    /// Input: `&self`; `ctx: &Context`; `channel: &RoomKey`. Output: none. Uses:
-    /// `recent_messages`, `self.generate` (with `PROBLEM`), `self.send_lines`, `start_chat`.
-    /// Used by: `poke_cycle` (`cycle_background.rs`, 25% of unprompted turns),
-    /// `Bot::cmd_problem` (`command/actions.rs`, `/sorun`).
     async fn post_problem(&self, ctx: &Context, channel: &RoomKey) {
         let recent = recent_messages(&self.state(), 30);
         match self
@@ -89,10 +81,7 @@ impl Bot {
     }
 
     // picks a news item and posts it to the channel, opening a chat that waits for comments
-    /// Input: `&self`; `ctx: &Context`; `channel: &RoomKey`. Output: `bool` — whether
-    /// something was posted (mirrors `send_news`). Uses: `self.news_agent` (`agents.rs`),
-    /// `send_news`. Used by: `news_cycle` above, `Bot::cmd_news` (`command/actions.rs`,
-    /// `/haber`).
+    /// Returns whether a news item was posted.
     async fn post_news(&self, ctx: &Context, channel: &RoomKey) -> bool {
         let item = match self.news_agent().await {
             Ok(item) => item,
@@ -105,11 +94,7 @@ impl Bot {
     }
 
     // shares an already-picked news item: both this turn's pick and the one stashed while asleep go through here
-    /// Input: `&self`; `ctx: &Context`; `channel: &RoomKey`; `item: agents::News` — the
-    /// item to post. Output: `bool` — `true` once posted (`false` only if the intro call
-    /// fails or the model stays silent). Uses: `self.generate` (with `NEWS_INTRO`),
-    /// `self.send_lines`, `self.send` (the link), `start_chat`, `self.state()`. Used by:
-    /// `news_cycle` above (both the fresh pick and the sleep-stashed one), `post_news` above.
+    /// Returns `false` if the intro call fails or the model stays silent.
     async fn send_news(&self, ctx: &Context, channel: &RoomKey, item: agents::News) -> bool {
         let link = if item.url.starts_with("https://") || item.url.starts_with("http://") {
             item.url.clone()
@@ -151,11 +136,6 @@ impl Bot {
     }
 
     // an image prank; if it's the hacked variant, it opens with the "hacked" bit
-    /// Input: `&self`; `ctx: &Context`; `channel: &RoomKey`; `hack: bool` — plain image
-    /// comment vs. the "hacked" bit. Output: none. Uses: `random_image` (`agents.rs`),
-    /// `self.generate` (hack) / `self.image_commenter` (plain, `agents.rs`), `parse_reply`,
-    /// `strip_name`, `self.send`, `start_chat`. Used by: `prank_cycle`
-    /// (`cycle_background.rs`), `Bot::cmd_prank`/`cmd_hack` (`command/actions.rs`).
     async fn run_prank(&self, ctx: &Context, channel: &RoomKey, hack: bool) {
         let Some(image) = random_image() else {
             if self.stealth {

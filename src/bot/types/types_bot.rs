@@ -9,9 +9,6 @@ struct BusyGuard<'a> {
 }
 
 impl Drop for BusyGuard<'_> {
-    /// Input: `&mut self` (called implicitly when a `BusyGuard` goes out of scope).
-    /// Output: none. Uses: `self.state.lock()`, then removes `self.channel` from
-    /// `State.busy`. See the struct doc above for why this exists.
     fn drop(&mut self) {
         self.state
             .lock()
@@ -65,20 +62,13 @@ struct Bot {
 impl Bot {
     /// Locks and returns the shared state. **Never hold the returned guard across an
     /// `.await`** (see AGENTS.md rule 1) — always drop it before awaiting anything.
-    /// Input: `&self`. Output: `MutexGuard<'_, State>` (poison-tolerant: a prior panic while
-    /// holding the lock doesn't propagate a poison error here, it just recovers the data via
-    /// `unwrap_or_else(|e| e.into_inner())`). Used everywhere `self.state()` appears.
+    /// Recovers the data after mutex poisoning instead of propagating the prior panic.
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     // adds model usage to the session metrics, broken down by category too (!status dumps this)
     /// Folds one API call's token usage into the session-wide metrics.
-    /// Input: `&self`; `category` — the call-site tag (e.g. `"sohbet"`, `"isteklilik"`,
-    /// shown in `/durum`'s breakdown); `usage` — the `Usage` the provider reported.
-    /// Output: none (mutates `self.state().metrics`). Uses: `self.state()`, `now_unix()`,
-    /// `Usage::add`. Used by: `Bot::ask_raw` (`provider_ask_raw.rs`), `Bot::send_stream`
-    /// (`provider_send_stream.rs`) — the two places a provider response's `usage` is read.
     fn add_metric(&self, category: &'static str, usage: Usage) {
         log::debug!(
             "api [{category}]: in={} cache={} out={}",
@@ -97,9 +87,6 @@ impl Bot {
 
     // has this model already been seen refusing to turn reasoning off?
     /// Checks the cache built by `mark_reasoning_mandatory` below.
-    /// Input: `&self`; `model` — the model id to check. Output: `bool`. Used by:
-    /// `Bot::ask_raw`/`ask_raw_stream` (`provider_ask_raw.rs`/`provider_ask.rs`) before
-    /// deciding whether to even attempt disabling reasoning for this model.
     fn reasoning_mandatory_known(&self, model: &str) -> bool {
         self.reasoning_mandatory_models
             .lock()
@@ -110,10 +97,7 @@ impl Bot {
     // called on the first 400 "mandatory" error; "turn it off" is never tried again for this model
     /// Records that `model` refuses to let reasoning be turned off, so future calls skip
     /// straight to low-effort-reasoning instead of retrying the disable attempt.
-    /// Input: `&self`; `model` — the model id. Output: none (inserts into
-    /// `self.reasoning_mandatory_models`; logs once, on the first insertion, via `log::info!`).
-    /// Used by: `Bot::ask_raw`/`ask_raw_stream`, right after a 400 response that
-    /// `reasoning_mandatory_error` (`text_3.rs`) recognizes as this specific error.
+    /// Logs only the first insertion.
     fn mark_reasoning_mandatory(&self, model: &str) {
         let inserted = self
             .reasoning_mandatory_models

@@ -11,9 +11,7 @@ struct Handler {
 #[async_trait]
 impl EventHandler for Handler {
     /// Serenity's `ready` callback — fires once per gateway connection (including
-    /// reconnects). Input: `&self`; `ctx: Context`; `data: Ready` — session info (used only
-    /// for `data.user.name`). Output: none. Uses: `self.bot.state()`, `modal::register_commands`,
-    /// `run_cycle` (once, guarded by `self.started`) for all six background cycles.
+    /// reconnects). Background cycles start only once, guarded by `self.started`.
     async fn ready(&self, ctx: Context, data: Ready) {
         {
             let mut state = self.bot.state();
@@ -64,10 +62,6 @@ impl EventHandler for Handler {
     }
 
     /// Serenity's `guild_create` callback — fires once per guild on every connect/reconnect.
-    /// Input: `&self`; `ctx: Context`; `guild: Guild`; `_new: Option<bool>` (unused).
-    /// Output: none. Uses: `self.bot.guild_id`, `self.bot.state()` (`scanned` set),
-    /// `memory::write`, `default_channel`, `version_text`, `modal::info_embed`,
-    /// `read_history`/`self.bot.profiler`/`coach` (spawned in the background, first-join only).
     async fn guild_create(&self, ctx: Context, guild: Guild, _new: Option<bool>) {
         // if GUILD_ID is set, only that guild gets scanned; it also never enters the on-disk scanned list
         let space = SpaceKey::discord(guild.id.get());
@@ -123,6 +117,7 @@ impl EventHandler for Handler {
         });
     }
 
+    /// Serenity's `guild_member_addition` callback — fires when a new member joins.
     async fn guild_member_addition(&self, ctx: Context, member: Member) {
         if let Some((room, user)) =
             platform::discord::events::decode_member_join(&self.bot, &ctx, &member)
@@ -158,12 +153,7 @@ impl EventHandler for Handler {
     // submission just gets a short acknowledgment (display-only, no input is collected);
     // the thought button follows its own older path
     /// Serenity's `interaction_create` callback — routes slash commands, modal submissions,
-    /// and button/select-menu clicks. Input: `&self`; `ctx: Context`; `interaction:
-    /// Interaction`. Output: none. Uses: `command::definitions` (`Command`),
-    /// `THOUGHT_BUTTON`/`self.thought_button` (`Component`, `handler_buttons.rs`),
-    /// `self.setting_button` (`Component`, `handler_buttons.rs`),
-    /// `modal::topics_modal`/`events_modal`/`summary_modal`/`person_modal` (`Component`,
-    /// zihin detail buttons/menu).
+    /// and button/select-menu clicks.
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         // stealth: no commands are registered and no buttons are sent, so anything arriving
         // here is stale (an old button on an earlier message) — left unanswered

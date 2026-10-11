@@ -10,8 +10,6 @@ What to weigh:
 - Skip boring stuff: company announcements, funding news, "X hires Y", celebrity gossip, sports scores
 - Don't pick tech every time; a general-news item can start a conversation too, mix it up
 - A high score alone isn't a reason to pick something
-- If there's anything related to Istanbul Technical University, it takes priority: school
-  news, an announcement, or anything touching the university matters to everyone
 
 Group profile:
 {profil}

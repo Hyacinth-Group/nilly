@@ -2,11 +2,6 @@ impl Handler {
     // settings-panel buttons: apply the change (same paths the commands use), refresh the
     // panel in place. Same permissions as the commands: open to everyone (model switching
     // isn't on the panel)
-    /// Input: `&self`; `ctx: &Context`; `component: ComponentInteraction` — the button
-    /// click. Output: none. Uses: `ThinkingMode::from_arg`, `self.bot.state()`,
-    /// `memory::write`, `self.bot.set_debug`/`wake`/`put_to_sleep`/`sleep_transition`,
-    /// `modal::settings_message`. Used by: `Handler::interaction_create` above, for any
-    /// `Component` whose `custom_id` starts with `"setting_"`.
     async fn setting_button(&self, ctx: &Context, component: ComponentInteraction) {
         let id = component.data.custom_id.clone();
         if let Some(mode) = id.strip_prefix(modal::SETTING_THINKING) {
@@ -37,10 +32,6 @@ impl Handler {
 
     // the "Show Thought Process" button in hide mode: looks it up in the thought store,
     // opens it as an ephemeral code block visible only to the clicker
-    /// Input: `&self`; `ctx: &Context`; `component: ComponentInteraction`. Output: none.
-    /// Uses: `self.bot.state().thought_store`, `thought_display`
-    /// (`provider_stream_view.rs`). Used by: `Handler::interaction_create` above, for the
-    /// `THOUGHT_BUTTON` component.
     async fn thought_button(&self, ctx: &Context, component: ComponentInteraction) {
         if component.data.custom_id != THOUGHT_BUTTON {
             return;

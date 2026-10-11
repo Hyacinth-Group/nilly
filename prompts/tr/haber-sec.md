@@ -9,8 +9,6 @@ Seçerken şunlara bak:
 - Şirket duyurusu, fon haberi, "X hires Y", magazin, spor skoru gibi şeyler sıkıcıdır, atla
 - Her seferinde teknoloji seçme; gündemden bir olay da muhabbet açar, karışık gitsin
 - Puan yüksekliği tek başına sebep değil
-- İstanbul Teknik Üniversitesi ile ilgili bir konu varsa öncelik onundur: okuldan haber, duyuru
-  ya da üniversiteyi ilgilendiren bir gelişme herkesi ilgilendirir
 
 Grup profili:
 {profil}
