@@ -1,4 +1,5 @@
 mod auth;
+mod dashboard;
 mod routes;
 mod setup;
 mod views;

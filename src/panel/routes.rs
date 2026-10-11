@@ -1,4 +1,4 @@
-use super::{auth, setup, views, App, Lifecycle};
+use super::{auth, dashboard, setup, views, App, Lifecycle};
 use crate::config::{Patch, PatchValue};
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use views::{Button, Field, Form as ViewForm, Item, Language, Page, Section};
 
-type WebResult<T> = Result<T, WebError>;
-struct WebError {
+pub(super) type WebResult<T> = Result<T, WebError>;
+pub(super) struct WebError {
     status: StatusCode,
     code: String,
     key: String,
@@ -70,16 +70,16 @@ fn request_id() -> String {
     rand::rngs::OsRng.fill_bytes(&mut bytes);
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
-fn t(lang: Language, key: &str) -> String {
+pub(super) fn t(lang: Language, key: &str) -> String {
     views::text(lang, key).unwrap_or(key).to_owned()
 }
-fn lang(query: &HashMap<String, String>) -> Language {
+pub(super) fn lang(query: &HashMap<String, String>) -> Language {
     Language::parse(query.get("lang").map_or("en", String::as_str))
 }
-fn token(headers: &HeaderMap) -> WebResult<String> {
+pub(super) fn token(headers: &HeaderMap) -> WebResult<String> {
     auth::cookie_token(headers)?.ok_or_else(|| auth::AuthError::Required.into())
 }
-fn admin(app: &App, headers: &HeaderMap) -> WebResult<String> {
+pub(super) fn admin(app: &App, headers: &HeaderMap) -> WebResult<String> {
     let token = token(headers)?;
     app.auth.require_admin(&token)?;
     Ok(token)
@@ -99,7 +99,7 @@ fn mutation(app: &App, headers: &HeaderMap, csrf: &str) -> WebResult<String> {
 fn draft_key(token: &str) -> String {
     format!("{:x}", Sha256::digest(token.as_bytes()))
 }
-fn html(page: &Page) -> WebResult<Response> {
+pub(super) fn html(page: &Page) -> WebResult<Response> {
     views::render(page)
         .map(|body| Html(body).into_response())
         .map_err(|_| {
@@ -146,13 +146,13 @@ fn form(id: &str, action: &str, csrf: &str, fields: Vec<Field>, buttons: Vec<But
         ..Default::default()
     }
 }
-fn section(lang: Language, key: &str) -> Section {
+pub(super) fn section(lang: Language, key: &str) -> Section {
     Section {
         title: t(lang, key),
         ..Default::default()
     }
 }
-fn item(lang: Language, label: &str, value: impl ToString, key: &str) -> Item {
+pub(super) fn item(lang: Language, label: &str, value: impl ToString, key: &str) -> Item {
     Item {
         label: t(lang, label),
         value: value.to_string(),
@@ -160,7 +160,7 @@ fn item(lang: Language, label: &str, value: impl ToString, key: &str) -> Item {
         ..Default::default()
     }
 }
-fn page(lang: Language, title: &str, active: &str) -> WebResult<Page> {
+pub(super) fn page(lang: Language, title: &str, active: &str) -> WebResult<Page> {
     Page::new(lang, title, active).map_err(|_| WebError::validation())
 }
 
@@ -194,7 +194,7 @@ pub fn router(app: Arc<App>) -> Router {
                 )
             }),
         )
-        .route("/", get(overview))
+        .route("/", get(dashboard::overview))
         .route("/setup", get(setup_page))
         .route("/login", get(login_page))
         .route("/settings", get(settings_page))
@@ -220,7 +220,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/api/v1/auth/logout", post(api_logout))
         .route("/api/v1/auth/password", post(api_password))
         .route("/api/v1/auth/session", get(auth_session))
-        .route("/api/v1/status", get(status_api))
+        .route("/api/v1/status", get(dashboard::status_api))
         .route("/api/v1/settings", get(settings_api).patch(api_settings))
         .route("/api/v1/settings/validate", post(api_validate))
         .route("/api/v1/settings/test-platform", post(api_platform))
@@ -1050,192 +1050,6 @@ async fn api_complete(
 ) -> WebResult<Json<Value>> {
     complete(app, &headers, input).await?;
     Ok(Json(json!({"lifecycle":"configured_starting"})))
-}
-
-async fn snapshot(app: &App) -> Value {
-    let (lifecycle, bot, manager, cache) = {
-        let runtime = app.runtime.lock();
-        (
-            runtime.lifecycle,
-            runtime.bot.clone(),
-            runtime.manager.clone(),
-            runtime.cache.clone(),
-        )
-    };
-    let connection = if let Some(manager) = manager {
-        let runners = manager.runners.lock().await;
-        if runners
-            .values()
-            .any(|runner| runner.stage == serenity::gateway::ConnectionStage::Connected)
-        {
-            "connected"
-        } else if runners.is_empty() {
-            "offline"
-        } else {
-            "reconnecting"
-        }
-    } else {
-        "offline"
-    };
-    let config = app.config.lock();
-    let mut result = json!({"lifecycle":lifecycle,"panel":"healthy","connection":connection,"spaces":cache.map_or(0,|cache|cache.guild_count()),"provider":config.selected_provider(),"model":config.get("MODEL"),"model_health":"not_reported","pending_restart":config.fields().iter().any(|field|field.pending_restart),"updated_at":crate::now_unix()});
-    if let Some(bot) = bot {
-        let state = bot.state();
-        let conversations:Vec<Value>=state.chats.iter().map(|(id,chat)|json!({"id":id.to_string(),"mood":chat.mood,"busy":state.busy.contains(id),"last_activity_seconds_ago":state.last_activity.get(id).map(|time|time.elapsed().as_secs())})).collect();
-        result["name"] = json!(state.growth.name);
-        result["stage"] = json!(state.growth.stage);
-        result["days"] = json!(crate::growth::days(&state.growth));
-        result["finished_chats"] = json!(state.growth.chats);
-        result["messages"] = json!(state.growth.messages);
-        result["asleep"] = json!(state.asleep);
-        result["model"] = json!(state.model);
-        result["thinking"] = json!(format!("{:?}", state.thinking_mode).to_lowercase());
-        result["debug"] = json!(state.debug);
-        result["conversations"] = json!(conversations);
-        result["next_transition"] = json!(state
-            .plans
-            .iter()
-            .flat_map(|plan| [plan.start, plan.end])
-            .filter(|time| *time > crate::now_unix())
-            .min());
-        result["usage"] = json!({"period":"this_process","calls":state.metrics.calls,"input":state.metrics.input_tokens,"cached":state.metrics.cache_tokens,"output":state.metrics.output_tokens,"cost":null});
-    }
-    result
-}
-async fn status_api(State(app): State<Arc<App>>, headers: HeaderMap) -> WebResult<Json<Value>> {
-    admin(&app, &headers)?;
-    Ok(Json(snapshot(&app).await))
-}
-async fn overview(
-    State(app): State<Arc<App>>,
-    headers: HeaderMap,
-    Query(query): Query<HashMap<String, String>>,
-) -> WebResult<Response> {
-    if admin(&app, &headers).is_err() {
-        return Ok(Redirect::to(if app.auth.has_admin()? {
-            "/login"
-        } else {
-            "/setup"
-        })
-        .into_response());
-    }
-    let lang = lang(&query);
-    let data = snapshot(&app).await;
-    let mut page = page(lang, "panel.title.overview", "overview")?;
-    page.authenticated = true;
-    page.poll_url = "/api/v1/status".into();
-    if data["pending_restart"] == true {
-        page.notice = t(lang, "panel.settings.pending");
-    }
-    let mut health = section(lang, "panel.label.status");
-    for (label, key) in [
-        ("panel.label.status", "lifecycle"),
-        ("panel.label.connection", "connection"),
-        ("panel.label.provider", "provider"),
-        ("panel.label.model", "model"),
-    ] {
-        let value = data[key].as_str().unwrap_or("");
-        let display = if key == "lifecycle" || key == "connection" {
-            t(lang, &format!("panel.state.{value}"))
-        } else {
-            value.to_owned()
-        };
-        health.items.push(item(lang, label, display, key));
-    }
-    health.items.push(item(
-        lang,
-        "panel.label.spaces",
-        data["spaces"].to_string(),
-        "spaces",
-    ));
-    health.description = t(lang, "panel.overview.health");
-    page.sections.push(health);
-    let mut identity = section(lang, "panel.label.name");
-    identity.items.push(item(
-        lang,
-        "panel.label.name",
-        data["name"]
-            .as_str()
-            .map_or_else(|| t(lang, "panel.state.no_name"), str::to_owned),
-        "name",
-    ));
-    for (label, key) in [
-        ("panel.label.stage", "stage"),
-        ("panel.label.days", "days"),
-        ("panel.label.chats", "finished_chats"),
-        ("panel.label.messages", "messages"),
-    ] {
-        identity.items.push(item(
-            lang,
-            label,
-            if data[key].is_null() {
-                t(lang, "panel.state.not_reported")
-            } else {
-                data[key].to_string()
-            },
-            key,
-        ));
-    }
-    identity.description = t(lang, "panel.overview.growth");
-    page.sections.push(identity);
-    let mut behavior = section(lang, "panel.label.sleep");
-    behavior.description = t(lang, "panel.overview.sleep");
-    behavior.items.push(item(
-        lang,
-        "panel.label.sleep",
-        if data["asleep"].is_null() {
-            t(lang, "panel.state.unknown")
-        } else if data["asleep"] == true {
-            t(lang, "panel.state.asleep")
-        } else {
-            t(lang, "panel.state.awake")
-        },
-        "",
-    ));
-    for (label, key) in [
-        ("panel.label.thinking", "thinking"),
-        ("panel.label.debug", "debug"),
-        ("panel.label.next_transition", "next_transition"),
-    ] {
-        behavior.items.push(item(
-            lang,
-            label,
-            if data[key].is_null() {
-                t(lang, "panel.state.not_reported")
-            } else {
-                data[key]
-                    .as_str()
-                    .map_or_else(|| data[key].to_string(), str::to_owned)
-            },
-            key,
-        ));
-    }
-    page.sections.push(behavior);
-    let mut conversations = section(lang, "panel.label.active_chats");
-    if let Some(entries) = data["conversations"].as_array() {
-        for entry in entries {
-            conversations.items.push(Item {
-                label: entry["id"].as_str().unwrap_or("").into(),
-                value: entry["mood"]
-                    .as_str()
-                    .filter(|mood| !mood.is_empty())
-                    .map_or_else(|| t(lang, "panel.state.not_reported"), str::to_owned),
-                detail: format!(
-                    "{}: {} · {}: {}",
-                    t(lang, "panel.label.busy"),
-                    entry["busy"],
-                    t(lang, "panel.label.last_activity"),
-                    entry["last_activity_seconds_ago"]
-                ),
-                ..Default::default()
-            });
-        }
-    }
-    if conversations.items.is_empty() {
-        conversations.description = t(lang, "panel.overview.empty_chats");
-    }
-    page.sections.push(conversations);
-    html(&page)
 }
 
 async fn refresh_config(app: Arc<App>) -> WebResult<()> {

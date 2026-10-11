@@ -25,6 +25,14 @@ function localEndpoint(value) {
   }
 }
 
+function snapshotValue(snapshot, path) {
+  let value = snapshot;
+  for (const part of path.split(".")) {
+    value = value && Object.hasOwn(value, part) ? value[part] : undefined;
+  }
+  return value;
+}
+
 // Preserve the setup step while switching the browser's language, not BOT_LANG.
 const languageSelect = document.querySelector("[data-language-select]");
 if (languageSelect) {
@@ -57,11 +65,17 @@ if (pollUrl) {
       const snapshot = await response.json();
       if (stopped || document.visibilityState !== "visible") return;
       for (const node of main.querySelectorAll("[data-status-key]")) {
-        let value = snapshot;
-        for (const part of node.dataset.statusKey.split(".")) {
-          value = value && Object.hasOwn(value, part) ? value[part] : undefined;
-        }
+        const value = snapshotValue(snapshot, node.dataset.statusKey);
         if (typeof value === "string" || typeof value === "number") node.textContent = String(value);
+      }
+      for (const progress of main.querySelectorAll("[data-progress-key]")) {
+        const value = snapshotValue(snapshot, progress.dataset.progressKey);
+        const maximum = snapshotValue(snapshot, progress.dataset.progressMaxKey);
+        progress.hidden = !Number.isFinite(value) || !Number.isFinite(maximum) || maximum <= 0;
+        if (!progress.hidden) {
+          progress.max = maximum;
+          progress.value = Math.min(value, maximum);
+        }
       }
       state.hidden = true;
     } catch (error) {

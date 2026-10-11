@@ -77,6 +77,21 @@ pub struct Item {
     pub key: String,
     /// Verified link supplied by the service, never persisted user text.
     pub href: String,
+    pub progress_value: u64,
+    pub progress_max: u64,
+}
+
+impl Item {
+    pub fn progress_key(&self) -> &str {
+        self.key.strip_prefix("display.").unwrap_or("")
+    }
+    pub fn progress_max_key(&self) -> &str {
+        match self.progress_key() {
+            "days" => "next_stage.days",
+            "finished_chats" => "next_stage.chats",
+            _ => "",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]

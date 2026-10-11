@@ -65,7 +65,7 @@
         {% if !section.items.is_empty() %}
         <dl class="facts">
           {% for item in section.items %}
-          <div class="fact"><dt>{{ item.label }}</dt><dd>{% if !item.href.is_empty() %}<a class="button" href="{{ item.href }}" rel="noreferrer">{{ item.value }}</a>{% else %}<span{% if !item.key.is_empty() %} data-status-key="{{ item.key }}"{% endif %}>{{ item.value }}</span>{% endif %}{% if !item.detail.is_empty() %}<small>{{ item.detail }}</small>{% endif %}</dd></div>
+          <div class="fact"><dt>{{ item.label }}</dt><dd>{% if !item.href.is_empty() %}<a class="button" href="{{ item.href }}" rel="noreferrer">{{ item.value }}</a>{% else %}<span{% if !item.key.is_empty() %} data-status-key="{{ item.key }}"{% endif %}>{{ item.value }}</span>{% endif %}{% if item.progress_max > 0 %}<progress value="{{ item.progress_value }}" max="{{ item.progress_max }}" data-progress-key="{{ item.progress_key() }}" data-progress-max-key="{{ item.progress_max_key() }}" aria-label="{{ item.label }}"></progress>{% endif %}{% if !item.detail.is_empty() %}<small>{{ item.detail }}</small>{% endif %}</dd></div>
           {% endfor %}
         </dl>
         {% endif %}

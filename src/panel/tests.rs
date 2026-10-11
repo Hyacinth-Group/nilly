@@ -375,3 +375,72 @@ async fn rejected_runtime_restart_never_writes_configuration() {
     assert_eq!(response.status(), StatusCode::CONFLICT);
     assert!(!directory.path().join(".env").exists());
 }
+
+#[tokio::test]
+async fn dashboard_refresh_keeps_localized_empty_states_and_write_only_secrets() {
+    let (app, _directory) = fixture().await;
+    let admin = owner(&app).await;
+    let router = routes::router(app);
+    let response = router
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/api/v1/status?lang=tr",
+            Some(&admin.token),
+            "",
+        ))
+        .await
+        .unwrap();
+    let snapshot: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap()).unwrap();
+    assert_eq!(
+        snapshot["display"]["lifecycle"],
+        views::text(views::Language::Tr, "panel.state.unconfigured").unwrap()
+    );
+    assert_eq!(
+        snapshot["display"]["name"],
+        views::text(views::Language::Tr, "panel.state.no_name").unwrap()
+    );
+    assert_eq!(
+        snapshot["display"]["days"],
+        views::text(views::Language::Tr, "panel.state.not_reported").unwrap()
+    );
+    assert!(snapshot.get("global_mood").is_none());
+    assert!(snapshot.get("key").is_none());
+    let response = router
+        .oneshot(request("GET", "/?lang=tr", Some(&admin.token), ""))
+        .await
+        .unwrap();
+    let body = String::from_utf8(
+        to_bytes(response.into_body(), 128 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(body.contains("/api/v1/status?lang=tr"));
+    assert!(body.contains("data-status-key=\"display.lifecycle\""));
+    assert!(body.contains(views::text(views::Language::Tr, "panel.overview.no_chats").unwrap()));
+}
+
+#[test]
+fn both_panel_languages_have_the_same_complete_key_set() {
+    use std::collections::BTreeSet;
+    let english: HashMap<String, String> =
+        serde_json::from_str(include_str!("../../langs/en.json")).unwrap();
+    let turkish: HashMap<String, String> =
+        serde_json::from_str(include_str!("../../langs/tr.json")).unwrap();
+    let keys = |table: &HashMap<String, String>| {
+        table
+            .keys()
+            .filter(|key| key.starts_with("panel."))
+            .cloned()
+            .collect::<BTreeSet<_>>()
+    };
+    assert_eq!(keys(&english), keys(&turkish));
+    assert!(english
+        .iter()
+        .chain(turkish.iter())
+        .filter(|(key, _)| key.starts_with("panel."))
+        .all(|(_, value)| !value.is_empty()));
+}
