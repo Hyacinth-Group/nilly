@@ -338,7 +338,8 @@ pub(crate) fn decode_event(
                 return Ok(None);
             }
             let msgtype = content["msgtype"].as_str().unwrap_or("");
-            if !matches!(msgtype, "m.text" | "m.notice" | "m.emote" | "m.image") {
+            // Notices must not enter learning, command, or automatic reply handling.
+            if !matches!(msgtype, "m.text" | "m.emote" | "m.image") {
                 return Ok(None);
             }
             if msgtype == "m.image" && !image_analysis {
@@ -490,6 +491,44 @@ mod tests {
             message.reply_to.unwrap().id,
             message_key("$original").unwrap()
         );
+    }
+
+    #[test]
+    fn notices_with_bot_mentions_are_not_human_messages() {
+        for content in [
+            json!({"msgtype":"m.notice","body":"automated update"}),
+            json!({"msgtype":"m.notice","body":"hello @bot:example.org",
+                "m.mentions":{"user_ids":["@bot:example.org"]},
+                "format":"org.matrix.custom.html",
+                "formatted_body":"hello <a href='https://matrix.to/#/@bot:example.org'>bot</a>"}),
+            json!({"msgtype":"m.notice","body":"> <@bot:example.org> old\n\n!status",
+                "m.relates_to":{"m.in_reply_to":{"event_id":"$bot-message"}},
+                "m.mentions":{"user_ids":["@bot:example.org"]}}),
+        ] {
+            let notice = raw("m.room.message", content);
+            assert!(decode(&notice, true).unwrap().is_none());
+            assert!(decode(&notice, false).unwrap().is_none());
+
+            let mut text = notice;
+            text["content"]["msgtype"] = json!("m.text");
+            let normalized = message(&text);
+            assert_eq!(normalized.author.automation, Automation::Unknown);
+            if text["content"]["m.mentions"].is_object() {
+                assert_eq!(
+                    normalized.mentions,
+                    [user_ref("@bot:example.org", None).unwrap().id]
+                );
+            }
+            if text["content"]["m.relates_to"].is_object() {
+                assert_eq!(normalized.text, "!status");
+                assert_eq!(
+                    normalized.reply_to.unwrap().id,
+                    message_key("$bot-message").unwrap()
+                );
+            } else {
+                assert_eq!(normalized.text, text["content"]["body"].as_str().unwrap());
+            }
+        }
     }
 
     #[test]

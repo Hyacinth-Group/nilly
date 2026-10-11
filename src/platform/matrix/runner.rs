@@ -12,17 +12,18 @@ use crate::{
 };
 use matrix_sdk::{
     authentication::matrix::MatrixSession,
-    config::{RequestConfig, SyncSettings},
+    config::{RequestConfig, SyncSettings, SyncToken},
     ruma::{
         api::client::{membership::get_member_events, room::create_room},
         RoomId, UserId,
     },
+    store::{StateStoreDataKey, StateStoreDataValue},
     Client, SessionMeta, SessionTokens,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     io::Write,
     path::{Path, PathBuf},
     sync::Arc,
@@ -62,6 +63,30 @@ fn state_path(connection: &ConnectionId) -> PathBuf {
         .join("matrix")
         .join(encode_component(connection.as_str()))
 }
+
+async fn rewind_sdk_cursor(client: &Client, path: &Path) -> Result<(), BotError> {
+    // Restore before session initialization loads the SDK's in-memory token.
+    // Otherwise an ahead SDK token can suppress the replayed response entirely.
+    let cursor: Option<String> = load(&path.join("sync.json"))?;
+    match cursor {
+        Some(cursor) => {
+            client
+                .state_store()
+                .set_kv_data(
+                    StateStoreDataKey::SyncToken,
+                    StateStoreDataValue::SyncToken(cursor),
+                )
+                .await?;
+        }
+        None => {
+            client
+                .state_store()
+                .remove_kv_data(StateStoreDataKey::SyncToken)
+                .await?;
+        }
+    }
+    Ok(())
+}
 pub(crate) async fn login(config: &MatrixConfig, path: &Path) -> Result<Client, BotError> {
     std::fs::create_dir_all(path)?;
     #[cfg(unix)]
@@ -80,6 +105,7 @@ pub(crate) async fn login(config: &MatrixConfig, path: &Path) -> Result<Client, 
         )
         .build()
         .await?;
+    rewind_sdk_cursor(&client, path).await?;
     let saved: Option<SavedSession> = load(&path.join("session.json"))?;
     if let Some(saved) = saved {
         if saved.homeserver != config.homeserver
@@ -127,6 +153,7 @@ pub(crate) async fn login(config: &MatrixConfig, path: &Path) -> Result<Client, 
             )
             .build()
             .await?;
+        rewind_sdk_cursor(&authenticated, path).await?;
         authenticated
             .restore_session(MatrixSession {
                 meta: SessionMeta {
@@ -226,6 +253,84 @@ pub(super) fn command_text(text: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+type CommandWork = (
+    IncomingMessage,
+    Result<Option<command::ActionArgs>, command::ActionError>,
+);
+
+struct CommandQueue {
+    sender: tokio::sync::mpsc::Sender<CommandWork>,
+    ids: VecDeque<String>,
+}
+
+fn shutdown_requested(shutdown: &ShutdownReceiver) -> bool {
+    *shutdown.borrow() || shutdown.has_changed().is_err()
+}
+
+impl CommandQueue {
+    // IDs become replay barriers only after bounded worker acceptance.
+    async fn accept(
+        &mut self,
+        message: IncomingMessage,
+        event_id: &str,
+        text: &str,
+        path: &Path,
+        shutdown: &mut ShutdownReceiver,
+    ) -> Result<bool, BotError> {
+        if shutdown_requested(shutdown) {
+            return Ok(false);
+        }
+        if self.ids.iter().any(|id| id == event_id) {
+            return Ok(true);
+        }
+        let permit = loop {
+            tokio::select! {
+                biased;
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        return Ok(false);
+                    }
+                }
+                permit = self.sender.reserve() => {
+                    break permit.map_err(|_| "Matrix command worker stopped")?;
+                }
+            }
+        };
+        if shutdown_requested(shutdown) {
+            return Ok(false);
+        }
+        let parsed = command::parser::parse_text(
+            text,
+            &command::parser::CommandPrefix::Explicit("!bot".into()),
+        );
+        permit.send((message, parsed));
+        self.ids.push_back(event_id.to_owned());
+        if self.ids.len() > 256 {
+            self.ids.pop_front();
+        }
+        save(&path.join("commands.json"), &self.ids)?;
+        Ok(true)
+    }
+}
+
+// The SDK stores its token before command admission. Only our committed cursor
+// is authoritative on restart, including an interrupted first sync with no cursor.
+fn restart_sync_token(cursor: Option<String>) -> SyncToken {
+    cursor.map_or(SyncToken::NoToken, SyncToken::Specific)
+}
+
+fn persist_sync_cursor(
+    path: &Path,
+    cursor: &str,
+    shutdown: &ShutdownReceiver,
+) -> Result<bool, BotError> {
+    if shutdown_requested(shutdown) {
+        return Ok(false);
+    }
+    save(&path.join("sync.json"), &cursor)?;
+    Ok(true)
 }
 async fn private_room(
     adapter: &MatrixAdapter,
@@ -423,12 +528,8 @@ pub(crate) async fn run(
     let cursor: Option<String> = load(&path.join("sync.json"))?;
     let settings = SyncSettings::default()
         .timeout(Duration::from_millis(0))
-        .full_state(true);
-    let settings = if let Some(cursor) = cursor {
-        settings.token(cursor)
-    } else {
-        settings
-    };
+        .full_state(true)
+        .token(restart_sync_token(cursor));
     let first = client.sync_once(settings).await?;
     let adapter = MatrixAdapter::new(client.clone(), connection.clone(), bot.image_analysis)?;
     bot.register_adapter(Adapter::Matrix(adapter.clone()))?;
@@ -496,13 +597,12 @@ pub(crate) async fn run(
             )?)
             .await?;
     }
-    let mut command_ids: std::collections::VecDeque<String> =
-        load(&path.join("commands.json"))?.unwrap_or_default();
     let mut commands = JoinSet::new();
-    let (command_tx, mut command_rx) = tokio::sync::mpsc::channel::<(
-        IncomingMessage,
-        Result<Option<command::ActionArgs>, command::ActionError>,
-    )>(16);
+    let (command_tx, mut command_rx) = tokio::sync::mpsc::channel::<CommandWork>(16);
+    let mut command_queue = CommandQueue {
+        sender: command_tx,
+        ids: load(&path.join("commands.json"))?.unwrap_or_default(),
+    };
     let command_bot = bot.clone();
     let command_adapter = adapter.clone();
     let command_path = path.clone();
@@ -518,7 +618,10 @@ pub(crate) async fn run(
             .await;
         }
     });
-    loop {
+    'sync: loop {
+        if shutdown_requested(&shutdown) {
+            break;
+        }
         for (id, invite) in &response.rooms.invited {
             let room = events::room_ref(id.as_str())?;
             let mut inviter = None;
@@ -565,26 +668,15 @@ pub(crate) async fn run(
                         events::decode_event(&connection, &room, &adapter.account.id, &raw, false)
                     {
                         if let Some(text) = command_text(&message.text) {
-                            let parsed = command::parser::parse_text(
-                                &text,
-                                &command::parser::CommandPrefix::Explicit("!bot".into()),
-                            );
                             let event_id = raw["event_id"]
                                 .as_str()
-                                .ok_or("missing Matrix command event ID")?
-                                .to_owned();
-                            if command_ids.contains(&event_id) {
-                                continue;
+                                .ok_or("missing Matrix command event ID")?;
+                            if !command_queue
+                                .accept(message, event_id, &text, &path, &mut shutdown)
+                                .await?
+                            {
+                                break 'sync;
                             }
-                            if command_tx.try_send((message, parsed)).is_err() {
-                                log::warn!("Matrix command queue full");
-                                continue;
-                            }
-                            command_ids.push_back(event_id);
-                            if command_ids.len() > 256 {
-                                command_ids.pop_front();
-                            }
-                            save(&path.join("commands.json"), &command_ids)?;
                         }
                     }
                 }
@@ -671,24 +763,13 @@ pub(crate) async fn run(
                         if let Some(text) = command_text(&message.text) {
                             let event_id = raw["event_id"]
                                 .as_str()
-                                .ok_or("missing Matrix command event ID")?
-                                .to_owned();
-                            if command_ids.contains(&event_id) {
-                                continue;
+                                .ok_or("missing Matrix command event ID")?;
+                            if !command_queue
+                                .accept(message.clone(), event_id, &text, &path, &mut shutdown)
+                                .await?
+                            {
+                                break 'sync;
                             }
-                            let parsed = command::parser::parse_text(
-                                &text,
-                                &command::parser::CommandPrefix::Explicit("!bot".into()),
-                            );
-                            if command_tx.try_send((message.clone(), parsed)).is_err() {
-                                log::warn!("Matrix command queue full");
-                                continue;
-                            }
-                            command_ids.push_back(event_id);
-                            if command_ids.len() > 256 {
-                                command_ids.pop_front();
-                            }
-                            save(&path.join("commands.json"), &command_ids)?;
                             continue;
                         }
                         if let Some(reply) = &mut message.reply_to {
@@ -740,24 +821,35 @@ pub(crate) async fn run(
                 log::warn!("Matrix sync gap [{id}]: history is bounded; events outside synced timeline may not be observed");
             }
         }
-        save(&path.join("sync.json"), &response.next_batch)?;
+        if !persist_sync_cursor(&path, &response.next_batch, &shutdown)? {
+            break;
+        }
         let settings = SyncSettings::default()
             .timeout(Duration::from_secs(30))
             .token(response.next_batch.clone());
         loop {
             tokio::select! {
-                changed = shutdown.changed() => { if changed.is_err() || *shutdown.borrow() { commands.abort_all(); return Ok(()); } },
+                changed = shutdown.changed() => { if changed.is_err() || *shutdown.borrow() { break 'sync; } },
                 result = commands.join_next(), if !commands.is_empty() => { if let Some(Err(error)) = result { log::warn!("Matrix admin task: {error}"); } },
                 result = client.sync_once(settings.clone()) => match result {
                     Ok(next) => {response = next; break;},
                     Err(error) => {
                         log::warn!("Matrix sync disconnected: {error}");
-                        tokio::select! { _ = shutdown.changed() => {commands.abort_all(); return Ok(());}, _ = tokio::time::sleep(Duration::from_secs(5)) => {} }
+                        tokio::select! { _ = shutdown.changed() => { break 'sync; }, _ = tokio::time::sleep(Duration::from_secs(5)) => {} }
                     }
                 }
             }
         }
     }
+    // Accepted commands are already persisted for deduplication; finish them
+    // rather than aborting their worker and silently losing its accepted backlog.
+    drop(command_queue);
+    while let Some(result) = commands.join_next().await {
+        if let Err(error) = result {
+            log::warn!("Matrix admin task: {error}");
+        }
+    }
+    Ok(())
 }
 #[cfg(test)]
 mod tests {
@@ -782,6 +874,317 @@ mod tests {
         assert_eq!(command_text("! status"), None);
         assert_eq!(command_text("!random-exclamation"), None);
         assert_eq!(command_text("!bot unknown"), Some("!bot unknown".into()));
+    }
+
+    fn queued_message(room: &str, index: usize) -> IncomingMessage {
+        let raw = serde_json::json!({
+            "type": "m.room.message",
+            "event_id": format!("$command-{index}"),
+            "sender": "@owner:example.org",
+            "origin_server_ts": 42,
+            "content": {"msgtype": "m.text", "body": "!status"}
+        });
+        let ChatEvent::MessageCreated(message) = events::decode_event(
+            &ConnectionId::new("matrix-queue-test"),
+            &events::room_ref(room).unwrap(),
+            &events::user_ref("@bot:example.org", None).unwrap().id,
+            &raw,
+            false,
+        )
+        .unwrap()
+        .unwrap() else {
+            panic!("not a command message");
+        };
+        message
+    }
+
+    async fn command_burst_before_cursor(room: &'static str, interrupt: bool) {
+        const COUNT: usize = 40;
+        let directory = tempfile::tempdir().unwrap();
+        save(&directory.path().join("sync.json"), &"previous-batch").unwrap();
+        let (shutdown_tx, mut shutdown) = tokio::sync::watch::channel(false);
+        let (sender, mut receiver) = tokio::sync::mpsc::channel::<CommandWork>(16);
+        let (full_tx, full_rx) = tokio::sync::oneshot::channel();
+        let path = directory.path().to_owned();
+        let producer = tokio::spawn(async move {
+            let mut queue = CommandQueue {
+                sender,
+                ids: VecDeque::new(),
+            };
+            let mut full_tx = Some(full_tx);
+            for index in 0..COUNT {
+                if index == 16 {
+                    full_tx.take().unwrap().send(()).unwrap();
+                }
+                let message = queued_message(room, index);
+                let text = command_text(&message.text).unwrap();
+                if !queue
+                    .accept(
+                        message,
+                        &format!("$command-{index}"),
+                        &text,
+                        &path,
+                        &mut shutdown,
+                    )
+                    .await
+                    .unwrap()
+                {
+                    assert!(!persist_sync_cursor(&path, "next-batch", &shutdown).unwrap());
+                    return false;
+                }
+            }
+            assert!(persist_sync_cursor(&path, "next-batch", &shutdown).unwrap());
+            true
+        });
+        tokio::time::timeout(Duration::from_secs(5), full_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!producer.is_finished());
+        let accepted: VecDeque<String> = load(&directory.path().join("commands.json"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(accepted.len(), 16);
+        assert!(!accepted.contains(&"$command-16".to_owned()));
+        let cursor: String = load(&directory.path().join("sync.json")).unwrap().unwrap();
+        assert_eq!(cursor, "previous-batch");
+
+        let expected_count = if interrupt {
+            shutdown_tx.send(true).unwrap();
+            // Do not release capacity until shutdown has interrupted the blocked
+            // admission. Already-accepted work remains available to the worker.
+            assert!(!tokio::time::timeout(Duration::from_secs(5), producer)
+                .await
+                .unwrap()
+                .unwrap());
+            16
+        } else {
+            let consumer = tokio::spawn(async move {
+                let mut observed = Vec::new();
+                while let Some((message, parsed)) = receiver.recv().await {
+                    assert!(matches!(parsed, Ok(Some(_))));
+                    observed.push(message.id);
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+                observed
+            });
+            assert!(tokio::time::timeout(Duration::from_secs(5), producer)
+                .await
+                .unwrap()
+                .unwrap());
+            let observed = tokio::time::timeout(Duration::from_secs(5), consumer)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(observed.len(), COUNT);
+            for (index, id) in observed.into_iter().enumerate() {
+                assert_eq!(
+                    id,
+                    events::message_key(&format!("$command-{index}")).unwrap()
+                );
+            }
+            let accepted: VecDeque<String> = load(&directory.path().join("commands.json"))
+                .unwrap()
+                .unwrap();
+            assert_eq!(accepted.len(), COUNT);
+            let cursor: String = load(&directory.path().join("sync.json")).unwrap().unwrap();
+            assert_eq!(cursor, "next-batch");
+            return;
+        };
+        for index in 0..expected_count {
+            let (message, parsed) = receiver.recv().await.unwrap();
+            assert!(matches!(parsed, Ok(Some(_))));
+            assert_eq!(
+                message.id,
+                events::message_key(&format!("$command-{index}")).unwrap()
+            );
+        }
+        assert!(receiver.recv().await.is_none());
+        let accepted: VecDeque<String> = load(&directory.path().join("commands.json"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(accepted.len(), expected_count);
+        let cursor: Option<String> = load(&directory.path().join("sync.json")).unwrap();
+        assert!(matches!(
+            restart_sync_token(cursor),
+            SyncToken::Specific(token) if token == "previous-batch"
+        ));
+    }
+
+    #[tokio::test]
+    async fn private_admin_command_burst_is_backpressured_without_loss() {
+        command_burst_before_cursor("!admin:example.org", false).await;
+    }
+
+    #[tokio::test]
+    async fn ordinary_room_command_burst_is_backpressured_without_loss() {
+        command_burst_before_cursor("!ordinary:example.org", false).await;
+    }
+
+    #[tokio::test]
+    async fn private_admin_shutdown_keeps_cursor_before_unaccepted_commands() {
+        command_burst_before_cursor("!admin:example.org", true).await;
+    }
+
+    #[tokio::test]
+    async fn ordinary_room_shutdown_keeps_cursor_before_unaccepted_commands() {
+        command_burst_before_cursor("!ordinary:example.org", true).await;
+    }
+
+    #[test]
+    fn interrupted_first_sync_never_reuses_sdk_cursor() {
+        let directory = tempfile::tempdir().unwrap();
+        let (shutdown_tx, shutdown) = tokio::sync::watch::channel(false);
+        shutdown_tx.send(true).unwrap();
+        assert!(!persist_sync_cursor(directory.path(), "sdk-ahead-batch", &shutdown).unwrap());
+        let cursor: Option<String> = load(&directory.path().join("sync.json")).unwrap();
+        assert!(matches!(restart_sync_token(cursor), SyncToken::NoToken));
+        assert!(matches!(
+            restart_sync_token(Some("accepted-batch".into())),
+            SyncToken::Specific(token) if token == "accepted-batch"
+        ));
+    }
+
+    async fn sdk_replays_unaccepted_batch_after_restart(committed: Option<&str>) {
+        use axum::{extract::Query, routing::get, Json, Router};
+        use std::collections::HashMap;
+
+        let directory = tempfile::tempdir().unwrap();
+        if let Some(cursor) = committed {
+            save(&directory.path().join("sync.json"), &cursor).unwrap();
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let homeserver = format!("http://{}", listener.local_addr().unwrap());
+        let (request_tx, mut request_rx) = tokio::sync::mpsc::channel(1);
+        let response = serde_json::json!({
+            "next_batch": "sdk-ahead-batch",
+            "rooms": {"join": {"!ordinary:example.org": {
+                "state": {"events": [
+                    {"type":"m.room.create","state_key":"","event_id":"$create",
+                     "sender":"@owner:example.org","origin_server_ts":1,
+                     "content":{"creator":"@owner:example.org","room_version":"10"}},
+                    {"type":"m.room.member","state_key":"@bot:example.org",
+                     "event_id":"$membership","sender":"@bot:example.org",
+                     "origin_server_ts":2,"content":{"membership":"join"}}
+                ]},
+                "timeline": {"events": [
+                    {"type":"m.room.message","event_id":"$unaccepted-command",
+                     "sender":"@owner:example.org","origin_server_ts":42,
+                     "content":{"msgtype":"m.text","body":"!status"}}
+                ], "limited":false,"prev_batch":"timeline-start"}
+            }}}
+        });
+        let router = Router::new().route(
+            "/_matrix/client/v3/sync",
+            get(move |Query(query): Query<HashMap<String, String>>| {
+                let request_tx = request_tx.clone();
+                let response = response.clone();
+                async move {
+                    request_tx.send(query).await.unwrap();
+                    Json(response)
+                }
+            }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let build_client = || {
+            Client::builder()
+                .homeserver_url(&homeserver)
+                .disable_well_known_lookup(true)
+                .server_versions([matrix_sdk::ruma::api::MatrixVersion::V1_1])
+                .sqlite_store(directory.path().join("store"), None)
+                .request_config(
+                    RequestConfig::new()
+                        .timeout(Duration::from_secs(5))
+                        .retry_limit(0),
+                )
+        };
+        let previous_client = build_client().build().await.unwrap();
+        previous_client
+            .state_store()
+            .set_kv_data(
+                StateStoreDataKey::SyncToken,
+                StateStoreDataValue::SyncToken("sdk-ahead-batch".into()),
+            )
+            .await
+            .unwrap();
+        drop(previous_client);
+
+        let client = build_client().build().await.unwrap();
+        rewind_sdk_cursor(&client, directory.path()).await.unwrap();
+        client
+            .restore_session(MatrixSession {
+                meta: SessionMeta {
+                    user_id: UserId::parse("@bot:example.org").unwrap(),
+                    device_id: "QUEUE-TEST".into(),
+                },
+                tokens: SessionTokens {
+                    access_token: "queue-test-token".into(),
+                    refresh_token: None,
+                },
+            })
+            .await
+            .unwrap();
+        let cursor: Option<String> = load(&directory.path().join("sync.json")).unwrap();
+        let replay = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.sync_once(
+                SyncSettings::default()
+                    .timeout(Duration::ZERO)
+                    .full_state(true)
+                    .token(restart_sync_token(cursor)),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let request = request_rx.recv().await.unwrap();
+        assert_eq!(request.get("since").map(String::as_str), committed);
+        assert_eq!(replay.next_batch, "sdk-ahead-batch");
+        let room_id = RoomId::parse("!ordinary:example.org").unwrap();
+        let timeline = &replay.rooms.joined.get(&room_id).unwrap().timeline.events;
+        assert_eq!(timeline.len(), 1);
+        let raw: Value = serde_json::from_str(timeline[0].raw().json().get()).unwrap();
+        assert_eq!(raw["event_id"], "$unaccepted-command");
+        assert_eq!(raw["content"]["body"], "!status");
+        server.abort();
+        let _ = server.await;
+    }
+
+    #[tokio::test]
+    async fn sdk_ahead_cursor_cannot_suppress_unaccepted_batch_on_restart() {
+        sdk_replays_unaccepted_batch_after_restart(Some("previous-batch")).await;
+    }
+
+    #[tokio::test]
+    async fn sdk_ahead_cursor_cannot_suppress_interrupted_first_batch() {
+        sdk_replays_unaccepted_batch_after_restart(None).await;
+    }
+
+    #[tokio::test]
+    async fn stopped_command_worker_does_not_accept_or_persist_commands() {
+        let directory = tempfile::tempdir().unwrap();
+        let (_shutdown_tx, mut shutdown) = tokio::sync::watch::channel(false);
+        let (sender, receiver) = tokio::sync::mpsc::channel::<CommandWork>(16);
+        drop(receiver);
+        let mut queue = CommandQueue {
+            sender,
+            ids: VecDeque::new(),
+        };
+        assert!(queue
+            .accept(
+                queued_message("!ordinary:example.org", 0),
+                "$command-0",
+                "!bot status",
+                directory.path(),
+                &mut shutdown,
+            )
+            .await
+            .is_err());
+        assert!(queue.ids.is_empty());
+        assert!(!directory.path().join("commands.json").exists());
+        assert!(!directory.path().join("sync.json").exists());
     }
     #[tokio::test]
     #[ignore = "requires a disposable Matrix homeserver/account; see setup guide"]
