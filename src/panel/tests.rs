@@ -527,7 +527,7 @@ fn both_panel_languages_have_the_same_complete_key_set() {
 
 fn settings_fixture(app: &App) {
     let path = app.config.lock().path().to_owned();
-    std::fs::write(&path,"# keep this comment\nDISCORD_TOKEN=settings-private-discord-credential\nTELEGRAM_TOKEN=settings-private-telegram-credential\nTELEGRAM_ROOMS=-100123\nOPENROUTER_KEY=settings-private-provider-credential\nBOT_LANG=en\nSTEALTH=false\nCUSTOM_SETTING='untouched # value'\n").unwrap();
+    std::fs::write(&path,"# keep this comment\nDISCORD_TOKEN=settings-private-discord-credential\nTELEGRAM_TOKEN=settings-private-telegram-credential\nTELEGRAM_ROOMS=-100123\nSLACK_APP_TOKEN=settings-private-slack-app-credential\nSLACK_BOT_TOKEN=settings-private-slack-bot-credential\nSLACK_CHANNELS=C123,G456\nOPENROUTER_KEY=settings-private-provider-credential\nBOT_LANG=en\nSTEALTH=false\nCUSTOM_SETTING='untouched # value'\n").unwrap();
     *app.config.lock() = config::Config::load(path, &HashMap::new()).unwrap();
 }
 
@@ -560,6 +560,17 @@ async fn settings_forms_preserve_unposted_groups_and_never_echo_credentials() {
     assert!(html.contains("name=\"TELEGRAM_ROOMS\" type=\"text\" value=\"telegram:room:-100123\""));
     assert!(html.contains("Approved Telegram rooms"));
     assert!(html.contains("Blank denies all Telegram rooms"));
+    for key in ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"] {
+        assert!(html.contains(&format!("name=\"{key}\" type=\"password\"")));
+        assert!(html.contains(&format!("name=\"clear_{key}\"")));
+    }
+    assert!(html.contains("name=\"SLACK_CHANNELS\" type=\"text\" value=\"C123,G456\""));
+    assert!(html.contains("name=\"SLACK_HISTORY_TIER\""));
+    assert!(html.contains("value=\"internal\" selected"));
+    assert!(html.contains("value=\"restricted\""));
+    assert!(html.contains("name=\"SLACK_TEST_CHANNEL\" type=\"text\" value=\"\""));
+    assert!(html.contains("Approved Slack channels"));
+    assert!(html.contains("Blank denies all Slack channels"));
     let revision = app.config.lock().revision().to_owned();
     let body = format!("csrf={}&revision={revision}&BOT_LANG=tr", admin.info.csrf);
     let response = router
@@ -584,6 +595,9 @@ async fn settings_forms_preserve_unposted_groups_and_never_echo_credentials() {
     assert!(saved.contains("OPENROUTER_KEY=settings-private-provider-credential"));
     assert!(saved.contains("TELEGRAM_TOKEN=settings-private-telegram-credential"));
     assert!(saved.contains("TELEGRAM_ROOMS=-100123"));
+    assert!(saved.contains("SLACK_APP_TOKEN=settings-private-slack-app-credential"));
+    assert!(saved.contains("SLACK_BOT_TOKEN=settings-private-slack-bot-credential"));
+    assert!(saved.contains("SLACK_CHANNELS=C123,G456"));
     assert_eq!(app.config.lock().get("BOT_LANG"), "en");
     assert!(
         app.config
@@ -630,6 +644,29 @@ async fn settings_forms_preserve_unposted_groups_and_never_echo_credentials() {
         .unwrap();
     assert_eq!(rooms["spec"]["kind"], "telegram_rooms");
     assert_eq!(rooms["effective"]["value"], "telegram:room:-100123");
+    for key in ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"] {
+        let slack = value["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|view| view["spec"]["key"] == key)
+            .unwrap();
+        assert_eq!(slack["spec"]["kind"], "secret");
+        assert_eq!(slack["spec"]["application"], "restart");
+        assert_eq!(slack["effective"]["configured"], true);
+        assert_eq!(slack["saved"]["configured"], true);
+        assert!(slack["effective"]["value"].is_null());
+        assert!(slack["saved"]["value"].is_null());
+        assert!(slack["default"]["value"].is_null());
+    }
+    let channels = value["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|view| view["spec"]["key"] == "SLACK_CHANNELS")
+        .unwrap();
+    assert_eq!(channels["spec"]["kind"], "slack_channels");
+    assert_eq!(channels["effective"]["value"], "C123,G456");
 }
 
 #[tokio::test]
@@ -664,6 +701,86 @@ async fn settings_validation_returns_localized_field_errors_with_matching_reques
         std::fs::read(directory.path().join(".env")).unwrap(),
         original
     );
+}
+
+#[tokio::test]
+async fn partial_slack_pair_and_native_channel_errors_are_localized_without_saving() {
+    let (app, directory) = fixture().await;
+    settings_fixture(&app);
+    let admin = owner(&app).await;
+    let original = std::fs::read(directory.path().join(".env")).unwrap();
+    for language in [views::Language::En, views::Language::Tr] {
+        for (key, operation, code) in [
+            (
+                "SLACK_APP_TOKEN",
+                serde_json::json!({"operation":"clear"}),
+                "panel.config.slack_token_pair",
+            ),
+            (
+                "SLACK_BOT_TOKEN",
+                serde_json::json!({"operation":"clear"}),
+                "panel.config.slack_token_pair",
+            ),
+            (
+                "SLACK_CHANNELS",
+                serde_json::json!({"operation":"replace","value":"#private-invalid-channel"}),
+                "panel.config.invalid_slack_channel",
+            ),
+            (
+                "SLACK_TEST_CHANNEL",
+                serde_json::json!({"operation":"replace","value":"D123"}),
+                "panel.config.invalid_slack_channel",
+            ),
+            (
+                "SLACK_HISTORY_TIER",
+                serde_json::json!({"operation":"replace","value":"unsupported"}),
+                "panel.config.invalid_choice",
+            ),
+        ] {
+            let mut patch = serde_json::Map::new();
+            patch.insert(key.into(), operation);
+            let body = serde_json::json!({
+                "csrf":admin.info.csrf,
+                "revision":app.config.lock().revision(),
+                "patch":patch,
+            })
+            .to_string();
+            let suffix = if matches!(language, views::Language::Tr) {
+                "tr"
+            } else {
+                "en"
+            };
+            let mut request = request(
+                "POST",
+                &format!("/api/v1/settings/validate?lang={suffix}"),
+                Some(&admin.token),
+                &body,
+            );
+            request
+                .headers_mut()
+                .insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+            let response = routes::router(app.clone()).oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            let identifier = response.headers()["x-request-id"]
+                .to_str()
+                .unwrap()
+                .to_owned();
+            let value: serde_json::Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap())
+                    .unwrap();
+            assert_eq!(value["request_id"], identifier);
+            assert_eq!(
+                value["field_errors"][key],
+                views::text(language, code).unwrap()
+            );
+            assert!(!value.to_string().contains("settings-private"));
+            assert!(!value.to_string().contains("#private-invalid-channel"));
+            assert_eq!(
+                std::fs::read(directory.path().join(".env")).unwrap(),
+                original
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -872,7 +989,7 @@ async fn login_explains_existing_ownership_and_nonsecret_settings_have_no_secret
             .to_vec(),
     )
     .unwrap();
-    assert_eq!(html.matches("Secret configured:").count(), 5);
+    assert_eq!(html.matches("Secret configured:").count(), 7);
     let response = router
         .oneshot(request("GET", "/setup?step=2", Some(&owner.token), ""))
         .await

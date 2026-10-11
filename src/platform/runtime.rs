@@ -57,6 +57,11 @@ pub enum ConnectionConfig {
         rooms: HashSet<RoomKey>,
         owner: Option<UserKey>,
     },
+    Slack {
+        connection: ConnectionId,
+        app_token: String,
+        bot_token: String,
+    },
 }
 
 /// A single selector serves headless startup and the panel's activated first runtime.
@@ -80,8 +85,20 @@ pub(crate) fn configured_connections() -> Result<Vec<ConnectionConfig>, BotError
                 .cloned(),
         });
     }
+    match (
+        crate::setting("SLACK_APP_TOKEN"),
+        crate::setting("SLACK_BOT_TOKEN"),
+    ) {
+        (Ok(app_token), Ok(bot_token)) => configs.push(ConnectionConfig::Slack {
+            connection: ConnectionId::new("slack-default"),
+            app_token,
+            bot_token,
+        }),
+        (Err(_), Err(_)) => {}
+        _ => return Err(crate::strings::t("startup.slack_token_pair").into()),
+    }
     if configs.is_empty() {
-        return Err(crate::strings::t("telegram.startup.missing").into());
+        return Err(crate::strings::t("platform.startup.missing").into());
     }
     Ok(configs)
 }
@@ -143,6 +160,7 @@ pub(crate) async fn run_with_shutdown(
         let (connection, platform) = match config {
             ConnectionConfig::Discord { connection, .. } => (connection, PlatformKind::Discord),
             ConnectionConfig::Telegram { connection, .. } => (connection, PlatformKind::Telegram),
+            ConnectionConfig::Slack { connection, .. } => (connection, PlatformKind::Slack),
         };
         if !ids.insert(connection.clone()) {
             return Err(PlatformError::Transport("duplicate configured connection".into()).into());
@@ -155,7 +173,8 @@ pub(crate) async fn run_with_shutdown(
     for config in configs {
         let connection = match &config {
             ConnectionConfig::Discord { connection, .. }
-            | ConnectionConfig::Telegram { connection, .. } => connection.clone(),
+            | ConnectionConfig::Telegram { connection, .. }
+            | ConnectionConfig::Slack { connection, .. } => connection.clone(),
         };
         let bot = bot.clone();
         let ingress = ingress.clone();
@@ -178,6 +197,21 @@ pub(crate) async fn run_with_shutdown(
                         token,
                         rooms,
                         owner,
+                        ingress,
+                        shutdown,
+                    )
+                    .await
+                }
+                ConnectionConfig::Slack {
+                    app_token,
+                    bot_token,
+                    ..
+                } => {
+                    super::slack::runner::run(
+                        bot,
+                        connection.clone(),
+                        app_token,
+                        bot_token,
                         ingress,
                         shutdown,
                     )

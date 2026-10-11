@@ -137,7 +137,8 @@
         let (adapter, _) = bot.transport(&room.conversation()).unwrap();
         match adapter.as_ref() {
             platform::Adapter::Discord(adapter) => assert_eq!(adapter.media_resolution_count(), 0),
-            platform::Adapter::Telegram(_) => panic!("Discord fixture must use Discord transport"),
+            platform::Adapter::Telegram(_) => unreachable!("Discord fixture must use Discord transport"),
+            platform::Adapter::Slack(_) => unreachable!("Discord fixture must use Discord transport"),
         }
         {
             let state = bot.state();

@@ -571,6 +571,57 @@ mod tests {
     }
 
     #[test]
+    fn slack_snapshot_and_details_preserve_reported_metadata_without_discord_extras() {
+        let mut room = crate::platform::slack::events::room("T123", "C456").unwrap();
+        room.name = Some("approved Slack room".into());
+        room.thread = Some(
+            ThreadKey::new(PlatformKind::Slack, &["T123", "C456", "1700000000.000123"]).unwrap(),
+        );
+        let mut account = crate::platform::slack::events::user("T123", "U789").unwrap();
+        account.display_name = "reported Slack bot".into();
+        account.automation = Automation::Bot;
+        let mut capabilities = Capabilities::unavailable();
+        capabilities.send = true;
+        capabilities.history = HistoryAccess::Paginated;
+        capabilities.visibility = MessageVisibility::Ordinary;
+        let reported = ConnectionSnapshot {
+            connection: ConnectionId::new("slack-work"),
+            platform: PlatformKind::Slack,
+            status: ConnectionStatus::Ready,
+            account: Some(account),
+            rooms: vec![RoomSnapshot { room, capabilities }],
+            warnings: Vec::new(),
+        };
+        let snapshot = transport_snapshot(std::slice::from_ref(&reported));
+        assert_eq!(snapshot["connection"], "connected");
+        assert_eq!(snapshot["spaces"], 1);
+        assert_eq!(snapshot["rooms"], 1);
+        assert_eq!(snapshot["connections"], json!([reported]));
+        assert_eq!(
+            snapshot["connections"][0]["account"]["id"],
+            "slack:user:T123:U789"
+        );
+        assert_eq!(
+            snapshot["connections"][0]["rooms"][0]["room"]["id"],
+            "slack:room:T123:C456"
+        );
+        assert!(snapshot.get("guilds").is_none());
+        assert!(snapshot.get("cost").is_none());
+        for language in [Language::En, Language::Tr] {
+            let details = connection_details(std::slice::from_ref(&reported), language);
+            assert!(details.contains("slack-work (slack)"));
+            assert!(details.contains("reported Slack bot"));
+            assert!(details.contains("slack:user:T123:U789"));
+            assert!(details.contains("slack:room:T123:C456"));
+            assert!(details.contains("slack:space:T123"));
+            assert!(details.contains(reported.rooms[0].room.thread.as_ref().unwrap().as_str()));
+            assert!(details.contains(&json!(reported.rooms[0].capabilities).to_string()));
+            assert!(!details.contains("discord"));
+            assert!(!details.contains(&t(language, "panel.overview.telegram_privacy_warning")));
+        }
+    }
+
+    #[test]
     fn telegram_privacy_warning_uses_reported_visibility_and_account_metadata_only() {
         let mut connection = matrix_snapshot(ConnectionStatus::Ready);
         connection.connection = ConnectionId::new("telegram");

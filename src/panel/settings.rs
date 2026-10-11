@@ -63,11 +63,17 @@ fn input(language: Language, view: &FieldView) -> Field {
         FieldKind::Bool => &["on", "off"],
         FieldKind::Provider => &["openrouter", "mistral"],
         FieldKind::Language => &["en", "tr"],
+        FieldKind::SlackHistoryTier => &["internal", "restricted"],
         FieldKind::LogLevel => &["off", "error", "warn", "info", "debug", "trace"],
         FieldKind::LogColor => &["auto", "on", "off"],
         _ => &[],
     };
-    if !choices.is_empty() || matches!(view.spec.kind, FieldKind::TelegramRooms) {
+    if !choices.is_empty()
+        || matches!(
+            view.spec.kind,
+            FieldKind::TelegramRooms | FieldKind::SlackChannels
+        )
+    {
         input.value =
             crate::config::validate_value(view.spec.key, &input.value).unwrap_or(input.value);
     }
@@ -85,6 +91,9 @@ fn input(language: Language, view: &FieldView) -> Field {
                     "auto" => t(language, "panel.settings.auto"),
                     _ => match view.spec.kind {
                         FieldKind::LogLevel => t(language, &format!("panel.logs.{value}")),
+                        FieldKind::SlackHistoryTier => {
+                            t(language, &format!("panel.settings.slack_history.{value}"))
+                        }
                         _ => value.to_string(),
                     },
                 },
@@ -159,7 +168,16 @@ pub(super) async fn view(
     for (group, keys, advanced) in [
         (
             "platform",
-            &["DISCORD_TOKEN", "TELEGRAM_TOKEN", "TELEGRAM_ROOMS"][..],
+            &[
+                "DISCORD_TOKEN",
+                "TELEGRAM_TOKEN",
+                "TELEGRAM_ROOMS",
+                "SLACK_APP_TOKEN",
+                "SLACK_BOT_TOKEN",
+                "SLACK_CHANNELS",
+                "SLACK_HISTORY_TIER",
+                "SLACK_TEST_CHANNEL",
+            ][..],
             false,
         ),
         (
@@ -535,18 +553,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn telegram_inputs_are_localized_write_only_and_typed_without_changing_discord() {
+    fn transport_inputs_are_localized_write_only_and_typed_without_changing_discord() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join(".env");
         std::fs::write(
             &path,
-            "DISCORD_TOKEN=discord-private-token\nTELEGRAM_TOKEN=telegram-private-token\nTELEGRAM_ROOMS=-100123\nOPENROUTER_KEY=key\n",
+            "DISCORD_TOKEN=discord-private-token\nTELEGRAM_TOKEN=telegram-private-token\nTELEGRAM_ROOMS=-100123\nSLACK_APP_TOKEN=app-private-token\nSLACK_BOT_TOKEN=bot-private-token\nSLACK_CHANNELS=C123,G456,C123\nSLACK_TEST_CHANNEL=G456\nOPENROUTER_KEY=key\n",
         )
         .unwrap();
         let config = Config::load(path, &HashMap::new()).unwrap();
         let fields = config.fields();
         for language in [Language::En, Language::Tr] {
-            for key in ["DISCORD_TOKEN", "TELEGRAM_TOKEN"] {
+            for key in [
+                "DISCORD_TOKEN",
+                "TELEGRAM_TOKEN",
+                "SLACK_APP_TOKEN",
+                "SLACK_BOT_TOKEN",
+            ] {
                 let view = fields.iter().find(|view| view.spec.key == key).unwrap();
                 let input = input(language, view);
                 assert_eq!(input.kind, "password");
@@ -569,6 +592,41 @@ mod tests {
             assert!(input.configured.is_empty());
             assert!(!input.label.starts_with("panel."));
             assert!(!input.help.starts_with("panel."));
+            for (key, expected) in [
+                ("SLACK_CHANNELS", "C123,G456"),
+                ("SLACK_TEST_CHANNEL", "G456"),
+            ] {
+                let view = fields.iter().find(|view| view.spec.key == key).unwrap();
+                let input = super::input(language, view);
+                assert_eq!(input.kind, "text");
+                assert_eq!(input.value, expected);
+                assert!(input.configured.is_empty());
+                assert!(!input.label.starts_with("panel."));
+                assert!(!input.help.starts_with("panel."));
+            }
+            let view = fields
+                .iter()
+                .find(|view| view.spec.key == "SLACK_HISTORY_TIER")
+                .unwrap();
+            let input = super::input(language, view);
+            assert_eq!(input.kind, "select");
+            assert_eq!(input.value, "internal");
+            assert_eq!(input.choices.len(), 2);
+            assert_eq!(input.choices[0].value, "internal");
+            assert!(input.choices[0].selected);
+            assert_eq!(input.choices[1].value, "restricted");
+            assert!(!input.choices[1].selected);
+            assert!(!input.label.starts_with("panel."));
+            assert!(!input.help.starts_with("panel."));
+            for choice in &input.choices {
+                assert_eq!(
+                    choice.label,
+                    t(
+                        language,
+                        &format!("panel.settings.slack_history.{}", choice.value)
+                    )
+                );
+            }
         }
     }
 }

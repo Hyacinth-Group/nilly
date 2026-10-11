@@ -17,6 +17,9 @@ pub enum FieldKind {
     UserKey,
     IdList,
     TelegramRooms,
+    SlackChannel,
+    SlackChannels,
+    SlackHistoryTier,
     TimezoneOffset,
     Language,
     Bool,
@@ -61,6 +64,11 @@ pub static REGISTRY: &[FieldSpec] = &[
     field!("DISCORD_TOKEN", Secret, ""),
     field!("TELEGRAM_TOKEN", Secret, ""),
     field!("TELEGRAM_ROOMS", TelegramRooms, ""),
+    field!("SLACK_APP_TOKEN", Secret, ""),
+    field!("SLACK_BOT_TOKEN", Secret, ""),
+    field!("SLACK_CHANNELS", SlackChannels, ""),
+    field!("SLACK_HISTORY_TIER", SlackHistoryTier, "internal"),
+    field!("SLACK_TEST_CHANNEL", SlackChannel, ""),
     field!("OWNER_KEY", UserKey, ""),
     field!("OWNER_ID", Id, ""),
     field!("TZ_OFFSET", TimezoneOffset, "0"),
@@ -131,6 +139,7 @@ pub fn normalize(field: &FieldSpec, raw: &str) -> Result<String, ConfigError> {
         .to_owned(),
         FieldKind::Provider => choice(field, value, &["openrouter", "mistral"])?,
         FieldKind::Language => choice(field, value, &["en", "tr"])?,
+        FieldKind::SlackHistoryTier => choice(field, value, &["internal", "restricted"])?,
         FieldKind::LogLevel => {
             if matches!(value.to_lowercase().as_str(), "kapali" | "kapalı") {
                 "off".to_owned()
@@ -165,6 +174,20 @@ pub fn normalize(field: &FieldSpec, raw: &str) -> Result<String, ConfigError> {
             let mut rooms: Vec<_> = rooms.into_iter().map(|room| room.to_string()).collect();
             rooms.sort_unstable();
             rooms.join(",")
+        }
+        FieldKind::SlackChannel => slack_channel(field, value)?.to_owned(),
+        FieldKind::SlackChannels => {
+            let mut channels = Vec::new();
+            for part in value.split(',') {
+                let channel = slack_channel(field, part.trim())?;
+                if !channels.contains(&channel) {
+                    channels.push(channel);
+                }
+                if channels.len() > 1024 {
+                    return Err(invalid(field, "panel.config.too_many_ids"));
+                }
+            }
+            channels.join(",")
         }
         FieldKind::TimezoneOffset => {
             let hours: f64 = value
@@ -226,6 +249,14 @@ fn choice(field: &FieldSpec, value: &str, choices: &[&str]) -> Result<String, Co
         Ok(value)
     } else {
         Err(invalid(field, "panel.config.invalid_choice"))
+    }
+}
+
+fn slack_channel<'a>(field: &FieldSpec, value: &'a str) -> Result<&'a str, ConfigError> {
+    if crate::platform::slack::valid_channel_id(value) {
+        Ok(value)
+    } else {
+        Err(invalid(field, "panel.config.invalid_slack_channel"))
     }
 }
 

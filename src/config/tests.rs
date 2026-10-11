@@ -84,11 +84,15 @@ fn telegram_rooms_use_runner_parser_and_blank_is_default_deny() {
 }
 
 #[test]
-fn runtime_accepts_either_or_both_transports_and_preserves_provider_requirements() {
+fn runtime_accepts_any_transport_combination_and_preserves_provider_requirements() {
     for credentials in [
         "DISCORD_TOKEN=discord-secret\n",
         "TELEGRAM_TOKEN=telegram-secret\n",
         "DISCORD_TOKEN=discord-secret\nTELEGRAM_TOKEN=telegram-secret\n",
+        "SLACK_APP_TOKEN=app-secret\nSLACK_BOT_TOKEN=bot-secret\n",
+        "DISCORD_TOKEN=discord-secret\nSLACK_APP_TOKEN=app-secret\nSLACK_BOT_TOKEN=bot-secret\n",
+        "TELEGRAM_TOKEN=telegram-secret\nSLACK_APP_TOKEN=app-secret\nSLACK_BOT_TOKEN=bot-secret\n",
+        "DISCORD_TOKEN=discord-secret\nTELEGRAM_TOKEN=telegram-secret\nSLACK_APP_TOKEN=app-secret\nSLACK_BOT_TOKEN=bot-secret\n",
     ] {
         let (_directory, config) = fixture(&format!("{credentials}OPENROUTER_KEY=key\n"));
         config.validate_runtime().unwrap();
@@ -108,6 +112,239 @@ fn runtime_accepts_either_or_both_transports_and_preserves_provider_requirements
     assert!(
         matches!(config.validate_runtime(), Err(ConfigError::Field { key, code }) if key == "MISTRAL_KEY" && code == "panel.config.required")
     );
+}
+
+#[test]
+fn partial_slack_credentials_are_rejected_even_with_another_transport() {
+    for other in [
+        "",
+        "DISCORD_TOKEN=discord-secret\n",
+        "TELEGRAM_TOKEN=telegram-secret\n",
+    ] {
+        for (credential, missing) in [
+            ("SLACK_APP_TOKEN=app-private-token\n", "SLACK_BOT_TOKEN"),
+            ("SLACK_BOT_TOKEN=bot-private-token\n", "SLACK_APP_TOKEN"),
+        ] {
+            let (_directory, config) = fixture(&format!("{other}{credential}OPENROUTER_KEY=key\n"));
+            let error = config.validate_runtime().unwrap_err();
+            assert!(matches!(
+                &error,
+                ConfigError::Field { key, code }
+                    if key == missing && *code == "panel.config.slack_token_pair"
+            ));
+            assert!(!error.to_string().contains("private-token"));
+        }
+    }
+}
+
+#[test]
+fn slack_channel_fields_reuse_native_adapter_validation_and_default_deny() {
+    let (_directory, config) =
+        fixture("SLACK_APP_TOKEN=app\nSLACK_BOT_TOKEN=bot\nOPENROUTER_KEY=key\n");
+    config.validate_runtime().unwrap();
+    assert_eq!(config.get("SLACK_CHANNELS"), "");
+    assert_eq!(config.get("SLACK_TEST_CHANNEL"), "");
+    assert_eq!(config.get("SLACK_HISTORY_TIER"), "internal");
+    assert_eq!(
+        validate_value("SLACK_CHANNELS", " C123,G456,C123 ").unwrap(),
+        "C123,G456"
+    );
+    assert_eq!(
+        validate_value("SLACK_TEST_CHANNEL", " G456 ").unwrap(),
+        "G456"
+    );
+    assert_eq!(
+        validate_value("SLACK_HISTORY_TIER", " RESTRICTED ").unwrap(),
+        "restricted"
+    );
+    for value in ["", " \t "] {
+        assert_eq!(validate_value("SLACK_CHANNELS", value).unwrap(), "");
+        assert_eq!(validate_value("SLACK_TEST_CHANNEL", value).unwrap(), "");
+    }
+    for value in [
+        "C",
+        "D123",
+        "U123",
+        "#general",
+        "general",
+        "c123",
+        "C1-2",
+        "slack:room:T123:C456",
+        "C123,,G456",
+        "C123,",
+    ] {
+        let error = validate_value("SLACK_CHANNELS", value).unwrap_err();
+        assert_eq!(error.code(), "panel.config.invalid_slack_channel");
+        assert_eq!(
+            error.to_string(),
+            "panel.config.invalid_slack_channel: SLACK_CHANNELS"
+        );
+    }
+    for value in ["C123,G456", "D123", "#general"] {
+        assert_eq!(
+            validate_value("SLACK_TEST_CHANNEL", value)
+                .unwrap_err()
+                .code(),
+            "panel.config.invalid_slack_channel"
+        );
+    }
+    let too_long = format!("C{}", "1".repeat(64));
+    assert!(validate_value("SLACK_CHANNELS", &too_long).is_err());
+    assert!(validate_value("SLACK_HISTORY_TIER", "commercial").is_err());
+    let (_directory, blank_tier) = fixture(&format!("{}SLACK_HISTORY_TIER=\n", configured()));
+    assert_eq!(blank_tier.get("SLACK_HISTORY_TIER"), "internal");
+}
+
+#[test]
+fn slack_credentials_are_write_only_and_updates_stay_pending_until_restart() {
+    let (_directory, mut config) = fixture(
+        "SLACK_APP_TOKEN=app-private-token\nSLACK_BOT_TOKEN=bot-private-token\nSLACK_CHANNELS=C123\nOPENROUTER_KEY=key\n",
+    );
+    let fields = config.fields();
+    assert_eq!(REGISTRY.iter().filter(|field| field.secret).count(), 7);
+    for key in ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"] {
+        let view = fields.iter().find(|view| view.spec.key == key).unwrap();
+        assert!(view.spec.secret);
+        assert!(matches!(view.spec.kind, FieldKind::Secret));
+        assert_eq!(view.spec.application, "restart");
+        assert!(view.effective.configured);
+        assert!(view.saved.configured);
+        assert!(view.effective.value.is_none());
+        assert!(view.saved.value.is_none());
+        assert!(view.default.value.is_none());
+        save(&mut config, &replace(key, "")).unwrap();
+        assert_eq!(config.reload().unwrap().get(key), config.get(key));
+        for value in ["secret\nSTEALTH=on", "secret\rtext", "secret\0text"] {
+            let error = validate_value(key, value).unwrap_err();
+            assert_eq!(error.code(), "panel.config.invalid_value");
+            assert!(!error.to_string().contains(value));
+        }
+    }
+    assert!(!serde_json::to_string(&fields)
+        .unwrap()
+        .contains("private-token"));
+    for (key, kind) in [
+        ("SLACK_CHANNELS", FieldKind::SlackChannels),
+        ("SLACK_HISTORY_TIER", FieldKind::SlackHistoryTier),
+        ("SLACK_TEST_CHANNEL", FieldKind::SlackChannel),
+    ] {
+        let view = fields.iter().find(|view| view.spec.key == key).unwrap();
+        assert!(!view.spec.secret);
+        assert_eq!(
+            std::mem::discriminant(&view.spec.kind),
+            std::mem::discriminant(&kind)
+        );
+        assert_eq!(view.spec.application, "restart");
+    }
+    for (key, value) in [
+        ("SLACK_APP_TOKEN", "replacement-app-private-token"),
+        ("SLACK_BOT_TOKEN", "replacement-bot-private-token"),
+        ("SLACK_CHANNELS", ""),
+        ("SLACK_HISTORY_TIER", "restricted"),
+        ("SLACK_TEST_CHANNEL", "G456"),
+    ] {
+        let active = config.get(key).to_owned();
+        save(&mut config, &replace(key, value)).unwrap();
+        assert_eq!(config.get(key), active);
+        assert_eq!(config.reload().unwrap().get(key), value);
+        assert!(config
+            .fields()
+            .iter()
+            .any(|view| view.spec.key == key && view.pending_restart));
+    }
+    assert!(config.secret_values().contains(&"app-private-token"));
+    assert!(config
+        .secret_values()
+        .contains(&"replacement-app-private-token"));
+    assert!(!serde_json::to_string(&config.fields())
+        .unwrap()
+        .contains("private-token"));
+    let before = fs::read_to_string(config.path()).unwrap();
+    assert!(matches!(
+        save(&mut config, &HashMap::from([("SLACK_APP_TOKEN".into(), PatchValue::Clear)])),
+        Err(ConfigError::Field { key, code })
+            if key == "SLACK_APP_TOKEN" && code == "panel.config.slack_token_pair"
+    ));
+    assert_eq!(fs::read_to_string(config.path()).unwrap(), before);
+    assert!(matches!(
+        save(&mut config, &HashMap::from([
+            ("SLACK_APP_TOKEN".into(), PatchValue::Clear),
+            ("SLACK_BOT_TOKEN".into(), PatchValue::Clear),
+        ])),
+        Err(ConfigError::Field { key, code })
+            if key == "DISCORD_TOKEN" && code == "panel.config.platform_required"
+    ));
+    assert_eq!(fs::read_to_string(config.path()).unwrap(), before);
+    save(
+        &mut config,
+        &replace("DISCORD_TOKEN", "discord-private-token"),
+    )
+    .unwrap();
+    save(
+        &mut config,
+        &HashMap::from([
+            ("SLACK_APP_TOKEN".into(), PatchValue::Clear),
+            ("SLACK_BOT_TOKEN".into(), PatchValue::Clear),
+        ]),
+    )
+    .unwrap();
+    let reloaded = config.reload().unwrap();
+    assert_eq!(reloaded.get("SLACK_APP_TOKEN"), "");
+    assert_eq!(reloaded.get("SLACK_BOT_TOKEN"), "");
+    reloaded.validate_runtime().unwrap();
+}
+
+#[test]
+fn slack_environment_is_immutable_read_only_and_secrets_are_masked() {
+    let (directory, _) = fixture(
+        "SLACK_APP_TOKEN=file-app-private-token\nSLACK_BOT_TOKEN=file-bot-private-token\nSLACK_CHANNELS=C123\nOPENROUTER_KEY=key\n",
+    );
+    let env = HashMap::from([
+        (
+            "SLACK_APP_TOKEN".into(),
+            "environment-app-private-token".into(),
+        ),
+        (
+            "SLACK_BOT_TOKEN".into(),
+            "environment-bot-private-token".into(),
+        ),
+        ("SLACK_CHANNELS".into(), String::new()),
+        ("SLACK_HISTORY_TIER".into(), "restricted".into()),
+        ("SLACK_TEST_CHANNEL".into(), "G456".into()),
+    ]);
+    let mut config = Config::load(directory.path().join(".env"), &env).unwrap();
+    config.validate_runtime().unwrap();
+    assert_eq!(
+        config.get("SLACK_APP_TOKEN"),
+        "environment-app-private-token"
+    );
+    assert_eq!(
+        config.get("SLACK_BOT_TOKEN"),
+        "environment-bot-private-token"
+    );
+    assert_eq!(config.get("SLACK_CHANNELS"), "");
+    assert_eq!(config.get("SLACK_HISTORY_TIER"), "restricted");
+    assert_eq!(config.get("SLACK_TEST_CHANNEL"), "G456");
+    let fields = config.fields();
+    for key in [
+        "SLACK_APP_TOKEN",
+        "SLACK_BOT_TOKEN",
+        "SLACK_CHANNELS",
+        "SLACK_HISTORY_TIER",
+        "SLACK_TEST_CHANNEL",
+    ] {
+        let view = fields.iter().find(|view| view.spec.key == key).unwrap();
+        assert!(view.read_only);
+        assert!(matches!(view.source, Source::Environment));
+        assert!(matches!(
+            save(&mut config, &replace(key, "replacement")),
+            Err(ConfigError::Field { key: rejected, code })
+                if rejected == key && code == "panel.config.read_only"
+        ));
+    }
+    assert!(!serde_json::to_string(&fields)
+        .unwrap()
+        .contains("private-token"));
 }
 
 #[test]

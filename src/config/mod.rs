@@ -257,7 +257,22 @@ impl Config {
         for field in REGISTRY {
             registry::normalize(field, self.get(field.key))?;
         }
-        if self.get("DISCORD_TOKEN").is_empty() && self.get("TELEGRAM_TOKEN").is_empty() {
+        let slack_app = !self.get("SLACK_APP_TOKEN").is_empty();
+        let slack_bot = !self.get("SLACK_BOT_TOKEN").is_empty();
+        if slack_app != slack_bot {
+            return Err(field_error(
+                if slack_app {
+                    "SLACK_BOT_TOKEN"
+                } else {
+                    "SLACK_APP_TOKEN"
+                },
+                "panel.config.slack_token_pair",
+            ));
+        }
+        if self.get("DISCORD_TOKEN").is_empty()
+            && self.get("TELEGRAM_TOKEN").is_empty()
+            && !slack_app
+        {
             return Err(field_error(
                 "DISCORD_TOKEN",
                 "panel.config.platform_required",

@@ -6,14 +6,19 @@ Notable changes are recorded here in [Keep a Changelog](https://keepachangelog.c
 
 ### Added
 - Telegram Bot API adapter with NAT-friendly long polling, explicit default-deny room approval, qualified owner administration and private administrative results.
-- Discord/Telegram setup selection, bilingual Telegram onboarding and honest visibility/history/nickname notices.
+- Discord/Telegram/Slack CLI setup selection, bilingual Telegram onboarding and honest visibility/history/nickname notices.
 - Telegram safe media resolution/local uploads, native topic/reply routing, chat-allowed emoji reactions and a durable redb polling cursor; offline coverage and an ignored opt-in `getMe` probe.
+- Slack Socket Mode adapter with explicitly approved `SLACK_CHANNELS`, workspace-qualified identities, thread-aware replies, native private-file resolution, bounded history and supported Slack reactions.
+- Slack-only wizard setup with hidden `xapp-`/`xoxb-` tokens, qualified `OWNER_KEY`, bilingual Slack UI, exact app manifest and beginner installation/privacy/rate-limit guidance; Discord setup remains the default.
+- Concurrent Discord/Telegram/Slack connections sharing the brain, with private Slack text-administration replies and no Slack slash-command registration.
+- Offline Slack wizard/manifest coverage and opt-in ignored environment-gated live-test documentation; no live-workspace verification is implied.
 
 ### Changed
 - Default prompts identify the bot honestly and omit a fictional university biography and fixed political identity.
 - Shorter bilingual READMEs explain the memory mechanism, collection scope, external processing, and unmeasured running cost.
 - Contributor and reference documentation describe current behavior rather than development sessions.
 - Setup hides credentials on a terminal, explains paid defaults, and ends with numbered verification steps.
+- CLI setup uses typed secret encoding and atomic config patches; the five-step browser wizard remains Discord-only, with Telegram/Slack configured through protected Settings and a restart.
 - Compose uses the stable saved-data volume name `discord-bot-data`.
 
 ### Removed

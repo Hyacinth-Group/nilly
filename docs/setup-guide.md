@@ -1,10 +1,12 @@
-# Your first Discord or Telegram bot
+# Your first bot: Discord, Telegram or Slack
 
 This bot keeps conversation notes and uses them alongside a fixed persona in later replies. You do not need to write code. Start the package from Terminal or PowerShell, then connect your accounts and configure the bot in your browser.
 
-Choose **Discord** or **Telegram** for the connection you want. The numbered
-Discord walkthrough below retains Discord's intents and invitation steps;
-Telegram users follow the short path here, then the same installation/start commands.
+Choose **Discord**, **Telegram** or **Slack** for the connection you want. The
+numbered Discord walkthrough below retains Discord's intents and invitation
+steps; Telegram and Slack users follow their platform sections, then the same
+installation/start commands. The five-step browser wizard remains Discord-only;
+other platforms use the CLI or protected Settings followed by a process restart.
 
 ## Telegram setup
 
@@ -74,6 +76,8 @@ Official references: [creating a bot](https://core.telegram.org/bots/features#cr
 [privacy mode](https://core.telegram.org/bots/features#privacy-mode),
 [Bot API polling](https://core.telegram.org/bots/api#getupdates).
 
+For Slack, use [Slack Socket Mode](#slack-socket-mode); no Discord account or token is needed. Enabled Discord, Telegram and Slack connections share one brain, so approve only rooms whose members understand that their information may influence replies elsewhere.
+
 ## What you need for Discord
 
 - [ ] A Discord account.
@@ -89,7 +93,7 @@ Keep the computer on for the bot to stay online.
 > - **Sent to your model service:** selected chat text and saved notes for replies and background analysis. OpenRouter also routes to the serving model provider. Images may be sent; image analysis defaults on (`IMAGE_ANALYSIS=off` disables it).
 > - **Other services:** Firecrawl receives page URLs and search queries when configured.
 >
-Tell members which rooms the bot can read. It reads ordinary messages, not only mentions, and observes messages while asleep. Discord's first scan reads up to **14 days** of accessible text history; set `CHANNELS` before first launch. **Blank Discord `GUILD_ID` / `CHANNELS` means every accessible server / channel.** Telegram has no group-history scan and **blank `TELEGRAM_ROOMS` denies all rooms**. Selective member deletion is not supported, and `/reset` does not erase stored records. [Retention details](#privacy).
+> Tell members which rooms the bot can read. It reads ordinary messages, not only mentions, and observes messages while asleep. Discord's first scan reads up to **14 days** of accessible text history; set `CHANNELS` before first launch. **Blank Discord `GUILD_ID` / `CHANNELS` means every accessible server / channel.** Telegram has no group-history scan and **blank `TELEGRAM_ROOMS` denies all rooms**. Slack requires explicit `SLACK_CHANNELS`; **blank denies all Slack rooms**, and history is bounded/rate-limited. Selective member deletion is not supported, and `/reset` does not erase stored records. [Retention details](#privacy).
 
 ## What does it cost?
 
@@ -100,6 +104,97 @@ The bot itself is free, open-source software. You bring your own model account. 
 Free-model requests are rate-limited; consult [OpenRouter's current limits](https://openrouter.ai/docs/api_reference/limits). A **request** is one model call, not one Discord message. Background analysis makes requests too and can exhaust the free allowance before ordinary chat does.
 
 We have not published a measured running cost yet. Replies and background analysis both use your model key. Start with a provider spending limit and check the provider's usage dashboard. A rented server may have its own bill.
+
+## Slack Socket Mode
+
+You need a Slack account, permission to install an app in your workspace (or an administrator who can approve it), a model API key, and a computer/server that stays online. **Socket Mode** opens an outbound WebSocket connection; there is no public webhook server, signing secret, or incoming port to configure.
+
+### 1. Create the app from the supplied manifest
+
+1. Open [Slack's app management page](https://api.slack.com/apps), sign in, and select **Create New App → From a manifest**.
+2. Choose the workspace where the bot will operate.
+3. Choose **YAML**, replace the example with the full contents of [`slack-app-manifest.yml`](slack-app-manifest.yml), review it, and create the app. You may change the display name; do not silently broaden the scopes.
+4. Open **Socket Mode** and check that it is enabled.
+5. Under **OAuth & Permissions → Bot Token Scopes**, check this exact list:
+   - `app_mentions:read`
+   - `channels:history`, `channels:read`
+   - `groups:history`, `groups:read`
+   - `chat:write`
+   - `files:read`, `files:write`
+   - `reactions:read`, `reactions:write`
+   - `users:read`
+6. Under **Event Subscriptions**, check the bot events: `app_mention`, `message.channels`, `message.groups`, `member_joined_channel`, `reaction_added`.
+
+`channels:*` covers public channels; `groups:*` covers private channels the bot has joined. The manifest does not grant direct-message reading, `chat:write.public`, user-token scopes, or slash commands. It contains no credentials. Slack's own `/invite` remains available; it is not a command registered by this bot.
+
+### 2. Install and obtain the two different tokens
+
+1. Under **OAuth & Permissions**, select **Install to Workspace** and approve the requested bot scopes. Follow your workspace's administrator approval process if required.
+2. Copy the **Bot User OAuth Token**, beginning `xoxb-`. This is `SLACK_BOT_TOKEN`, used for Slack Web API calls.
+3. Under **Basic Information → App-Level Tokens**, select **Generate Token and Scopes**.
+4. Name it, add only **`connections:write`**, generate it, and copy the token beginning `xapp-`. This is `SLACK_APP_TOKEN`, used to open Socket Mode.
+5. Keep both tokens private. Reinstall the app after changing bot scopes or event subscriptions so the installation receives the new permissions.
+
+**Do not add `connections:write` to bot scopes.** It is an app-level token scope created separately; the manifest cannot create or contain an app-level secret. Rotate leaked tokens in Slack app management. Never paste them in Slack, a screenshot, a Git commit, or a support log.
+
+### 3. Approve channels, invite the bot, and find the owner identity
+
+1. Agree with members which channels may be processed and stored. Start with one trusted test channel.
+2. In each approved public or private channel, use Slack's **`/invite @your-bot-name`**. Installation alone does not join channels. A private channel requires an invitation from a member.
+3. Open channel details and copy the **channel ID** (or take it from the channel's browser URL). IDs begin `C…` or `G…`; `#general` is a name and is not accepted.
+4. Save a comma-separated list, such as `C01234567,G01234567`, for **`SLACK_CHANNELS`**. Missing/blank means **no Slack channel is approved for learning**, not "all channels." Never substitute Discord's `CHANNELS`.
+5. Optionally find your own Slack member ID: open your profile's **More/… → Copy member ID**. It normally begins `U…`. Open Slack in a browser; the workspace ID is the `T…` component of `https://app.slack.com/client/T…/C…`.
+6. Combine them as **`OWNER_KEY=slack:user:T01234567:U01234567`**, using your actual workspace/member IDs. This is a canonical identity, not your username or email. `OWNER_KEY` takes precedence over legacy Discord `OWNER_ID`; an invalid nonblank key does not fall back. The setting is optional for ordinary chat, but leaving it blank denies Slack administration, including `status`.
+
+All enabled platforms share notes. Source-qualified IDs keep different people's records distinct but do **not** isolate their information from the shared brain. Only trusted, approved allowlisted channels should contribute. Private channel membership does not make model processing local or prevent learned context influencing another approved room.
+
+### 4. Configure and start
+
+Install Docker using [step 4 below](#4-install-docker), then follow the download/start commands in [step 5](#5-download-and-start-the-bot). The panel opens on port **8787** before platform credentials are required. Complete **Claim and protect**, then open protected **Settings**, not **Connect Discord**. In **Platform**, save both Slack tokens, native approved channel IDs and the history tier; configure provider/model credentials and language, and set the qualified owner in **Privacy**. Save and **restart the process** (`docker compose restart bot` for Docker). Slack Settings do not perform a live Slack credential test or start a connection without restarting.
+
+For terminal-only setup, follow [Headless CLI setup](#headless-cli-setup), including its Docker command that writes `config/.env`. With a downloaded release binary, run:
+
+```sh
+discord-bot init
+```
+
+Choose **`slack`** at the new platform question. Enter alone chooses Discord and keeps the existing Discord setup behavior.
+
+| Slack wizard question | What to enter |
+| --- | --- |
+| App-level token | Your `xapp-` token with `connections:write`; hidden on an interactive terminal. |
+| Bot token | Your installed app's `xoxb-` token; hidden on an interactive terminal. |
+| Approved channel IDs | Native comma-separated IDs from step 3; Enter approves none. |
+| Model provider / key / model | OpenRouter or Mistral, your model key, and your selected model ID; see the cost notes above. |
+| Language | `en` or `tr`. |
+| Owner identity | `slack:user:<workspace ID>:<member ID>`, or Enter for no owner (Slack administration, including `status`, is then denied). |
+| UTC offset | Hours from UTC for the sleep schedule, such as `3`, `-5`, or `5.5`. |
+
+The resulting `.env` is Slack-only: it does not require or write `DISCORD_TOKEN`. The wizard does not contact Slack or prove token validity. Piped input is not hidden. New Slack prompts have English/Turkish translations; `BOT_LANG=tr` selects Turkish prompts when launching the wizard. The selected language is saved for subsequent bot runs. Protect `.env` (Unix mode `600`; on Windows restrict folder access).
+
+Start with `discord-bot`, `cargo run --release`, or `docker compose up -d`, depending on installation. **As the configured `OWNER_KEY` owner**, in an invited, allowlisted channel, send **`!status`** or mention the bot followed by **`status`**. An unset owner means this administration check is denied; ordinary chat does not require an owner. Do not use `/status` in Slack: no Slack slash commands are registered. Administration goes through the shared service and returns **private ephemeral messages** (`chat.postEphemeral`), not public status cards or a direct-message fallback.
+
+To run several platforms simultaneously, add `DISCORD_TOKEN` and/or `TELEGRAM_TOKEN` with their corresponding room restrictions to the same configuration; retain both Slack tokens and `SLACK_CHANNELS`. The wizard configures one platform at a time. Use protected Settings or edit the private file rather than rerunning `init --force` to add a platform, since init overwrites the answers it collects. Each platform keeps its own room permissions and approval settings. A partial Slack app/bot token pair is rejected even if Discord or Telegram credentials are complete.
+
+### History, files, and capability limits
+
+- **Bounded history, not a workspace export:** only explicitly approved rooms the bot can access are eligible. Retrieval is bounded and rate-limited; it is not a guarantee of complete past conversations or a complete thread archive.
+- **Slack history rate policy:** internal customer-built apps and Marketplace-approved apps retain **Tier 3** history limits (50+ requests/minute). Commercially distributed, non-Marketplace apps are limited to **1 request/minute** and **15 messages/request** for `conversations.history` and `conversations.replies` under Slack's newer policy. Internal does not mean "anything self-hosted"; check your app's distribution classification. The adapter defaults to **`SLACK_HISTORY_TIER=internal`**, reserving at least 1 second between history calls with at most 100 messages/page. For the commercial non-Marketplace class, set **`SLACK_HISTORY_TIER=restricted`** before launch: at least 60 seconds between calls and at most 15 messages/page. Both modes honor returned HTTP 429 `Retry-After` and report the rate limit without automatically retrying. Do not raise request volume just because your workspace is paid. [Slack policy](https://docs.slack.dev/changelog/2025/05/29/rate-limit-changes-for-non-marketplace-apps), [history reference](https://docs.slack.dev/reference/methods/conversations.history).
+- **Private files:** `files:read` permits access only within Slack's authorization boundary. Attachments keep a native file ID; when needed, `files.info` resolves a private download and the bot authenticates it. Do not copy signed/authenticated file URLs into memory. Image analysis may send downloaded images to the model provider; set **`IMAGE_ANALYSIS=off`** before launch to disable attached-image processing, including Slack private files.
+- **Supported output:** text and thread-aware replies, uploads within Slack's limits, edits/deletes of the bot's own messages, and reactions using Slack emoji names (including custom names) or a supported known Unicode-to-name mapping. Unknown Unicode reactions are explicitly unsupported, not guessed.
+- **Output length:** a raw chunk is at most 3,900 Unicode scalars; Slack escaping can expand text, so rendered chunks are split safely to stay within a 4,000-scalar target. Longer replies may become several messages.
+- **Not supported:** a typing indicator, per-channel bot nicknames, account-profile mutation as a nickname fallback, interactive Discord-style menus/modals, and Slack slash commands. An ephemeral result is transient and recipient-only, not durable private storage.
+
+### Optional live tests (not onboarding verification)
+
+Ordinary tests are offline. Live Slack tests are **ignored and environment-gated**; they require real `SLACK_APP_TOKEN` and `SLACK_BOT_TOKEN`. Set optional `SLACK_TEST_CHANNEL` to an invited test channel only when deliberately permitting channel-scoped probes (which may create/edit/react to/delete bot messages). Keep tokens out of command history and logs:
+
+```sh
+cargo test --locked slack:: -- --ignored
+```
+
+This is an opt-in command, not evidence that a live workspace was tested. Without real credentials, do not report Slack end-to-end verification. The integration owner separately runs the release startup smoke with fake tokens; that checks startup/failure behavior, not a successful Slack connection.
+
 
 ## 1. Create the bot in Discord
 
@@ -231,12 +326,13 @@ The panel starts before checking the bot's credentials, so a new installation do
 
 Credential tests do not save your keys to disk. Finish saves the private `config/.env` and starts the Discord runtime **without restarting the process**. Once its password has been saved, the administrator account survives an interrupted setup; log in to resume, rather than trying to reclaim it. Unfinished credential drafts are session-local, expire 15 minutes after creation or the latest successful credential test, and do not survive logout or process restart.
 
-Keep `config/.env` private: it contains plaintext tokens and keys. Browser saves replace the file atomically and preserve unrelated settings/comments; they do not encrypt it. Never upload it or share it in a screenshot. On Windows restrict folder access in **Properties → Security**. Rotate a leaked Discord token in Developer Portal, a leaked Telegram token with BotFather, and a leaked model key in its provider account.
+Keep `config/.env` private: it contains plaintext tokens and keys. Browser saves replace the file atomically and preserve unrelated settings/comments; they do not encrypt it. Never upload it or share it in a screenshot. On Windows restrict folder access in **Properties → Security**. Rotate a leaked Discord token in Developer Portal, a leaked Telegram token with BotFather, leaked Slack tokens in Slack app management, and a leaked model key in its provider account.
 
 Keep Docker Desktop running. Panel health is separate from platform connection
 health: a successful Discord token test is not proof that privileged intents,
-channel permissions or the gateway connection work. Telegram's Settings path
-requires a restart and does not offer the Discord wizard's credential test.
+channel permissions or the gateway connection work. Telegram and Slack's
+protected Settings paths require a restart and do not offer the Discord wizard's
+credential test.
 
 For a release binary, run it from its private data folder and open the printed browser link; it writes `.env` there. Keep the terminal open. An existing valid configuration starts its configured platform connections automatically alongside the panel. [Headless CLI setup](#headless-cli-setup) remains available if you do not want browser administration.
 
@@ -262,7 +358,7 @@ over the file; a browser save cannot override Compose injection.
 
 ### Panel safety and everyday settings
 
-Open `http://localhost:8787` after setup and log in. **Overview** distinguishes panel availability from platform connections and shows mood per active conversation, not a fabricated global mood. Its model-call/token counters cover only this process, not durable usage history or measured cost. **Settings** validates supported fields without revealing stored keys. Token/key fields are write-only: a blank secret field keeps its saved value, and the explicit clear control removes it. **Settings → Platform** provides Telegram's token and approved rooms alongside Discord's token; blank Telegram approval denies all rooms. Save the model credentials as well when configuring Telegram alone, and restart to apply settings. **Logs** is a bounded recent, redacted in-memory buffer; entries are lost on restart and it is not a permanent audit trail. Redaction is not a guarantee that logs contain no member data.
+Open `http://localhost:8787` after setup and log in. **Overview** distinguishes panel availability from platform connections and shows mood per active conversation, not a fabricated global mood. Its model-call/token counters cover only this process, not durable usage history or measured cost. **Settings** validates supported fields without revealing stored keys. Token/key fields are write-only: a blank secret field keeps its saved value, and the explicit clear control removes it. **Settings → Platform** provides Telegram's token and approved rooms, Slack's app/bot tokens, native channel allowlist and history tier, and Discord's token. Blank Telegram/Slack approval denies all rooms; Slack requires both tokens. Save the model credentials as well when configuring Telegram or Slack alone, and restart to apply settings. **Logs** is a bounded recent, redacted in-memory buffer; entries are lost on restart and it is not a permanent audit trail. Redaction is not a guarantee that logs contain no member data.
 
 Memory/personality editors, action buttons, and the dedicated usage page are intentionally disabled pending core APIs. Use existing supported Discord commands for bot operations; do not assume the panel supplies member erasure, durable usage history, or provider cost accounting.
 
@@ -348,7 +444,7 @@ is not a deterministic health check.
 
 ### Configuration is missing or invalid. What does that mean?
 
-The panel remains available for missing or invalid bot credentials, so log in to finish setup or repair Settings. Configure `DISCORD_TOKEN`, `TELEGRAM_TOKEN`, or both; Telegram alone does not need a Discord token. After saving changes to an existing configuration, restart the bot. Panel availability does not mean either platform connection is healthy.
+The panel remains available for missing or invalid bot credentials, so log in to finish setup or repair protected Settings. Configure `DISCORD_TOKEN`, `TELEGRAM_TOKEN`, a complete `SLACK_APP_TOKEN` + `SLACK_BOT_TOKEN` pair, or several of these. Telegram or Slack alone needs no Discord token. A partial Slack pair is rejected even with another platform configured. After saving changes to an existing configuration, restart the bot. Panel availability does not mean any platform connection is healthy.
 
 For Compose, check `config/.env` and the writable directory mount's ownership. Process environment values (including retained `env_file` settings) take precedence and are read-only in the panel; a file save cannot override them. A panel bind/config-file/database failure can prevent the panel itself from opening—check the console rather than assuming every failure is recoverable in the browser.
 
@@ -422,7 +518,7 @@ For a binary or source build, memory lives in the local `durum/` folder. Stop th
 
 ## Privacy
 
-Tell members before inviting it: Discord's accessible ordinary messages and up to 14 days of first-scan history may be processed, subject to `CHANNELS` and Discord permissions. Telegram processes new updates from explicitly approved `TELEGRAM_ROOMS` and retained local text, not old group history; blank approval denies all rooms. Observation continues while asleep. Replies and background analysis send selected chat text and saved notes to the chosen model service (including OpenRouter's serving provider). Attached images can be sent because image analysis defaults on. Configured Firecrawl receives page URLs and search queries.
+Tell members before inviting it: Discord's accessible ordinary messages and up to 14 days of first-scan history may be processed, subject to `CHANNELS` and Discord permissions. Telegram processes new updates from explicitly approved `TELEGRAM_ROOMS` and retained local text, not old group history; blank approval denies all rooms. Slack uses an explicit `SLACK_CHANNELS` allowlist (blank denies all), membership permissions and bounded rate-limited history. Observation continues while asleep. Replies and background analysis send selected chat text and saved notes to the chosen model service (including OpenRouter's serving provider). Attached images, including authorized Slack private-file images, can be sent because image analysis defaults on; `IMAGE_ANALYSIS=off` disables this. Configured Firecrawl receives page URLs and search queries. Enabled platforms share memory, so approve only rooms whose members trust that cross-platform information boundary.
 
 Saved data stays on your machine, but processing is **not** local. Channel histories are bounded; derived person/topic notes, summaries and archived raw text can remain after a conversation. **Selective member deletion is not supported.** `/reset` resets channel/chat state, not stored member records or archives. Do not promise members an erasure capability the bot does not have.
 
@@ -446,7 +542,7 @@ On Mac or Linux, if the file is not executable, run `chmod +x discord-bot` first
 .\discord-bot.exe
 ```
 
-Keep this terminal open while the bot runs. Open the printed one-use browser link; complete the five Discord steps above or the [Telegram Settings path](#telegram-setup), then verify `/status` for that platform.
+Keep this terminal open while the bot runs. Open the printed one-use browser link; complete the five Discord steps above, the [Telegram Settings path](#telegram-setup), or the [Slack Settings path](#4-configure-and-start). Verify `/status` for Discord/Telegram or owner-only `!status` in an approved Slack channel.
 
 ### Build from source
 
@@ -458,25 +554,26 @@ cd discord-bot
 cargo run --release
 ```
 
-The first build takes longer. Keep the terminal open, use the printed browser link, and restrict access before starting either platform. Follow the five Discord steps or the [Telegram Settings path](#telegram-setup), then verify `/status`.
+The first build takes longer. Keep the terminal open, use the printed browser link, and restrict access before starting any platform. Follow the five Discord steps, the [Telegram Settings path](#telegram-setup), or the [Slack Settings path](#4-configure-and-start). Verify `/status` for Discord/Telegram or owner-only `!status` in an approved Slack channel.
 
 ### Headless CLI setup
 
-Browser setup is the default, but `discord-bot init` (or `cargo run -- init`) remains available for headless installations. It first asks for `discord` (Enter) or `telegram`, then the platform token, provider, API key, model, language, owner, and UTC offset. Telegram asks for a qualified `OWNER_KEY` and approved rooms instead of a Discord owner ID. **Token and key input are hidden when run interactively in a terminal**; piped input is not a hidden terminal prompt. Do not place secrets in shell command arguments or share `.env`.
+Browser setup is the default, but `discord-bot init` (or `cargo run -- init`) remains available for headless installations. It first asks for `discord` (Enter), `telegram` or `slack`, then platform credentials, provider, API key, model, language, owner, and UTC offset. Telegram asks for a qualified `OWNER_KEY` and approved rooms instead of a Discord owner ID. Slack asks for both `xapp-` and `xoxb-` tokens, native channel IDs and a workspace-qualified `OWNER_KEY`. **Token and key input are hidden when run interactively in a terminal**; piped input is not a hidden terminal prompt. Do not place secrets in shell command arguments or share `.env`.
 
 | Question | What to enter |
 | --- | --- |
-| Platform | Press Enter for `discord`, or type `telegram`. |
-| Bot token | Discord's token from step 1, or Telegram's BotFather token. |
+| Platform | Press Enter for `discord`, or type `telegram` or `slack`. |
+| Platform credentials | Discord's token from step 1, Telegram's BotFather token, or Slack's `xapp-` app token followed by its `xoxb-` bot token. |
+| Approved channels (Slack only, before provider) | Native `C…` / `G…` channel IDs, comma-separated; blank denies all rooms. |
 | Provider | Press Enter for `openrouter`, or type `mistral`. |
 | API key | Your chosen provider's key from step 2. |
 | Model ID | Choose a current `:free` OpenRouter model explicitly if wanted; Enter uses the provider's **paid** default. |
 | Language | Press Enter for `en` (English), or type `tr` (Turkish). |
-| Owner | Discord: your numeric user ID, or skip. Telegram: `telegram:user:<numeric ID>`, or skip administration. |
+| Owner | Discord: your numeric user ID, or skip. Telegram: `telegram:user:<numeric ID>`. Slack: `slack:user:<workspace ID>:<member ID>`. Skip to deny that platform's administration. |
 | Approved rooms (Telegram only) | Negative group IDs or canonical Telegram RoomKeys, comma-separated; blank denies all rooms. |
 | UTC offset hours | Your local time difference from UTC, or Enter for `0`; for example `3` means UTC+3. |
 
-The CLI saves `.env` through the same typed configuration validation and atomic save path as the panel, and refuses an existing file unless `--force` is explicit. Back up any existing file privately before replacing it. Before launching, add `PANEL_ENABLED=off`, set Discord `GUILD_ID`/`CHANNELS` to limit Discord access, or explicitly approve `TELEGRAM_ROOMS`, and keep the file private (mode `600` on Unix). Blank Discord scope means every accessible server/channel; blank Telegram rooms deny all. A blank model uses the provider's paid default. Discord prints an invite link and intent reminders; unlike browser setup, CLI init does not verify the token's application identity with Discord's API. Telegram instead prints BotFather privacy, approved-room and private-command reminders; it does not perform live authentication.
+The CLI saves `.env` through the same typed configuration validation and atomic save path as the panel, and refuses an existing file unless `--force` is explicit. Back up any existing file privately before overwriting collected settings. Before launching, add `PANEL_ENABLED=off`, set Discord `GUILD_ID`/`CHANNELS` to limit Discord access, explicitly approve `TELEGRAM_ROOMS` or `SLACK_CHANNELS`, and keep the file private (mode `600` on Unix). Blank Discord scope means every accessible server/channel; blank Telegram/Slack rooms deny all. Set `SLACK_HISTORY_TIER=restricted` for commercial non-Marketplace Slack apps; the default is `internal`. A blank model uses the provider's paid default. Discord prints an invite link and intent reminders; unlike browser setup, CLI init does not verify the token's application identity with Discord's API. Telegram instead prints BotFather privacy, approved-room and private-command reminders; Slack prints Socket Mode, native-channel approval and owner-only status reminders. Neither performs live authentication.
 
 For Docker, first create the private `config`/`photos` directories and complete any existing-volume migration above. Run `docker compose run --rm -it --workdir /data/config bot init` to write `config/.env` as container UID `10001`, then add `PANEL_ENABLED=off` and your access scope to that file before `docker compose up -d`. Do not reintroduce `env_file` if you want the file to remain browser-editable later. To re-enable the panel, remove or change `PANEL_ENABLED=off` and restart.
 

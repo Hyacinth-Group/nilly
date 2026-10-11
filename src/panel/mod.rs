@@ -130,7 +130,14 @@ async fn run(config: config::Config) -> Result<(), BotError> {
     let valid = config.validate_runtime().is_ok();
     let initial = if valid {
         Lifecycle::ConfiguredStarting
-    } else if (config.get("DISCORD_TOKEN").is_empty() && config.get("TELEGRAM_TOKEN").is_empty())
+    } else if [
+        "DISCORD_TOKEN",
+        "TELEGRAM_TOKEN",
+        "SLACK_APP_TOKEN",
+        "SLACK_BOT_TOKEN",
+    ]
+    .iter()
+    .all(|key| config.get(key).is_empty())
         || (config.get("OPENROUTER_KEY").is_empty() && config.get("MISTRAL_KEY").is_empty())
     {
         Lifecycle::Unconfigured

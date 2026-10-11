@@ -12,6 +12,7 @@ const EXISTING_ENV_MESSAGE: &str = ".env already exists. Your existing settings 
 enum SetupTarget {
     Discord(Option<u64>),
     Telegram,
+    Slack,
 }
 
 pub fn run(args: &[String]) -> Result<(), BotError> {
@@ -30,6 +31,7 @@ pub fn run(args: &[String]) -> Result<(), BotError> {
     let steps = match target {
         SetupTarget::Discord(app_id) => next_steps(app_id),
         SetupTarget::Telegram => strings::t("init.telegram.next_steps").to_string(),
+        SetupTarget::Slack => strings::t("init.slack.next_steps").to_string(),
     };
     println!("Wrote .env\n{steps}");
     Ok(())
@@ -64,37 +66,82 @@ fn build_env<R: BufRead>(
     input: &mut R,
     hidden_secrets: bool,
 ) -> Result<(String, SetupTarget), BotError> {
-    let secret_hint = if hidden_secrets {
-        "input hidden"
-    } else {
-        "piped input"
-    };
-    let telegram = loop {
+    let platform = loop {
         match ask(input, strings::t("init.platform"))?.as_str() {
-            "" | "discord" => break false,
-            "telegram" => break true,
+            "" | "discord" => break SetupTarget::Discord(None),
+            "telegram" => break SetupTarget::Telegram,
+            "slack" => break SetupTarget::Slack,
             _ => continue,
         }
     };
-    if telegram {
-        eprintln!("{}", strings::t("init.telegram.setup"));
-    }
-    let token = ask_required(
-        input,
-        &if telegram {
-            strings::t("init.telegram.token").replace(
+    let secret_hint = if hidden_secrets {
+        strings::t("init.secret.hidden")
+    } else {
+        strings::t("init.secret.piped")
+    };
+    let mut content = String::new();
+    let target = match platform {
+        SetupTarget::Discord(_) => {
+            let token = ask_required(
+                input,
+                &format!(
+                    "Discord bot token (required; Developer Portal -> Bot -> Reset Token; {secret_hint}): "
+                ),
+                hidden_secrets,
+            )?;
+            let token_value = config::encode_value("DISCORD_TOKEN", &token)?;
+            content.push_str(&format!("DISCORD_TOKEN={token_value}\n"));
+            SetupTarget::Discord(app_id_from_token(&token))
+        }
+        SetupTarget::Telegram => {
+            eprintln!("{}", strings::t("init.telegram.setup"));
+            let prompt = strings::t("init.telegram.token").replace(
                 "{secret_hint}",
                 strings::t(if hidden_secrets {
                     "init.input_hidden"
                 } else {
                     "init.piped_input"
                 }),
-            )
-        } else {
-            format!("Discord bot token (required; Developer Portal -> Bot -> Reset Token; {secret_hint}): ")
-        },
-        hidden_secrets,
-    )?;
+            );
+            let token = ask_required(input, &prompt, hidden_secrets)?;
+            let token_value = config::encode_value("TELEGRAM_TOKEN", &token)?;
+            content.push_str(&format!("TELEGRAM_TOKEN={token_value}\n"));
+            SetupTarget::Telegram
+        }
+        SetupTarget::Slack => {
+            let app_token =
+                ask_slack_token(input, "init.slack.app_token", "xapp-", hidden_secrets)?;
+            let bot_token =
+                ask_slack_token(input, "init.slack.bot_token", "xoxb-", hidden_secrets)?;
+            let channels = loop {
+                let answer = ask(input, strings::t("init.slack.channels"))?;
+                if answer.is_empty()
+                    || answer.split(',').all(|channel| {
+                        let channel = channel.trim();
+                        (channel.starts_with('C') || channel.starts_with('G'))
+                            && channel.len() > 1
+                            && channel.bytes().all(|byte| byte.is_ascii_alphanumeric())
+                    })
+                {
+                    let mut normalized = String::with_capacity(answer.len());
+                    for (index, channel) in answer.split(',').enumerate() {
+                        if index > 0 {
+                            normalized.push(',');
+                        }
+                        normalized.push_str(channel.trim());
+                    }
+                    break normalized;
+                }
+            };
+            let app_token = config::encode_value("SLACK_APP_TOKEN", &app_token)?;
+            let bot_token = config::encode_value("SLACK_BOT_TOKEN", &bot_token)?;
+            let channels = config::encode_value("SLACK_CHANNELS", &channels)?;
+            content.push_str(&format!(
+                "SLACK_APP_TOKEN={app_token}\nSLACK_BOT_TOKEN={bot_token}\nSLACK_CHANNELS={channels}\n"
+            ));
+            SetupTarget::Slack
+        }
+    };
     let provider = loop {
         let answer = ask(
             input,
@@ -138,25 +185,44 @@ fn build_env<R: BufRead>(
             _ => continue,
         }
     };
-    let owner = if telegram {
-        loop {
-            let answer = ask(input, strings::t("init.telegram.owner"))?;
-            if answer.is_empty() || valid_telegram_owner(&answer) {
-                break answer;
-            }
+    let (owner_name, owner) = match target {
+        SetupTarget::Telegram => {
+            let owner = loop {
+                let answer = ask(input, strings::t("init.telegram.owner"))?;
+                if answer.is_empty() || valid_telegram_owner(&answer) {
+                    break answer;
+                }
+            };
+            ("OWNER_KEY", owner)
         }
-    } else {
-        loop {
-            let answer = ask(
-                input,
-                "Your Discord user ID (optional; e.g. 123456789012345678; enable Developer Mode, right-click your user and Copy User ID; owner can switch /model; Enter = skip): ",
-            )?;
-            if config::validate_value("OWNER_ID", &answer).is_ok() {
-                break answer;
-            }
+        SetupTarget::Slack => {
+            use crate::platform::types::{PlatformKind, UserKey};
+            let owner = loop {
+                let answer = ask(input, strings::t("init.slack.owner"))?;
+                if answer.is_empty()
+                    || answer
+                        .parse::<UserKey>()
+                        .is_ok_and(|key| key.platform() == PlatformKind::Slack)
+                {
+                    break answer;
+                }
+            };
+            ("OWNER_KEY", owner)
+        }
+        SetupTarget::Discord(_) => {
+            let owner = loop {
+                let answer = ask(
+                    input,
+                    "Your Discord user ID (optional; e.g. 123456789012345678; enable Developer Mode, right-click your user and Copy User ID; owner can switch /model; Enter = skip): ",
+                )?;
+                if config::validate_value("OWNER_ID", &answer).is_ok() {
+                    break answer;
+                }
+            };
+            ("OWNER_ID", owner)
         }
     };
-    let rooms = if telegram {
+    let rooms = if target == SetupTarget::Telegram {
         loop {
             let answer = ask(input, strings::t("init.telegram.rooms"))?;
             if let Some(rooms) = telegram_rooms(&answer) {
@@ -180,34 +246,42 @@ fn build_env<R: BufRead>(
         }
     };
 
-    let token_name = if telegram {
-        "TELEGRAM_TOKEN"
-    } else {
-        "DISCORD_TOKEN"
-    };
-    let token_value = config::encode_value(token_name, &token)?;
     let key_value = config::encode_value(key_name, &key)?;
     let model = config::encode_value("MODEL", &model)?;
-    let mut content = format!("{token_name}={token_value}\n{key_name}={key_value}\n");
+    content.push_str(&format!("{key_name}={key_value}\n"));
     content.push_str(&format!(
         "PROVIDER={provider}\nMODEL={model}\nBOT_LANG={language}\n"
     ));
-    if telegram {
-        let owner = config::encode_value("OWNER_KEY", &owner)?;
+    let owner = config::encode_value(owner_name, &owner)?;
+    content.push_str(&format!("{owner_name}={owner}\n"));
+    if target == SetupTarget::Telegram {
         let rooms = config::encode_value("TELEGRAM_ROOMS", &rooms)?;
-        content.push_str(&format!("OWNER_KEY={owner}\nTELEGRAM_ROOMS={rooms}\n"));
-    } else {
-        content.push_str(&format!("OWNER_ID={owner}\n"));
+        content.push_str(&format!("TELEGRAM_ROOMS={rooms}\n"));
     }
     content.push_str(&format!(
         "TZ_OFFSET={offset}\n# more options: see .env.example\n"
     ));
-    let target = if telegram {
-        SetupTarget::Telegram
-    } else {
-        SetupTarget::Discord(app_id_from_token(&token))
-    };
     Ok((content, target))
+}
+
+fn ask_slack_token<R: BufRead>(
+    input: &mut R,
+    prompt_key: &'static str,
+    prefix: &str,
+    hidden: bool,
+) -> Result<String, BotError> {
+    let secret_hint = strings::t(if hidden {
+        "init.secret.hidden"
+    } else {
+        "init.secret.piped"
+    });
+    let prompt = strings::t(prompt_key).replace("{secret_hint}", secret_hint);
+    loop {
+        let token = ask_required(input, &prompt, hidden)?;
+        if token.starts_with(prefix) && token.len() > prefix.len() {
+            return Ok(token);
+        }
+    }
 }
 
 fn valid_telegram_owner(value: &str) -> bool {
@@ -303,6 +377,135 @@ pub fn invite_url(app_id: u64) -> String {
 mod test {
     use super::*;
 
+    mod slack {
+        use super::*;
+
+        #[test]
+        fn wizard_writes_slack_only_environment() {
+            let mut input = io::Cursor::new(
+                b"slack\nxapp-test\nxoxb-test\nC123, G456\n\nsk-test\n\ntr\nslack:user:T123:U456\n\n",
+            );
+            let (content, target) = build_env(&mut input, false).unwrap();
+            assert_eq!(target, SetupTarget::Slack);
+            let app_id = match target {
+                SetupTarget::Discord(app_id) => app_id,
+                SetupTarget::Telegram | SetupTarget::Slack => None,
+            };
+            assert_eq!(app_id, None);
+            assert!(!content.contains("TELEGRAM_TOKEN"));
+            assert_eq!(
+                content,
+                "SLACK_APP_TOKEN=xapp-test\nSLACK_BOT_TOKEN=xoxb-test\nSLACK_CHANNELS=C123,G456\nOPENROUTER_KEY=sk-test\nPROVIDER=openrouter\nMODEL=\nBOT_LANG=tr\nOWNER_KEY=slack:user:T123:U456\nTZ_OFFSET=0\n# more options: see .env.example\n"
+            );
+            assert!(!content.contains("DISCORD_TOKEN"));
+            assert!(!content.contains("OWNER_ID"));
+        }
+
+        #[test]
+        fn wizard_encodes_slack_secrets_for_typed_config_save() {
+            let mut input = io::Cursor::new(
+                b"slack\nxapp-secret # comment\nxoxb-secret $HOME \"quoted\"\nC123, G456\n\nkey $HOME \"quoted\"\n\n\nslack:user:T123:U456\n\n",
+            );
+            let (content, target) = build_env(&mut input, false).unwrap();
+            let patch = config::Config::patch_from_dotenv(&content).unwrap();
+            assert_eq!(target, SetupTarget::Slack);
+            for (name, expected) in [
+                ("SLACK_APP_TOKEN", "xapp-secret # comment"),
+                ("SLACK_BOT_TOKEN", "xoxb-secret $HOME \"quoted\""),
+                ("OPENROUTER_KEY", "key $HOME \"quoted\""),
+                ("SLACK_CHANNELS", "C123,G456"),
+                ("OWNER_KEY", "slack:user:T123:U456"),
+            ] {
+                assert!(
+                    matches!(&patch[name], config::PatchValue::Replace { value } if value == expected),
+                    "{name}"
+                );
+            }
+            assert!(!patch.contains_key("DISCORD_TOKEN"));
+            assert!(!patch.contains_key("TELEGRAM_TOKEN"));
+            assert!(!patch.contains_key("OWNER_ID"));
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join(".env");
+            let mut settings =
+                config::Config::load(&path, &std::collections::HashMap::new()).unwrap();
+            let revision = settings.revision().to_owned();
+            settings.save_patch(&revision, &patch).unwrap();
+            let saved = settings.reload().unwrap();
+            assert_eq!(saved.get("SLACK_APP_TOKEN"), "xapp-secret # comment");
+            assert_eq!(saved.get("SLACK_BOT_TOKEN"), "xoxb-secret $HOME \"quoted\"");
+            assert_eq!(saved.get("OPENROUTER_KEY"), "key $HOME \"quoted\"");
+            assert_eq!(saved.get("SLACK_CHANNELS"), "C123,G456");
+            assert_eq!(saved.get("OWNER_KEY"), "slack:user:T123:U456");
+            assert!(saved.get("DISCORD_TOKEN").is_empty());
+            assert!(saved.get("TELEGRAM_TOKEN").is_empty());
+        }
+
+        #[test]
+        fn wizard_rejects_null_slack_secret_before_serializing() {
+            let mut input = io::Cursor::new(
+                b"slack\nxapp-secret\0injected\nxoxb-secret\nC123\n\nkey\n\n\n\n\n",
+            );
+            assert!(build_env(&mut input, false).is_err());
+        }
+
+        #[test]
+        fn wizard_reasks_invalid_slack_values_and_blank_channels_deny_all() {
+            let mut input = io::Cursor::new(
+                b"invalid\nslack\n\nxoxb-wrong\nxapp-test\nxapp-wrong\nxoxb-test\n#general\n\n\nsk-test\n\n\n42\ndiscord:user:42\nslack:user:T123:U456\n\n",
+            );
+            let (content, target) = build_env(&mut input, false).unwrap();
+            assert_eq!(target, SetupTarget::Slack);
+            assert!(content.contains("SLACK_CHANNELS=\n"));
+            assert!(content.contains("OWNER_KEY=slack:user:T123:U456\n"));
+        }
+
+        #[test]
+        fn manifest_parses_with_exact_scopes_and_subscriptions() {
+            let manifest: serde_yaml::Value =
+                serde_yaml::from_str(include_str!("../docs/slack-app-manifest.yml")).unwrap();
+            let scopes = manifest["oauth_config"]["scopes"]["bot"]
+                .as_sequence()
+                .unwrap();
+            let actual: Vec<_> = scopes.iter().map(|value| value.as_str().unwrap()).collect();
+            assert_eq!(
+                actual,
+                [
+                    "app_mentions:read",
+                    "channels:history",
+                    "channels:read",
+                    "groups:history",
+                    "groups:read",
+                    "chat:write",
+                    "files:read",
+                    "files:write",
+                    "reactions:read",
+                    "reactions:write",
+                    "users:read",
+                ]
+            );
+            let events = manifest["settings"]["event_subscriptions"]["bot_events"]
+                .as_sequence()
+                .unwrap();
+            let actual: Vec<_> = events.iter().map(|value| value.as_str().unwrap()).collect();
+            assert_eq!(
+                actual,
+                [
+                    "app_mention",
+                    "message.channels",
+                    "message.groups",
+                    "member_joined_channel",
+                    "reaction_added",
+                ]
+            );
+            assert_eq!(
+                manifest["settings"]["socket_mode_enabled"].as_bool(),
+                Some(true)
+            );
+            assert!(manifest["features"]["slash_commands"].is_null());
+            assert!(manifest["oauth_config"]["scopes"]["user"].is_null());
+        }
+    }
+
     #[test]
     fn app_id_from_token_decodes_digits() {
         assert_eq!(
@@ -325,6 +528,7 @@ mod test {
         let mut input =
             io::Cursor::new(b"\nMTIzNDU2Nzg5MDEyMzQ1Njc4.x.y\n\nsk-test\n\nen\n42\n-5\n");
         let (content, app_id) = build_env(&mut input, false).unwrap();
+        assert!(matches!(app_id, SetupTarget::Discord(_)));
         assert!(content.contains("OPENROUTER_KEY=sk-test\n"));
         assert!(content.contains("OWNER_ID=42\n"));
         assert!(content.contains("TZ_OFFSET=-5\n"));
@@ -339,6 +543,7 @@ mod test {
             b"unknown\ndiscord\n\ntoken\nunknown\nmistral\n\nsk-test\ncustom-model\nde\ntr\ninvalid\n42\n15\n5.5\n",
         );
         let (content, app_id) = build_env(&mut input, false).unwrap();
+        assert!(matches!(app_id, SetupTarget::Discord(_)));
         assert_eq!(content, "DISCORD_TOKEN=token\nMISTRAL_KEY=sk-test\nPROVIDER=mistral\nMODEL=custom-model\nBOT_LANG=tr\nOWNER_ID=42\nTZ_OFFSET=5.5\n# more options: see .env.example\n");
         assert_eq!(app_id, SetupTarget::Discord(None));
     }
