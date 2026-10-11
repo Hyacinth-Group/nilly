@@ -44,6 +44,14 @@ The shared redb handle stores editable bodies, monotonic per-record revisions, a
 
 Every editable writer enters a synchronous mutation gate without holding Bot state: apply latest-value deltas or snapshot CAS, derive `INDEX.md` from the same write transaction, commit/drop, then publish affected caches under a short state lock. Conflicting generated prose is discarded for a fresh later run; failed commits publish nothing. Summarizer originals remain durable in history independently of optional filesystem archive copies.
 
+Topic and monthly-event appends (`memory::add_topic` / `add_event`) operate on
+the latest body through that same revision coordinator. Before the new dated
+bullet, they insert one newline only when an existing nonempty body lacks a
+terminal newline. Panel-edited or summarized prose therefore cannot swallow
+the next entry; existing body bytes, including trailing whitespace and existing
+newlines, remain unchanged. The normal revision, displaced-history, index and
+post-commit cache publication rules still apply.
+
 Personality separates the compiled `BOT_LANG` core, CAS-editable `huy.md`, read-only group profile/self-state/corrections/growth, and temporary per-conversation mood. A later coach run may evolve or replace manual temperament; edits do not pin learning or train model weights.
 
 ### Actions and observed usage
@@ -196,6 +204,16 @@ required together. Installation permissions come from
 [`slack-app-manifest.yml`](slack-app-manifest.yml), with channel events and no
 direct-message subscriptions or slash commands.
 
+The socket loop reserves capacity in its bounded 256-entry enrichment queue
+**before** acknowledging an event envelope, then publishes the payload to the
+worker **after** the ACK succeeds. A full queue leaves that envelope unaccepted
+and unacknowledged, eligible for Slack's native redelivery; it does not terminate
+the adapter or abort accepted backlog. The socket continues servicing frames,
+including heartbeat pings, independently of worker enrichment. The worker's
+bounded event-ID deduplication applies only to accepted payloads. Neither native
+redelivery nor exactly-once processing is guaranteed: ACK, processing failure,
+shutdown and process-crash windows remain distinct.
+
 `events.rs` preserves timestamps as text identities and converts timestamp
 fractions to milliseconds without floating-point rounding. Slack users are
 workspace-qualified (`slack:user:<team>:<user>`); rooms likewise include the team
@@ -203,6 +221,15 @@ and native channel. Structured mentions, thread/reply scope, edits/deletes,
 member joins, reactions, and native file identities cross the boundary without
 Slack SDK types or authenticated URLs. User display-name lookup can enrich ID
 fallbacks without changing durable identity.
+
+Reaction enrichment uses `reactions.get` with the installed `reactions:read`
+scope to retrieve the exact channel/timestamp target, including threaded replies
+that channel history omits. The response must match the target channel and
+timestamp; its actual thread, author and normalized original text are retained.
+After room approval and account-author checks, the shared reaction consumer
+records real feedback on the bot's message as a social observation, without
+triggering an automatic reply. Missing or invalid enrichment is not fabricated
+feedback.
 
 `transport.rs` makes thin JSON Web API requests with **`reqwest =0.12.28`** and
 handles Slack API failures, HTTP rate limits and `Retry-After` as platform errors.
@@ -235,6 +262,11 @@ explicitly unsupported. Own-message edits/deletes, thread-aware output, bounded
 history and authenticated native-file resolution use the shared transport
 contract. `render.rs` keeps raw chunks within 3,900 Unicode scalars and splits
 escaping expansion to a 4,000-scalar rendered target.
+
+Before any part of a reply is sent, Slack's `route_reply` preserves an existing
+thread or derives one from a reply target in the same workspace/channel. Every
+line, physical chunk and Show-mode thought/answer part then uses that resolved
+room; thread routing is not a first-part-only visual reply reference.
 
 Text administration (`!status` / `@bot status`) enters `AdminService`; results
 use recipient-only `chat.postEphemeral`, never public or DM fallback. Qualified
@@ -280,6 +312,16 @@ statically generated futures rather than boxed hot-path trait objects.
 The Slack concrete variant has one boxed allocation per configured connection to
 keep the `Adapter` enum compact; operations do not box or dynamically dispatch futures.
 
+The synchronous routing hook is
+`route_reply(&self, room: RoomRef, reply_to: Option<&MessageKey>) -> PlatformResult<RoomRef>`.
+`Adapter` statically match-delegates this hook too. The default returns the owned
+`RoomRef` unchanged, with no additional room copy or allocation; Discord, Telegram
+and Matrix use that identity behavior. Shared line and stream send paths resolve
+it once for the whole outgoing reply/layout, before rendering/sending parts.
+Adapters needing native destination changes override it and validate the target.
+The resolved room is reused for all parts, even though visual reply references
+and reply-user mentions can remain first-part-only.
+
 `OutgoingMessage<'a>` borrows text through `Cow`, carries structured default-deny
 mention/reply policies, attachment sources and optional card/thought presentation.
 SDK objects, native markup and interaction tokens remain adapter-private.
@@ -297,6 +339,15 @@ transport splitting. Discord retains its exact 1900-character split boundaries,
 and encoded bytes without breaking Unicode scalars. Actual adapters must provide
 usable budgets (positive scalar limit, at least two UTF-16 units or four UTF-8
 bytes); indivisible scalars are never discarded for impossible test budgets.
+
+Native Telegram and Slack stream renderers first apply shared
+`stream_slice(text, done)` and `parse_reply` with their output limits, then perform
+adapter-safe rendering/chunking on publishable reply lines. Silence (`-`) and
+reaction-control lines such as `tepki: 👍` are therefore filtered before live
+publication, not merely deleted after completion. Explicit Show-mode thought
+presentation is a separate layout input, not reply-protocol text; other native
+thought modes do not expose those thoughts. Discord's characterized
+thought/spoiler/counter/button behavior remains unchanged.
 
 `ConnectionRegistry` registers concrete adapters, binds `RoomRef` routes and
 returns shared handles before awaits. `snapshot() -> Vec<ConnectionSnapshot>`
@@ -356,8 +407,11 @@ being ignored. Configured Matrix in a minimal build reports the missing feature.
 Startup calls `platform::runtime::run(Arc<Bot>, Vec<ConnectionConfig>) -> Result<(), BotError>`.
 The panel forwards its `ShutdownReceiver` to `run_with_shutdown(Arc<Bot>, Vec<ConnectionConfig>, ShutdownReceiver)`; this owns the same adapter tasks/brain and does not expose native shard managers or caches. A cancellation already requested before startup prevents credential activation and SDK construction.
 Adding a concrete network means extending this configuration enum and `Adapter`,
-implementing the complete `Platform` interface, and providing an adapter-local
-runner accepting an `EventSender` and `ShutdownReceiver`. No generic brain code
+implementing the complete `Platform` interface (including static delegation of
+renderer and `route_reply` hooks), and providing an adapter-local runner accepting
+an `EventSender` and `ShutdownReceiver`. The identity routing default is suitable
+only when the native destination needs no reply-dependent change. Registration
+and explicit route binding remain the contract below; no generic brain code
 should need an SDK import. The Discord gateway and event handler live under
 `platform::discord`, including intents, slash UI, safe-content decoding and HTTP
 enrichment.
@@ -429,6 +483,11 @@ decrypted or interpreted as plaintext. No SDK crypto store or recovery support
 is present. Approved conversational rooms share memory rather than private,
 per-room brains.
 
+The raw-message decoder excludes `m.notice` before command, learning or
+automatic-response handling, even when a notice mentions or replies to the bot.
+Supported plaintext `m.text` / `m.emote` and enabled unencrypted images retain
+their existing normalization; notices are not treated as human chat.
+
 The native transport supports bounded room history (`/messages`, at most 100
 events per page), replies but not Matrix thread routes, `m.reaction`, `m.replace`
 edits, own-event redaction, typing, and per-room membership nicknames. Sending/
@@ -451,11 +510,32 @@ are not E2EE: the homeserver can read the admin room too. An unusable private
 route yields a privacy/error response, never public mind/settings detail.
 `STEALTH` consumes commands without sending command UI.
 
+Both approved-room and private-admin-room command paths use the same bounded
+16-entry, shutdown-aware acceptance queue rather than dropping commands on
+overflow. A full queue waits for worker capacity; shutdown interrupts admission
+without committing the sync cursor past an unaccepted command. Only accepted
+event IDs enter the persisted, bounded 256-ID `commands.json` replay barrier.
+On orderly shutdown the producer closes the queue and awaits its worker so
+accepted backlog drains instead of being aborted.
+
 Session/device identity and sync continuation are persisted under
 `matrix/<connection>/session.json` and `sync.json`; SDK SQLite state is under
 `matrix/<connection>/store/`. These live beneath the state directory, separately
 from redb, and include secrets/cache data. Keeping them across restart preserves
 device identity. [State protection](state-files.md#matrix-session-and-sync-state).
+
+The runner's committed `sync.json` is the restart cursor authority, not the
+SDK's eagerly advanced token. Startup uses explicit `SyncToken::Specific` for
+a saved cursor or `SyncToken::NoToken` when none has been committed. Before
+authentication/session restoration loads SDK in-memory state, it also rewinds
+(or removes) the SDK store's sync token to that committed cursor; otherwise
+the SDK can suppress a replay whose `next_batch` matches its ahead token.
+The cursor advances only after the sync batch has been handled and command
+admission has succeeded, with a shutdown check before persistence. Accepted IDs
+limit duplicate admission when an interrupted batch replays, but the queue itself
+is in memory and those IDs record acceptance, not completed execution. This is
+not exactly-once execution or crash-durable command delivery.
+
 Offline decoder/renderer characterization is distinct from the opt-in ignored
 `matrix_live` network tests documented in [configuration](configuration.md#disposable-matrix-integration-test).
 

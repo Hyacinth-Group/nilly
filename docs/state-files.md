@@ -42,15 +42,38 @@ Matrix stores native runtime state beneath the state directory (normally
 | Path | Contents / purpose |
 |---|---|
 | `matrix/<connection>/session.json` | saved authenticated Matrix session, including access token and stable device/account identity |
-| `matrix/<connection>/sync.json` | last sync token, so a restart resumes incremental sync rather than starting from scratch |
+| `matrix/<connection>/sync.json` | application-committed sync token; authoritative restart cursor after the batch's ingress/command admission, not the SDK's most recently cached token |
 | `matrix/<connection>/rooms.json` | rooms approved by owner invitations; environment allowlisted rooms are explicit approval too |
 | `matrix/<connection>/admin-room.json` | private plaintext owner-only administrative result route; excluded from conversational learning |
-| `matrix/<connection>/commands.json` | last 256 accepted native command event IDs, preventing command replay on reconnect/restart |
+| `matrix/<connection>/commands.json` | last 256 accepted native command event IDs; bounded durable replay deduplication, not persisted command payloads or completion records |
 | `matrix/<connection>/store/` | Matrix SDK SQLite state/cache; SDK crypto is disabled |
 
 `<connection>` is the configured credential-independent connection identity,
 not the password, token, display name, or room ID. These are real files, not
 redb record keys. Never run two bot processes against one Matrix store.
+
+`sync.json` advances only after the batch's normalized events have entered bounded
+ingress and its commands have been accepted, not after model/command execution.
+Both approved conversational rooms and the private admin room use shutdown-aware
+backpressure into the same 16-entry, single-consumer command queue. Saturation waits
+for capacity rather than dropping commands. Shutdown that interrupts admission
+leaves the batch cursor uncommitted; orderly shutdown stops admission and drains
+the accepted backlog. An event ID enters `commands.json` only after acceptance.
+
+On restart, the adapter explicitly selects `SyncToken::Specific` for a committed
+token or `SyncToken::NoToken` when `sync.json` is absent, including an interrupted
+first sync. Before authentication/session restoration loads the SDK's in-memory
+token, the adapter rewinds the SDK store's sync token to that same committed value,
+or removes it when there is none. Merely overriding the next request's token is
+insufficient: an ahead SDK token can suppress a replayed response whose
+`next_batch` matches its cache, before unaccepted events reach the adapter.
+
+Replay remains bounded by the homeserver's sync timeline; a limited timeline can
+leave gaps. `commands.json` retains only 256 accepted IDs, so older IDs can replay
+after eviction. Accepted payloads remain in memory: a crash can leave work
+unfinished even though its persisted ID suppresses replay, or replay work whose
+ID/cursor was not yet saved. These files do not provide exactly-once execution or
+a crash-durable command queue.
 
 **Protect the whole state directory like a password file.** In particular,
 `session.json` contains an access token that can act as the bot. Restrict Unix
@@ -114,6 +137,12 @@ entire content.
 ```
 Once summarized, summary lines that don't start with `- ` appear at the top of the file;
 `- ` lines are raw records (`refresh_index` only counts `- ` lines).
+Topic-note and monthly-event appends keep a distinct bullet boundary after a raw
+panel edit or summary without a terminal newline: if the existing body is nonempty
+and lacks a final `\n`, the writer inserts exactly that missing newline before the
+new bullet. Existing bytes, including prose, whitespace and already present
+newlines, are otherwise preserved rather than trimmed or reformatted.
+
 
 ### gundem.md
 ```
@@ -165,11 +194,15 @@ size and is not a member-erasure facility.
 Person learning applies score/fact/tag/event deltas to the latest transaction
 body, preserving canonical identity, bounded scores/tags, owner favorite rules,
 and unknown original fields/subsections. Topic and event additions likewise
-append to the latest transaction body. Profiler, coach, self-state, corrections,
-agenda and summarizer prose carries the revision used before model work.
-Changed revisions discard generated results; a later cycle uses fresh input
-instead of silently overwriting the edit. Manual edits are **not permanent pins**:
-a fresh agent run may legitimately evolve the newly saved revision.
+append to the latest transaction body, inserting only a missing newline boundary
+as described under Formats. This preserves a newly edited or summarized body's
+existing bytes while keeping the next bullet separate; it remains a coordinated
+revision-advancing mutation, not an unversioned append or a bypass of edit CAS.
+Profiler, coach, self-state, corrections, agenda and summarizer prose carries the
+revision used before model work. Changed revisions discard generated results;
+a later cycle uses fresh input instead of silently overwriting the edit. Manual
+edits are **not permanent pins**: a fresh agent run may legitimately evolve the
+newly saved revision.
 
 All editable writers use a synchronous mutation coordinator, entered without a
 Bot state/cache guard. Lock order is mutation gate → redb write transaction →

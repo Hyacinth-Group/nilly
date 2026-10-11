@@ -8,7 +8,7 @@ Notable changes are recorded here in [Keep a Changelog](https://keepachangelog.c
 - A shared multi-platform core: Discord, Telegram, Slack and Matrix connections can run together with source-qualified user, room and thread identities.
 - Telegram long polling with explicit approved rooms, privacy-mode guidance, allowed emoji reactions and private owner administration.
 - Slack Socket Mode with two-token setup, explicit channel approval, thread-aware replies, native file handling and private administrative results.
-- Matrix plaintext-room support, enabled in default builds, with explicit room approval, persisted sessions and owner administration. Encrypted rooms and attachments are unsupported.
+- Matrix plaintext-room support, enabled in default builds, with explicit room approval, persisted sessions and owner administration. Encrypted rooms and encrypted attachments are unsupported.
 - An embedded local web admin panel on port 8787: five-step browser setup, connection overview, searchable/editable memory, personality, actions, usage, logs and settings. No separate web app is required.
 - Revision-checked memory and temperament editing with preserved previous versions and shared coordination with background writers.
 - Automatic, atomic migration of legacy Discord memory to the platform-qualified identity schema, preceded by a consistent database backup and migration manifest.
@@ -20,6 +20,12 @@ Notable changes are recorded here in [Keep a Changelog](https://keepachangelog.c
 - Compose mounts the fixed named `discord-bot-config` volume at `/data/config`, uses `PANEL_CONFIG_PATH=/data/config/.env`, and publishes the panel only on `127.0.0.1:8787:8787`. Fresh config volumes inherit bot UID/GID `10001` ownership; default Docker setup needs no host config folder or Linux permission commands. Saved data keeps the `durum` key and explicit `discord-bot-data` volume.
 - README and setup docs lead with three-command Docker/browser configuration, platform-specific requirements, collection boundaries and unmeasured-cost disclosure. Backup/restore covers both named volumes; Docker CLI setup uses explicit `--workdir /data/config`, while host `.env` editing is an advanced directory-bind option.
 - Usage shows observed process-local calls/tokens; missing monetary charges stay “Not reported,” not estimated. Provider dashboards remain the billing source.
+
+### Fixed
+- Slack reserves queue capacity before acknowledging incoming work, keeps heartbeat handling active during saturation, and leaves unaccepted envelopes eligible for native redelivery. Multi-part replies stay in one resolved thread, and reactions to threaded bot replies retain their exact feedback context.
+- Matrix commands use bounded, shutdown-aware admission before committing the sync cursor. Restart rewinds SDK cursor state to the committed application cursor so interrupted batches can replay; notices do not enter conversational learning or automatic replies.
+- Telegram and Slack filter silence/reaction protocol lines before live publication instead of relying on later message cleanup.
+- Topic and monthly-event appends preserve a missing newline boundary after raw edits or summarization without rewriting existing record bytes.
 
 ### Removed
 - Tracked generated code graphs, public session/launch drafts, signature-restating comment templates, and unsupported setup-time/cost claims. Earlier material remains in Git history.

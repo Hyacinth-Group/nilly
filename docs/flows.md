@@ -1,6 +1,62 @@
 # Flows (event → what happens, step by step)
 
-## A message arrives
+The native-platform notes below describe the shared adapter path. The detailed
+message/reaction walkthroughs, Discord UI, slash interactions and streaming
+presentation later in this document retain their Discord-specific behavior;
+Discord intents, guild filters, embeds, spoilers and buttons are not requirements
+for the other adapters.
+
+## Native platform ingress
+
+- **Slack Socket Mode:** reserve capacity in the bounded 256-entry event worker
+  queue **before** acknowledging an Events API envelope; publish it to the worker
+  only **after** the ACK succeeds. A full queue leaves the envelope unaccepted and
+  unacknowledged, eligible for Slack redelivery. Saturation does not stop the
+  adapter or discard its already accepted backlog, and the socket loop continues
+  handling frames, including heartbeat pings, without waiting for enrichment.
+  Worker event deduplication applies to accepted payloads. ACK means acceptance,
+  not completed command/model work; neither redelivery nor exactly-once processing
+  is guaranteed.
+- **Matrix native commands:** approved conversational rooms and the private
+  administrative room both use the same 16-entry, single-consumer command queue.
+  Admission waits for bounded capacity and observes shutdown rather than silently
+  dropping a command on overflow. If shutdown interrupts admission, the current
+  sync batch is not committed past that unaccepted command. Orderly shutdown
+  closes admission and drains accepted commands. The last 256 accepted event IDs
+  are persisted for bounded replay deduplication, not as a crash-durable work
+  queue or exactly-once execution guarantee. The committed sync cursor, SDK rewind
+  and replay limits are described in [Matrix session and sync state](state-files.md#matrix-session-and-sync-state).
+- **Matrix notices:** `m.notice` is excluded during normalization, even if it
+  mentions or replies to the bot. It enters neither conversational learning nor
+  automatic replies, and is not parsed as a native command. Ordinary supported
+  `m.text`, `m.emote` and `m.image` events retain their normal handling.
+
+## Shared reply routing, feedback and live protocol
+
+- Before publishing any part, the streaming and non-streaming reply senders call
+  `route_reply(&self, room: RoomRef, reply_to: Option<&MessageKey>) -> PlatformResult<RoomRef>`
+  **once for the whole outgoing layout**. This is a synchronous adapter operation;
+  the default returns the owned room unchanged, without extra copying/allocation.
+  Slack retains an existing thread, or resolves a top-level reply target into the
+  destination thread. Every answer line, chunk and Show-mode thought part then
+  uses that same route. Thread routing is independent of a first-part-only visual
+  reply reference; later parts do not fall back into the main channel.
+- For Slack reaction feedback, `reactions.get` looks up the exact channel and
+  message timestamp, including bot replies in threads that channel history does
+  not return. It uses the existing `reactions:read` scope, validates the returned
+  target, and supplies its author, normalized text and actual thread to the
+  shared reaction handler. Eligible reactions to this connection's own bot
+  messages enter raw memory, that conversation's channel history and any open
+  chat as social feedback; they never trigger an automatic reply.
+- Native Telegram and Slack live renderers apply shared `stream_slice` and then
+  `parse_reply` **before** platform chunking/publication. Only parsed reply lines
+  are published: silence markers and `tepki:` reaction-control lines are not
+  transient public text or notifications that have to be deleted later. Explicit
+  Show-mode thought presentation is separate from reply-protocol text; it is not
+  passed through the reply parser. Platform text limits and thought presentation
+  still come from each adapter, not Discord's spoiler/button UI.
+
+## A message arrives (Discord walkthrough)
 0. Every message (the bot's own included, via `send`) lands in the channel's history:
    `channel_note` → memory (60 lines) + `durum/kanallar/<id>.md`. When a new chat opens, the
    last 10 lines become its seed (`start_chat`), so context isn't lost even if the chat has
@@ -39,7 +95,7 @@
 7. If a chat is open, add the user line to history (last 20).
 8. Outside the lock: `reply`.
 
-## A reaction was added
+## A reaction was added (Discord walkthrough)
 `Handler::reaction_add` (needs the `GUILD_MESSAGE_REACTIONS` intent) fires on every reaction,
 but only cares about ones on the **bot's own message**, from a human, in a guild (not a DM), and
 passing the `GUILD_ID`/`CHANNELS` filter — everything else returns immediately. The `Reaction`
@@ -80,7 +136,7 @@ The model writes not plain text but a **line-based protocol**; `parse_reply` dec
   by `\n`, with `tepki: 💀` at the end if present. So the model sees its own format again next
   turn.
 
-## reply (one chat turn, streaming)
+## reply (one chat turn, Discord streaming presentation)
 ```
 lock ── busy? exit ── chat exists? ── pick instruction ── busy=1 ── release lock
 wait 0.15-0.35s ── fresh history + last message + pending arrivals ── mood (every 4 turns) ── research(link/news/lookup) ── target selection (if 2+ people wrote) ── question cap (too_many_questions) ── typing…
