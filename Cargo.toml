@@ -6,6 +6,10 @@ license = "MIT"
 description = "A Discord bot that grows its own personality: background AI agents remember people, form opinions and pick their own name"
 repository = "https://github.com/krxi/discord-bot"
 
+[features]
+default = ["matrix"]
+matrix = ["dep:matrix-sdk"]
+
 [dependencies]
 serenity = { version = "0.12", features = ["cache"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "fs", "net", "sync", "io-util"] }
@@ -22,11 +26,12 @@ askama = "=0.14.0"
 argon2 = "=0.5.3"
 cookie = "=0.18.1"
 sha2 = "=0.10.9"
-tempfile = "=3.20.0"
+tempfile = "=3.27.0"
 futures-util = { version = "=0.3.34", features = ["sink"] }
 rpassword = "7.5.4"
 tokio-tungstenite = { version = "=0.30.0", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 parking_lot = "=0.12.5"
+matrix-sdk = { version = "=0.19.1", optional = true, default-features = false, features = ["sqlite", "bundled-sqlite", "rustls-aws-lc-rs"] }
 
 [dev-dependencies]
 tower = { version = "=0.5.2", features = ["util"] }

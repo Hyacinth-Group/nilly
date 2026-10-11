@@ -13,6 +13,8 @@ enum SetupTarget {
     Discord(Option<u64>),
     Telegram,
     Slack,
+    #[cfg(feature = "matrix")]
+    Matrix,
 }
 
 pub fn run(args: &[String]) -> Result<(), BotError> {
@@ -32,6 +34,8 @@ pub fn run(args: &[String]) -> Result<(), BotError> {
         SetupTarget::Discord(app_id) => next_steps(app_id),
         SetupTarget::Telegram => strings::t("init.telegram.next_steps").to_string(),
         SetupTarget::Slack => strings::t("init.slack.next_steps").to_string(),
+        #[cfg(feature = "matrix")]
+        SetupTarget::Matrix => strings::t("init.matrix.next_steps").to_string(),
     };
     println!("Wrote .env\n{steps}");
     Ok(())
@@ -67,10 +71,16 @@ fn build_env<R: BufRead>(
     hidden_secrets: bool,
 ) -> Result<(String, SetupTarget), BotError> {
     let platform = loop {
-        match ask(input, strings::t("init.platform"))?.as_str() {
+        #[cfg(feature = "matrix")]
+        let prompt = strings::t("init.platform");
+        #[cfg(not(feature = "matrix"))]
+        let prompt = strings::t("init.platform.no_matrix");
+        match ask(input, prompt)?.as_str() {
             "" | "discord" => break SetupTarget::Discord(None),
             "telegram" => break SetupTarget::Telegram,
             "slack" => break SetupTarget::Slack,
+            #[cfg(feature = "matrix")]
+            "matrix" => break SetupTarget::Matrix,
             _ => continue,
         }
     };
@@ -141,6 +151,11 @@ fn build_env<R: BufRead>(
             ));
             SetupTarget::Slack
         }
+        #[cfg(feature = "matrix")]
+        SetupTarget::Matrix => {
+            content.push_str(&matrix_credentials(input, hidden_secrets, secret_hint)?);
+            SetupTarget::Matrix
+        }
     };
     let provider = loop {
         let answer = ask(
@@ -205,6 +220,20 @@ fn build_env<R: BufRead>(
                         .is_ok_and(|key| key.platform() == PlatformKind::Slack)
                 {
                     break answer;
+                }
+            };
+            ("OWNER_KEY", owner)
+        }
+        #[cfg(feature = "matrix")]
+        SetupTarget::Matrix => {
+            let owner = loop {
+                let answer = ask(input, strings::t("init.matrix.owner"))?;
+                if !answer.is_empty() && config::validate_value("MATRIX_USER", &answer).is_ok() {
+                    break platform::types::UserKey::new(
+                        platform::types::PlatformKind::Matrix,
+                        &[&answer],
+                    )?
+                    .to_string();
                 }
             };
             ("OWNER_KEY", owner)
@@ -331,6 +360,57 @@ fn telegram_rooms(value: &str) -> Option<String> {
     Some(output)
 }
 
+#[cfg(feature = "matrix")]
+fn matrix_credentials<R: BufRead>(
+    input: &mut R,
+    hidden_secrets: bool,
+    secret_hint: &str,
+) -> Result<String, BotError> {
+    eprintln!("{}", strings::t("init.matrix.plaintext"));
+    let homeserver = loop {
+        let answer = ask(input, strings::t("init.matrix.homeserver"))?;
+        if answer.is_empty() {
+            continue;
+        }
+        if let Ok(value) = config::encode_value("MATRIX_HOMESERVER", &answer) {
+            break value;
+        }
+    };
+    let user = loop {
+        let answer = ask(input, strings::t("init.matrix.user"))?;
+        if answer.is_empty() {
+            continue;
+        }
+        if let Ok(value) = config::encode_value("MATRIX_USER", &answer) {
+            break value;
+        }
+    };
+    let auth = loop {
+        let answer = ask(input, strings::t("init.matrix.auth"))?;
+        match answer.as_str() {
+            "" | "token" => break "MATRIX_ACCESS_TOKEN",
+            "password" => break "MATRIX_PASSWORD",
+            _ => continue,
+        }
+    };
+    let prompt = strings::t(if auth == "MATRIX_ACCESS_TOKEN" {
+        "init.matrix.token"
+    } else {
+        "init.matrix.password"
+    })
+    .replace("{secret_hint}", secret_hint);
+    let secret = config::encode_value(auth, &ask_required(input, &prompt, hidden_secrets)?)?;
+    let rooms = loop {
+        let answer = ask(input, strings::t("init.matrix.rooms"))?;
+        if let Ok(value) = config::encode_value("MATRIX_ROOMS", &answer) {
+            break value;
+        }
+    };
+    Ok(format!(
+        "MATRIX_HOMESERVER={homeserver}\nMATRIX_USER={user}\n{auth}={secret}\nMATRIX_ROOMS={rooms}\n"
+    ))
+}
+
 fn model_prompt(provider: &str, default_model: &str) -> String {
     if provider == "openrouter" {
         format!("Model ID (Enter uses paid default {default_model}; free OpenRouter example: {FREE_OPENROUTER_MODEL}; free availability and rate limits may change): ")
@@ -390,6 +470,8 @@ mod test {
             let app_id = match target {
                 SetupTarget::Discord(app_id) => app_id,
                 SetupTarget::Telegram | SetupTarget::Slack => None,
+                #[cfg(feature = "matrix")]
+                SetupTarget::Matrix => None,
             };
             assert_eq!(app_id, None);
             assert!(!content.contains("TELEGRAM_TOKEN"));
@@ -601,6 +683,17 @@ mod test {
         );
         assert!(!patch.contains_key("DISCORD_TOKEN"));
         assert!(!patch.contains_key("OWNER_ID"));
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(".env");
+        let mut settings = config::Config::load(&path, &std::collections::HashMap::new()).unwrap();
+        let revision = settings.revision().to_owned();
+        settings.save_patch(&revision, &patch).unwrap();
+        let saved = settings.reload().unwrap();
+        assert_eq!(saved.get("TELEGRAM_TOKEN"), "123:secret # comment");
+        assert_eq!(saved.get("OPENROUTER_KEY"), "key $HOME \"quoted\"");
+        assert_eq!(saved.get("OWNER_KEY"), "telegram:user:42");
+        assert_eq!(saved.get("TELEGRAM_ROOMS"), "telegram:room:-100123");
+        assert!(saved.get("DISCORD_TOKEN").is_empty());
     }
 
     #[test]
@@ -614,6 +707,134 @@ mod test {
             format!("DISCORD_TOKEN=token\nOPENROUTER_KEY=sk-test\nPROVIDER=openrouter\nMODEL={FREE_OPENROUTER_MODEL}\nBOT_LANG=en\nOWNER_ID=\nTZ_OFFSET=0\n# more options: see .env.example\n")
         );
         assert_eq!(app_id, SetupTarget::Discord(None));
+    }
+
+    #[cfg(feature = "matrix")]
+    #[test]
+    fn build_env_matrix_prefers_token_and_encodes_owner() {
+        let answers = b"matrix\nhttps://matrix.example.org\n@bot:example.org\n\nsyt_test\n!one:example.org,!two:example.org\n\nsk-test\n\nen\n@owner:example.org\n\n";
+        let (content, target) = build_env(&mut io::Cursor::new(answers), false).unwrap();
+        assert_eq!(content, "MATRIX_HOMESERVER=https://matrix.example.org\nMATRIX_USER=\"@bot:example.org\"\nMATRIX_ACCESS_TOKEN=syt_test\nMATRIX_ROOMS=\"!one:example.org,!two:example.org\"\nOPENROUTER_KEY=sk-test\nPROVIDER=openrouter\nMODEL=\nBOT_LANG=en\nOWNER_KEY=\"matrix:user:%40owner%3Aexample.org\"\nTZ_OFFSET=0\n# more options: see .env.example\n");
+        assert_eq!(target, SetupTarget::Matrix);
+        assert!(!content.contains("DISCORD_TOKEN"));
+        assert!(!content.contains("MATRIX_PASSWORD"));
+        assert!(!content.contains("OWNER_ID"));
+    }
+
+    #[cfg(feature = "matrix")]
+    #[test]
+    fn build_env_matrix_password_reasks_invalid_configuration() {
+        let answers = b"matrix\n\nmatrix.example.org\nftp://example.org\nhttps://example.org\nbot\n@:example.org\n@bot:\n@bot:example.org\nunknown\npassword\n\nsecret\n#alias:example.org\n!room:\n\nmistral\nsk-test\ncustom\ntr\n\nowner\n@owner:example.org\n5.5\n";
+        let (content, _) = build_env(&mut io::Cursor::new(answers), false).unwrap();
+        assert!(content.contains("MATRIX_PASSWORD=secret\nMATRIX_ROOMS=\n"));
+        assert!(content.contains("MISTRAL_KEY=sk-test\nPROVIDER=mistral\n"));
+        assert!(content.contains("BOT_LANG=tr\nOWNER_KEY=\"matrix:user:%40owner%3Aexample.org\"\n"));
+        assert!(content.contains("TZ_OFFSET=5.5\n"));
+        assert!(!content.contains("MATRIX_ACCESS_TOKEN"));
+    }
+
+    #[cfg(feature = "matrix")]
+    #[test]
+    fn matrix_wizard_reasks_unsafe_homeservers_and_keeps_opaque_room_ids() {
+        let answers = b"matrix\nhttps://user:secret@example.org\nhttps://example.org?token=secret\nhttps://example.org#secret\nhttps://example.org\n@bot:example.org\n\nsyt_test\n!opaqueRoomId, !legacy:example.org, !opaqueRoomId\n\nsk-test\n\n\n@owner:example.org\n\n";
+        let (content, target) = build_env(&mut io::Cursor::new(answers), false).unwrap();
+        assert_eq!(target, SetupTarget::Matrix);
+        assert!(content.contains("MATRIX_HOMESERVER=https://example.org\n"));
+        assert!(content.contains("MATRIX_ROOMS=\"!opaqueRoomId,!legacy:example.org\"\n"));
+        assert!(!content.contains("user:secret"));
+        assert!(!content.contains("?token="));
+        assert!(!content.contains("#secret"));
+    }
+
+    #[test]
+    fn matrix_secret_survives_dotenv_quoting() {
+        let secret = r#"pa ss#'$word"\end"#;
+        let content = format!(
+            "MATRIX_PASSWORD={}\n",
+            config::encode_value("MATRIX_PASSWORD", secret).unwrap()
+        );
+        let entries = dotenvy::from_read_iter(content.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            entries,
+            vec![("MATRIX_PASSWORD".to_string(), secret.to_string())]
+        );
+    }
+
+    #[cfg(feature = "matrix")]
+    #[test]
+    fn matrix_wizard_encodes_secrets_for_typed_patch_save_and_reload() {
+        let secret = r#"pa ss#'$word"\end"#;
+        let answers = format!(
+            "matrix\nhttps://matrix.example.org\n@bot:example.org\npassword\n{secret}\n!one:example.org, !two:example.org\n\nkey $HOME \"quoted\"\n\n\n@owner:example.org\n\n"
+        );
+        let (content, target) = build_env(&mut io::Cursor::new(answers), false).unwrap();
+        assert_eq!(target, SetupTarget::Matrix);
+        let patch = config::Config::patch_from_dotenv(&content).unwrap();
+        for (name, expected) in [
+            ("MATRIX_HOMESERVER", "https://matrix.example.org"),
+            ("MATRIX_USER", "@bot:example.org"),
+            ("MATRIX_PASSWORD", secret),
+            ("MATRIX_ROOMS", "!one:example.org,!two:example.org"),
+            ("OPENROUTER_KEY", "key $HOME \"quoted\""),
+            ("OWNER_KEY", "matrix:user:%40owner%3Aexample.org"),
+        ] {
+            assert!(
+                matches!(&patch[name], config::PatchValue::Replace { value } if value == expected),
+                "{name}"
+            );
+        }
+        for name in [
+            "DISCORD_TOKEN",
+            "TELEGRAM_TOKEN",
+            "SLACK_APP_TOKEN",
+            "SLACK_BOT_TOKEN",
+            "MATRIX_ACCESS_TOKEN",
+            "OWNER_ID",
+        ] {
+            assert!(!patch.contains_key(name), "{name}");
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(".env");
+        let mut settings = config::Config::load(&path, &std::collections::HashMap::new()).unwrap();
+        let revision = settings.revision().to_owned();
+        settings.save_patch(&revision, &patch).unwrap();
+        let saved = settings.reload().unwrap();
+        assert_eq!(saved.get("MATRIX_HOMESERVER"), "https://matrix.example.org");
+        assert_eq!(saved.get("MATRIX_USER"), "@bot:example.org");
+        assert_eq!(saved.get("MATRIX_PASSWORD"), secret);
+        assert_eq!(
+            saved.get("MATRIX_ROOMS"),
+            "!one:example.org,!two:example.org"
+        );
+        assert_eq!(saved.get("OPENROUTER_KEY"), "key $HOME \"quoted\"");
+        assert_eq!(saved.get("OWNER_KEY"), "matrix:user:%40owner%3Aexample.org");
+        assert!(saved.get("MATRIX_ACCESS_TOKEN").is_empty());
+        assert!(saved.get("DISCORD_TOKEN").is_empty());
+        assert!(saved.get("TELEGRAM_TOKEN").is_empty());
+        assert!(saved.get("SLACK_APP_TOKEN").is_empty());
+        assert!(saved.get("SLACK_BOT_TOKEN").is_empty());
+    }
+
+    #[cfg(feature = "matrix")]
+    #[test]
+    fn matrix_wizard_rejects_null_secret_before_serializing() {
+        let mut input = io::Cursor::new(
+            b"matrix\nhttps://matrix.example.org\n@bot:example.org\n\nsecret\0injected\n",
+        );
+        assert!(build_env(&mut input, false).is_err());
+    }
+
+    #[cfg(not(feature = "matrix"))]
+    #[test]
+    fn wizard_without_matrix_feature_reasks_matrix_choice() {
+        let mut input = io::Cursor::new(b"matrix\ndiscord\ntoken\n\nkey\n\n\n\n\n");
+        let (content, target) = build_env(&mut input, false).unwrap();
+        assert_eq!(target, SetupTarget::Discord(None));
+        assert!(content.starts_with("DISCORD_TOKEN=token\n"));
+        assert!(!content.contains("MATRIX_"));
+        assert!(!strings::t("init.platform.no_matrix").contains("matrix"));
     }
 
     #[test]

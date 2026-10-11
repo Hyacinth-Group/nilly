@@ -1,4 +1,6 @@
 //! Native return-position futures keep send/edit/reaction hot paths allocation-free.
+#[cfg(feature = "matrix")]
+use super::matrix::MatrixAdapter;
 use super::{
     capabilities::Capabilities, discord::DiscordAdapter, outgoing::*, slack::SlackAdapter,
     telegram::TelegramAdapter, types::*,
@@ -110,6 +112,8 @@ pub enum Adapter {
     Discord(DiscordAdapter),
     Telegram(TelegramAdapter),
     Slack(Box<SlackAdapter>),
+    #[cfg(feature = "matrix")]
+    Matrix(MatrixAdapter),
 }
 impl Platform for Adapter {
     fn connection_id(&self) -> &ConnectionId {
@@ -117,6 +121,8 @@ impl Platform for Adapter {
             Self::Discord(adapter) => adapter.connection_id(),
             Self::Telegram(adapter) => adapter.connection_id(),
             Self::Slack(adapter) => adapter.connection_id(),
+            #[cfg(feature = "matrix")]
+            Self::Matrix(adapter) => adapter.connection_id(),
         }
     }
     fn self_user(&self) -> &UserRef {
@@ -124,6 +130,8 @@ impl Platform for Adapter {
             Self::Discord(adapter) => adapter.self_user(),
             Self::Telegram(adapter) => adapter.self_user(),
             Self::Slack(adapter) => adapter.self_user(),
+            #[cfg(feature = "matrix")]
+            Self::Matrix(adapter) => adapter.self_user(),
         }
     }
     fn connection_warnings(&self) -> Vec<ConnectionWarning> {
@@ -131,6 +139,8 @@ impl Platform for Adapter {
             Self::Discord(adapter) => adapter.connection_warnings(),
             Self::Telegram(adapter) => adapter.connection_warnings(),
             Self::Slack(_) => Vec::new(),
+            #[cfg(feature = "matrix")]
+            Self::Matrix(_) => Vec::new(),
         }
     }
     fn capabilities(&self, room: &RoomRef) -> Capabilities {
@@ -138,6 +148,8 @@ impl Platform for Adapter {
             Self::Discord(adapter) => adapter.capabilities(room),
             Self::Telegram(adapter) => adapter.capabilities(room),
             Self::Slack(adapter) => adapter.capabilities(room),
+            #[cfg(feature = "matrix")]
+            Self::Matrix(adapter) => adapter.capabilities(room),
         }
     }
     fn render_stream(
@@ -152,6 +164,8 @@ impl Platform for Adapter {
             Self::Discord(adapter) => adapter.render_stream(room, mode, thought, text, done),
             Self::Telegram(adapter) => adapter.render_stream(room, mode, thought, text, done),
             Self::Slack(adapter) => adapter.render_stream(room, mode, thought, text, done),
+            #[cfg(feature = "matrix")]
+            Self::Matrix(adapter) => adapter.render_stream(room, mode, thought, text, done),
         }
     }
     fn render_final(
@@ -165,6 +179,8 @@ impl Platform for Adapter {
             Self::Discord(adapter) => adapter.render_final(room, mode, thought, lines),
             Self::Telegram(adapter) => adapter.render_final(room, mode, thought, lines),
             Self::Slack(adapter) => adapter.render_final(room, mode, thought, lines),
+            #[cfg(feature = "matrix")]
+            Self::Matrix(adapter) => adapter.render_final(room, mode, thought, lines),
         }
     }
     async fn send<'a>(
@@ -176,6 +192,8 @@ impl Platform for Adapter {
             Self::Discord(adapter) => adapter.send(room, body).await,
             Self::Telegram(adapter) => adapter.send(room, body).await,
             Self::Slack(adapter) => adapter.send(room, body).await,
+            #[cfg(feature = "matrix")]
+            Self::Matrix(adapter) => adapter.send(room, body).await,
         }
     }
     async fn edit<'a>(
@@ -187,6 +205,8 @@ impl Platform for Adapter {
             Self::Discord(adapter) => adapter.edit(sent, body).await,
             Self::Telegram(adapter) => adapter.edit(sent, body).await,
             Self::Slack(adapter) => adapter.edit(sent, body).await,
+            #[cfg(feature = "matrix")]
+            Self::Matrix(adapter) => adapter.edit(sent, body).await,
         }
     }
     async fn delete<'a>(&'a self, sent: &'a MessageReceipt) -> PlatformResult<()> {
@@ -194,6 +214,8 @@ impl Platform for Adapter {
             Self::Discord(adapter) => adapter.delete(sent).await,
             Self::Telegram(adapter) => adapter.delete(sent).await,
             Self::Slack(adapter) => adapter.delete(sent).await,
+            #[cfg(feature = "matrix")]
+            Self::Matrix(adapter) => adapter.delete(sent).await,
         }
     }
     async fn react<'a>(&'a self, target: &'a MessageRef, emoji: &'a Emoji) -> PlatformResult<()> {
@@ -201,6 +223,8 @@ impl Platform for Adapter {
             Self::Discord(adapter) => adapter.react(target, emoji).await,
             Self::Telegram(adapter) => adapter.react(target, emoji).await,
             Self::Slack(adapter) => adapter.react(target, emoji).await,
+            #[cfg(feature = "matrix")]
+            Self::Matrix(adapter) => adapter.react(target, emoji).await,
         }
     }
     async fn typing<'a>(&'a self, room: &'a RoomRef) -> PlatformResult<()> {
@@ -208,6 +232,8 @@ impl Platform for Adapter {
             Self::Discord(adapter) => adapter.typing(room).await,
             Self::Telegram(adapter) => adapter.typing(room).await,
             Self::Slack(adapter) => adapter.typing(room).await,
+            #[cfg(feature = "matrix")]
+            Self::Matrix(adapter) => adapter.typing(room).await,
         }
     }
     async fn set_nickname<'a>(
@@ -219,6 +245,8 @@ impl Platform for Adapter {
             Self::Discord(adapter) => adapter.set_nickname(target, name).await,
             Self::Telegram(adapter) => adapter.set_nickname(target, name).await,
             Self::Slack(adapter) => adapter.set_nickname(target, name).await,
+            #[cfg(feature = "matrix")]
+            Self::Matrix(adapter) => adapter.set_nickname(target, name).await,
         }
     }
     async fn fetch_history<'a>(
@@ -230,6 +258,8 @@ impl Platform for Adapter {
             Self::Discord(adapter) => adapter.fetch_history(room, page).await,
             Self::Telegram(adapter) => adapter.fetch_history(room, page).await,
             Self::Slack(adapter) => adapter.fetch_history(room, page).await,
+            #[cfg(feature = "matrix")]
+            Self::Matrix(adapter) => adapter.fetch_history(room, page).await,
         }
     }
     async fn list_rooms(&self) -> PlatformResult<Vec<RoomRef>> {
@@ -237,6 +267,8 @@ impl Platform for Adapter {
             Self::Discord(adapter) => adapter.list_rooms().await,
             Self::Telegram(adapter) => adapter.list_rooms().await,
             Self::Slack(adapter) => adapter.list_rooms().await,
+            #[cfg(feature = "matrix")]
+            Self::Matrix(adapter) => adapter.list_rooms().await,
         }
     }
     async fn resolve_media<'a>(
@@ -247,6 +279,8 @@ impl Platform for Adapter {
             Self::Discord(adapter) => adapter.resolve_media(attachment).await,
             Self::Telegram(adapter) => adapter.resolve_media(attachment).await,
             Self::Slack(adapter) => adapter.resolve_media(attachment).await,
+            #[cfg(feature = "matrix")]
+            Self::Matrix(adapter) => adapter.resolve_media(attachment).await,
         }
     }
 }

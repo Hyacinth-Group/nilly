@@ -571,6 +571,15 @@ async fn settings_forms_preserve_unposted_groups_and_never_echo_credentials() {
     assert!(html.contains("name=\"SLACK_TEST_CHANNEL\" type=\"text\" value=\"\""));
     assert!(html.contains("Approved Slack channels"));
     assert!(html.contains("Blank denies all Slack channels"));
+    for key in ["MATRIX_ACCESS_TOKEN", "MATRIX_PASSWORD"] {
+        assert!(html.contains(&format!("name=\"{key}\" type=\"password\"")));
+        assert!(html.contains(&format!("name=\"clear_{key}\"")));
+    }
+    for key in ["MATRIX_HOMESERVER", "MATRIX_USER", "MATRIX_ROOMS"] {
+        assert!(html.contains(&format!("name=\"{key}\" type=\"text\"")));
+    }
+    assert!(html.contains("Approved Matrix rooms"));
+    assert!(html.contains("Blank approves only owner invitations"));
     let revision = app.config.lock().revision().to_owned();
     let body = format!("csrf={}&revision={revision}&BOT_LANG=tr", admin.info.csrf);
     let response = router
@@ -989,7 +998,7 @@ async fn login_explains_existing_ownership_and_nonsecret_settings_have_no_secret
             .to_vec(),
     )
     .unwrap();
-    assert_eq!(html.matches("Secret configured:").count(), 7);
+    assert_eq!(html.matches("Secret configured:").count(), 9);
     let response = router
         .oneshot(request("GET", "/setup?step=2", Some(&owner.token), ""))
         .await
@@ -1085,4 +1094,158 @@ async fn protected_settings_can_save_telegram_only_with_default_deny_without_sta
     assert!(!html.contains("settings-private-credential"));
     assert!(html.contains("Onaylı Telegram odaları"));
     assert!(!html.contains("panel.settings.TELEGRAM"));
+}
+
+#[cfg(feature = "matrix")]
+#[tokio::test]
+async fn protected_matrix_settings_are_masked_and_pending_until_restart_without_starting_bot() {
+    let (app, _directory) = fixture().await;
+    let admin = owner(&app).await;
+    let router = routes::router(app.clone());
+    let revision = app.config.lock().revision().to_owned();
+    let body = format!(
+        "csrf={}&revision={revision}&MATRIX_HOMESERVER=https%3A%2F%2Fmatrix.example&MATRIX_USER=%40bot%3Amatrix.example&MATRIX_ACCESS_TOKEN=matrix-settings-private-token&MATRIX_PASSWORD=matrix-settings-private-password&MATRIX_ROOMS=&OPENROUTER_KEY=provider-settings-private-key",
+        admin.info.csrf,
+    );
+    let response = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/ui/settings?lang=tr",
+            Some(&admin.token),
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let saved = app.config.lock().reload().unwrap();
+    saved.validate_runtime().unwrap();
+    assert_eq!(saved.get("DISCORD_TOKEN"), "");
+    assert_eq!(saved.get("MATRIX_HOMESERVER"), "https://matrix.example");
+    assert_eq!(saved.get("MATRIX_USER"), "@bot:matrix.example");
+    assert_eq!(
+        saved.get("MATRIX_ACCESS_TOKEN"),
+        "matrix-settings-private-token"
+    );
+    assert_eq!(
+        saved.get("MATRIX_PASSWORD"),
+        "matrix-settings-private-password"
+    );
+    assert_eq!(saved.get("MATRIX_ROOMS"), "");
+    assert_eq!(app.config.lock().get("MATRIX_ACCESS_TOKEN"), "");
+    assert!(matches!(
+        app.runtime.lock().lifecycle,
+        Lifecycle::Unconfigured
+    ));
+    assert!(app.runtime.lock().bot.is_none());
+    assert!(app.drafts.lock().is_empty());
+    let response = router
+        .clone()
+        .oneshot(request("GET", "/api/v1/settings", Some(&admin.token), ""))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let value: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 256 * 1024).await.unwrap()).unwrap();
+    assert!(!value.to_string().contains("settings-private"));
+    for key in ["MATRIX_ACCESS_TOKEN", "MATRIX_PASSWORD"] {
+        let field = value["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|field| field["spec"]["key"] == key)
+            .unwrap();
+        assert_eq!(field["spec"]["kind"], "secret");
+        assert_eq!(field["spec"]["application"], "restart");
+        assert_eq!(field["saved"]["configured"], true);
+        assert_eq!(field["pending_restart"], true);
+        for source in ["effective", "saved", "default"] {
+            assert!(field[source]["value"].is_null());
+        }
+    }
+    for language in ["en", "tr"] {
+        let response = router
+            .clone()
+            .oneshot(request(
+                "GET",
+                &format!("/settings?lang={language}"),
+                Some(&admin.token),
+                "",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let html = String::from_utf8(
+            to_bytes(response.into_body(), 256 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(!html.contains("settings-private"));
+        assert!(!html.contains("panel.settings.MATRIX"));
+        assert!(html.contains(if language == "en" {
+            "Approved Matrix rooms"
+        } else {
+            "Onaylı Matrix odaları"
+        }));
+    }
+}
+
+#[cfg(not(feature = "matrix"))]
+#[tokio::test]
+async fn disabled_matrix_config_remains_repairable_in_protected_settings_without_starting_bot() {
+    let (app, _directory) = fixture().await;
+    let path = app.config.lock().path().to_owned();
+    std::fs::write(&path, "MATRIX_ACCESS_TOKEN=disabled-matrix-private-token\nMATRIX_PASSWORD=disabled-matrix-private-password\n").unwrap();
+    *app.config.lock() = config::Config::load(path, &HashMap::new()).unwrap();
+    assert_eq!(
+        app.config.lock().validate_runtime().unwrap_err().code(),
+        "panel.config.matrix_feature_required"
+    );
+    let admin = owner(&app).await;
+    let router = routes::router(app.clone());
+    for path in ["/settings?lang=en", "/settings?lang=tr", "/api/v1/settings"] {
+        let response = router
+            .clone()
+            .oneshot(request("GET", path, Some(&admin.token), ""))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = String::from_utf8(
+            to_bytes(response.into_body(), 256 * 1024)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(!body.contains("disabled-matrix-private"));
+        if path == "/api/v1/settings" {
+            let settings: serde_json::Value = serde_json::from_str(&body).unwrap();
+            let mut matrix_fields = 0;
+            for field in settings["fields"].as_array().unwrap() {
+                if field["spec"]["key"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("MATRIX_")
+                {
+                    matrix_fields += 1;
+                    for name in ["label_key", "help_key"] {
+                        let key = field["spec"][name].as_str().unwrap();
+                        for language in [views::Language::En, views::Language::Tr] {
+                            assert_ne!(routes::t(language, key), key);
+                        }
+                    }
+                }
+            }
+            assert_eq!(matrix_fields, 5);
+        } else {
+            assert!(!body.contains("panel.settings.MATRIX"));
+        }
+    }
+    assert!(matches!(
+        app.runtime.lock().lifecycle,
+        Lifecycle::Unconfigured
+    ));
+    assert!(app.runtime.lock().bot.is_none());
 }

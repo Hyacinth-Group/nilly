@@ -14,13 +14,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Check formatting
         run: cargo fmt --check
       - name: Lint
         run: cargo clippy --all-targets --locked -- -D warnings
       - name: Test
-        run: cargo test --locked
+        run: |
+          cargo test --locked
+          BOT_LANG=tr cargo test --locked
+      - name: Lint and test minimal build
+        run: |
+          cargo clippy --all-targets --no-default-features --locked -- -D warnings
+          cargo test --no-default-features --locked
+          BOT_LANG=tr cargo test --no-default-features --locked
 
   docker:
     runs-on: ubuntu-latest

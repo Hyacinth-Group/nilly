@@ -139,6 +139,8 @@
             platform::Adapter::Discord(adapter) => assert_eq!(adapter.media_resolution_count(), 0),
             platform::Adapter::Telegram(_) => unreachable!("Discord fixture must use Discord transport"),
             platform::Adapter::Slack(_) => unreachable!("Discord fixture must use Discord transport"),
+            #[cfg(feature = "matrix")]
+            platform::Adapter::Matrix(_) => unreachable!("Discord fixture must use Discord transport"),
         }
         {
             let state = bot.state();

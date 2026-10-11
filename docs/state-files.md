@@ -2,9 +2,10 @@
 
 Runtime memory; not committed to git. The bot loads from here on restart.
 
-**Storage**: everything outside `arsiv/` lives in a single file, `durum/hafiza.redb`
+**Memory storage**: logical memory records live in `durum/hafiza.redb`
 (redb — pure Rust, ACID transactions; why this instead of rusqlite/plain-JSON:
-`docs/decisions.md`). Records keep path-like keys and their existing markdown
+`docs/decisions.md`). Adapter session files are separate, as described below.
+Records keep path-like keys and their existing markdown
 bodies, but schema v2 qualifies durable user/room/space identities by platform.
 For example `kisiler/discord:user:42.md` and `kanallar/discord:room:7.md` are
 active database keys. `platform::keys` is the sole identity-to-record mapping.
@@ -32,6 +33,41 @@ Person records use platform-qualified user identities. Topic records use slugs.
 | `dusunme.md` | `/dusunme kip:göster/gizle/sessiz/kapat` | startup (`State::load`; defaults to göster if file absent) | `goster`, `gizle`, `sessiz`, or `kapali` |
 | `debug.md` | `/debug durum:aç/kapat`, settings panel | startup (`State::load`; defaults to off if file absent) | `acik` or `kapali`; when on, decision traces get posted to the channel |
 | `gelisim.md` | check_growth, pick_name | startup (`growth::load`) | lines `dogum: unix` `sohbet: n` `mesaj: n` `evre: i` `isim: ad` |
+
+## Matrix session and sync state
+
+Matrix stores native runtime state beneath the state directory (normally
+`durum/`), separately from the shared memory database:
+
+| Path | Contents / purpose |
+|---|---|
+| `matrix/<connection>/session.json` | saved authenticated Matrix session, including access token and stable device/account identity |
+| `matrix/<connection>/sync.json` | last sync token, so a restart resumes incremental sync rather than starting from scratch |
+| `matrix/<connection>/rooms.json` | rooms approved by owner invitations; environment allowlisted rooms are explicit approval too |
+| `matrix/<connection>/admin-room.json` | private plaintext owner-only administrative result route; excluded from conversational learning |
+| `matrix/<connection>/commands.json` | last 256 accepted native command event IDs, preventing command replay on reconnect/restart |
+| `matrix/<connection>/store/` | Matrix SDK SQLite state/cache; SDK crypto is disabled |
+
+`<connection>` is the configured credential-independent connection identity,
+not the password, token, display name, or room ID. These are real files, not
+redb record keys. Never run two bot processes against one Matrix store.
+
+**Protect the whole state directory like a password file.** In particular,
+`session.json` contains an access token that can act as the bot. Restrict Unix
+directory/file permissions and Windows access control, and keep backups private.
+Do not upload sessions, sync/store files, or real conversation data in bug reports.
+The SQLite cache can contain room/account data even though it has no crypto keys.
+
+Preserve this directory when restarting/replacing a container or binary.
+Restoring the saved session keeps the device identity stable; deleting it can
+require a fresh login/device and loses sync continuity. If credentials leak,
+stop the bot, revoke the token/device using the homeserver/client account tools,
+and reconfigure login privately. Deleting local files alone does not revoke a
+server-side session or erase shared-brain notes and backups.
+
+The adapter is plaintext only. No encryption key store, key recovery, or encrypted
+room support is implied by the SDK cache. See [Matrix configuration](configuration.md#matrix-plaintext-only).
+
 
 ## Formats
 

@@ -226,6 +226,15 @@ fn connection_details(connections: &[ConnectionSnapshot], language: Language) ->
             )
             .expect("writing to a String cannot fail");
         }
+        if connection.platform == PlatformKind::Matrix {
+            write!(
+                details,
+                " · {}: {}",
+                t(language, "panel.label.matrix_plaintext"),
+                t(language, "panel.overview.matrix_plaintext_notice"),
+            )
+            .expect("writing to a String cannot fail");
+        }
     }
     details
 }
@@ -668,5 +677,32 @@ mod tests {
             !connection_details(std::slice::from_ref(&connection), Language::En)
                 .contains(&t(Language::En, "panel.overview.telegram_privacy_warning"))
         );
+    }
+
+    #[test]
+    fn matrix_plaintext_notice_is_bilingual_and_preserves_reported_capabilities_without_rooms() {
+        let mut matrix = matrix_snapshot(ConnectionStatus::Ready);
+        matrix.rooms[0].capabilities.decryption_available = false;
+        let snapshot = transport_snapshot(std::slice::from_ref(&matrix));
+        assert_eq!(
+            snapshot["connections"][0]["rooms"][0]["capabilities"]["decryption_available"],
+            false
+        );
+        assert_eq!(snapshot["connections"], json!([matrix]));
+        for language in [Language::En, Language::Tr] {
+            let notice = t(language, "panel.overview.matrix_plaintext_notice");
+            assert!(!notice.starts_with("panel."));
+            let details = connection_details(std::slice::from_ref(&matrix), language);
+            assert!(details.contains(&notice));
+            assert!(details.contains(&json!(matrix.rooms[0].capabilities).to_string()));
+        }
+        matrix.rooms.clear();
+        for language in [Language::En, Language::Tr] {
+            assert!(connection_details(std::slice::from_ref(&matrix), language)
+                .contains(&t(language, "panel.overview.matrix_plaintext_notice")));
+        }
+        let empty = transport_snapshot(std::slice::from_ref(&matrix));
+        assert_eq!(empty["rooms"], 0);
+        assert_eq!(empty["connections"][0]["rooms"], json!([]));
     }
 }

@@ -62,6 +62,11 @@ pub enum ConnectionConfig {
         app_token: String,
         bot_token: String,
     },
+    #[cfg(feature = "matrix")]
+    Matrix {
+        connection: ConnectionId,
+        config: super::matrix::MatrixConfig,
+    },
 }
 
 /// A single selector serves headless startup and the panel's activated first runtime.
@@ -96,6 +101,26 @@ pub(crate) fn configured_connections() -> Result<Vec<ConnectionConfig>, BotError
         }),
         (Err(_), Err(_)) => {}
         _ => return Err(crate::strings::t("startup.slack_token_pair").into()),
+    }
+    #[cfg(feature = "matrix")]
+    if let Some(config) = super::matrix::MatrixConfig::from_settings()? {
+        configs.push(ConnectionConfig::Matrix {
+            connection: ConnectionId::new("matrix-default"),
+            config,
+        });
+    }
+    #[cfg(not(feature = "matrix"))]
+    if [
+        "MATRIX_HOMESERVER",
+        "MATRIX_USER",
+        "MATRIX_ACCESS_TOKEN",
+        "MATRIX_PASSWORD",
+        "MATRIX_ROOMS",
+    ]
+    .iter()
+    .any(|key| crate::config::runtime_value(key).is_ok_and(|value| !value.trim().is_empty()))
+    {
+        return Err(crate::strings::t("matrix.startup.feature_required").into());
     }
     if configs.is_empty() {
         return Err(crate::strings::t("platform.startup.missing").into());
@@ -161,6 +186,8 @@ pub(crate) async fn run_with_shutdown(
             ConnectionConfig::Discord { connection, .. } => (connection, PlatformKind::Discord),
             ConnectionConfig::Telegram { connection, .. } => (connection, PlatformKind::Telegram),
             ConnectionConfig::Slack { connection, .. } => (connection, PlatformKind::Slack),
+            #[cfg(feature = "matrix")]
+            ConnectionConfig::Matrix { connection, .. } => (connection, PlatformKind::Matrix),
         };
         if !ids.insert(connection.clone()) {
             return Err(PlatformError::Transport("duplicate configured connection".into()).into());
@@ -175,6 +202,8 @@ pub(crate) async fn run_with_shutdown(
             ConnectionConfig::Discord { connection, .. }
             | ConnectionConfig::Telegram { connection, .. }
             | ConnectionConfig::Slack { connection, .. } => connection.clone(),
+            #[cfg(feature = "matrix")]
+            ConnectionConfig::Matrix { connection, .. } => connection.clone(),
         };
         let bot = bot.clone();
         let ingress = ingress.clone();
@@ -216,6 +245,11 @@ pub(crate) async fn run_with_shutdown(
                         shutdown,
                     )
                     .await
+                }
+                #[cfg(feature = "matrix")]
+                ConnectionConfig::Matrix { config, .. } => {
+                    super::matrix::runner::run(bot, connection.clone(), config, ingress, shutdown)
+                        .await
                 }
             };
             (connection, result)

@@ -201,7 +201,7 @@ fn slack_credentials_are_write_only_and_updates_stay_pending_until_restart() {
         "SLACK_APP_TOKEN=app-private-token\nSLACK_BOT_TOKEN=bot-private-token\nSLACK_CHANNELS=C123\nOPENROUTER_KEY=key\n",
     );
     let fields = config.fields();
-    assert_eq!(REGISTRY.iter().filter(|field| field.secret).count(), 7);
+    assert_eq!(REGISTRY.iter().filter(|field| field.secret).count(), 9);
     for key in ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN"] {
         let view = fields.iter().find(|view| view.spec.key == key).unwrap();
         assert!(view.spec.secret);
@@ -1019,4 +1019,264 @@ fn creation_and_replacement_are_private_from_atomic_tempfile() {
         fs::metadata(&path).unwrap().permissions().mode() & 0o777,
         0o600
     );
+}
+
+#[test]
+fn matrix_homeserver_matches_constructor_url_policy() {
+    for value in [
+        "https://matrix.example",
+        "http://matrix.example:8008/base",
+        "http://localhost:8008",
+    ] {
+        assert_eq!(validate_value("MATRIX_HOMESERVER", value).unwrap(), value);
+    }
+    for value in [
+        "matrix.example",
+        "ftp://matrix.example",
+        "https://user:private@matrix.example",
+        "https://matrix.example?private=token",
+        "https://matrix.example#fragment",
+    ] {
+        let error = validate_value("MATRIX_HOMESERVER", value).unwrap_err();
+        assert_eq!(error.code(), "panel.config.invalid_matrix_homeserver");
+        assert!(!error.to_string().contains(value));
+    }
+}
+
+#[cfg(feature = "matrix")]
+#[test]
+fn matrix_identifiers_use_sdk_and_accept_opaque_room_ids_not_aliases() {
+    let opaque = "!abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
+    matrix_sdk::ruma::RoomId::parse(opaque).unwrap();
+    assert_eq!(
+        validate_value("MATRIX_USER", " @bot:matrix.example ").unwrap(),
+        "@bot:matrix.example"
+    );
+    assert_eq!(
+        validate_value(
+            "MATRIX_ROOMS",
+            &format!(" !room:matrix.example,{opaque},!room:matrix.example ")
+        )
+        .unwrap(),
+        format!("!room:matrix.example,{opaque}"),
+    );
+    assert_eq!(validate_value("MATRIX_ROOMS", " ").unwrap(), "");
+    for value in [
+        "#alias:matrix.example",
+        "matrix:room:!room:matrix.example",
+        "!room:matrix.example,,!other:matrix.example",
+        "!room:",
+        "!another:",
+        "!:matrix.example",
+        "!",
+        "!white space",
+        "!white\tspace",
+    ] {
+        assert_eq!(
+            validate_value("MATRIX_ROOMS", value).unwrap_err().code(),
+            "panel.config.invalid_matrix_rooms"
+        );
+    }
+    for value in [
+        "bot",
+        "matrix:user:%40bot%3Amatrix.example",
+        "@bot",
+        "@:example.org",
+        "@bot:",
+        "@white space:matrix.example",
+        "@white\tspace:matrix.example",
+    ] {
+        assert_eq!(
+            validate_value("MATRIX_USER", value).unwrap_err().code(),
+            "panel.config.invalid_matrix_user"
+        );
+    }
+}
+
+#[cfg(feature = "matrix")]
+#[test]
+fn complete_matrix_connections_preserve_platform_and_provider_requirements() {
+    for other in [
+        "",
+        "DISCORD_TOKEN=discord\n",
+        "TELEGRAM_TOKEN=telegram\n",
+        "SLACK_APP_TOKEN=app\nSLACK_BOT_TOKEN=bot\n",
+    ] {
+        for auth in [
+            "MATRIX_ACCESS_TOKEN=matrix-private-token\n",
+            "MATRIX_PASSWORD=matrix-private-password\n",
+        ] {
+            let credentials = format!("{other}MATRIX_HOMESERVER=https://matrix.example\nMATRIX_USER=@bot:matrix.example\n{auth}");
+            let (_directory, config) = fixture(&format!("{credentials}OPENROUTER_KEY=key\n"));
+            config.validate_runtime().unwrap();
+            assert_eq!(config.get("MATRIX_ROOMS"), "");
+            let (_directory, config) = fixture(&credentials);
+            assert!(
+                matches!(config.validate_runtime(), Err(ConfigError::Field { key, code }) if key == "OPENROUTER_KEY" && code == "panel.config.required")
+            );
+            let (_directory, config) =
+                fixture(&format!("{credentials}PROVIDER=mistral\nMISTRAL_KEY=key\n"));
+            config.validate_runtime().unwrap();
+        }
+    }
+    for (matrix, missing, code) in [
+        (
+            "MATRIX_ROOMS=!room:matrix.example\n",
+            "MATRIX_HOMESERVER",
+            "panel.config.matrix_required",
+        ),
+        (
+            "MATRIX_ACCESS_TOKEN=matrix-private-token\n",
+            "MATRIX_HOMESERVER",
+            "panel.config.matrix_required",
+        ),
+        (
+            "MATRIX_HOMESERVER=https://matrix.example\n",
+            "MATRIX_USER",
+            "panel.config.matrix_required",
+        ),
+        (
+            "MATRIX_HOMESERVER=https://matrix.example\nMATRIX_USER=@bot:matrix.example\n",
+            "MATRIX_ACCESS_TOKEN",
+            "panel.config.matrix_auth_required",
+        ),
+    ] {
+        for other in [
+            "",
+            "DISCORD_TOKEN=discord\n",
+            "TELEGRAM_TOKEN=telegram\n",
+            "SLACK_APP_TOKEN=app\nSLACK_BOT_TOKEN=bot\n",
+        ] {
+            let (_directory, config) = fixture(&format!("{other}{matrix}OPENROUTER_KEY=key\n"));
+            let error = config.validate_runtime().unwrap_err();
+            assert!(
+                matches!(&error, ConfigError::Field { key, code: actual } if key == missing && *actual == code)
+            );
+            assert!(!error.to_string().contains("private-token"));
+        }
+    }
+}
+
+#[cfg(feature = "matrix")]
+#[test]
+fn matrix_fields_are_typed_masked_and_keep_the_startup_snapshot_until_restart() {
+    let (_directory, mut config) = fixture(
+        "MATRIX_HOMESERVER=https://matrix.example\nMATRIX_USER=@bot:matrix.example\nMATRIX_ACCESS_TOKEN=matrix-private-token\nMATRIX_PASSWORD=matrix-private-password\nMATRIX_ROOMS=!room:matrix.example\nOPENROUTER_KEY=key\n",
+    );
+    let fields = config.fields();
+    assert_eq!(REGISTRY.iter().filter(|field| field.secret).count(), 9);
+    for key in ["MATRIX_ACCESS_TOKEN", "MATRIX_PASSWORD"] {
+        let field = fields.iter().find(|field| field.spec.key == key).unwrap();
+        assert!(matches!(field.spec.kind, FieldKind::Secret));
+        assert!(field.spec.secret);
+        assert_eq!(field.spec.application, "restart");
+        assert!(field.effective.configured && field.saved.configured);
+        assert!(
+            field.effective.value.is_none()
+                && field.saved.value.is_none()
+                && field.default.value.is_none()
+        );
+    }
+    for (key, kind) in [
+        ("MATRIX_HOMESERVER", FieldKind::MatrixHomeserver),
+        ("MATRIX_USER", FieldKind::MatrixUser),
+        ("MATRIX_ROOMS", FieldKind::MatrixRooms),
+    ] {
+        let field = fields.iter().find(|field| field.spec.key == key).unwrap();
+        assert!(!field.spec.secret);
+        assert_eq!(
+            std::mem::discriminant(&field.spec.kind),
+            std::mem::discriminant(&kind)
+        );
+        assert_eq!(field.spec.application, "restart");
+    }
+    assert!(!serde_json::to_string(&fields)
+        .unwrap()
+        .contains("matrix-private"));
+    for (key, replacement) in [
+        ("MATRIX_HOMESERVER", "http://new.matrix.example:8008"),
+        ("MATRIX_USER", "@newbot:matrix.example"),
+        ("MATRIX_ACCESS_TOKEN", "replacement-private-token"),
+        ("MATRIX_PASSWORD", "replacement-private-password"),
+        ("MATRIX_ROOMS", ""),
+    ] {
+        let original = config.get(key).to_owned();
+        save(&mut config, &replace(key, replacement)).unwrap();
+        assert_eq!(config.get(key), original);
+        assert_eq!(config.reload().unwrap().get(key), replacement);
+        assert!(config
+            .fields()
+            .iter()
+            .any(|field| field.spec.key == key && field.pending_restart));
+    }
+    assert!(!serde_json::to_string(&config.fields())
+        .unwrap()
+        .contains("private"));
+}
+
+#[cfg(not(feature = "matrix"))]
+#[test]
+fn disabled_matrix_configuration_is_loadable_for_panel_repair_but_never_silently_ignored() {
+    for (key, value) in [
+        ("MATRIX_HOMESERVER", "https://matrix.example"),
+        ("MATRIX_USER", "@bot:matrix.example"),
+        ("MATRIX_ACCESS_TOKEN", "matrix-private-token"),
+        ("MATRIX_PASSWORD", "matrix-private-password"),
+        ("MATRIX_ROOMS", "!room:matrix.example"),
+    ] {
+        let (_directory, config) = fixture(&format!("{}{}={}\n", configured(), key, value));
+        let error = config.validate_runtime().unwrap_err();
+        assert_eq!(error.code(), "panel.config.matrix_feature_required");
+        assert!(!error.to_string().contains(value));
+    }
+    let (_directory, config) = fixture(&format!("{}MATRIX_HOMESERVER=\nMATRIX_USER=\nMATRIX_ACCESS_TOKEN=\nMATRIX_PASSWORD=\nMATRIX_ROOMS=\n", configured()));
+    config.validate_runtime().unwrap();
+}
+
+#[cfg(feature = "matrix")]
+#[test]
+fn matrix_environment_overrides_are_immutable_read_only_and_masked() {
+    let (directory, _) = fixture(
+        "MATRIX_HOMESERVER=https://file.example\nMATRIX_USER=@filebot:file.example\nMATRIX_ACCESS_TOKEN=file-private-token\nMATRIX_PASSWORD=file-private-password\nMATRIX_ROOMS=!file:file.example\nOPENROUTER_KEY=key\n",
+    );
+    let mut startup = HashMap::from([
+        (
+            "MATRIX_HOMESERVER".into(),
+            "http://startup.example:8008".into(),
+        ),
+        ("MATRIX_USER".into(), "@bot:startup.example".into()),
+        ("MATRIX_ACCESS_TOKEN".into(), "startup-private-token".into()),
+        ("MATRIX_PASSWORD".into(), "".into()),
+        ("MATRIX_ROOMS".into(), "".into()),
+    ]);
+    let config = Config::load(directory.path().join(".env"), &startup).unwrap();
+    config.validate_runtime().unwrap();
+    startup.insert("MATRIX_HOMESERVER".into(), "https://later.example".into());
+    startup.insert("MATRIX_ACCESS_TOKEN".into(), "later-private-token".into());
+    assert_eq!(
+        config.get("MATRIX_HOMESERVER"),
+        "http://startup.example:8008"
+    );
+    assert_eq!(config.get("MATRIX_ACCESS_TOKEN"), "startup-private-token");
+    assert_eq!(config.get("MATRIX_PASSWORD"), "");
+    assert_eq!(config.get("MATRIX_ROOMS"), "");
+    for key in [
+        "MATRIX_HOMESERVER",
+        "MATRIX_USER",
+        "MATRIX_ACCESS_TOKEN",
+        "MATRIX_PASSWORD",
+        "MATRIX_ROOMS",
+    ] {
+        let fields = config.fields();
+        let field = fields.iter().find(|field| field.spec.key == key).unwrap();
+        assert!(field.read_only);
+        assert!(matches!(field.source, Source::Environment));
+        assert!(!field.pending_restart);
+        assert!(
+            matches!(config.validate_patch(&replace(key, "replacement")), Err(ConfigError::Field { key: rejected, code }) if rejected == key && code == "panel.config.read_only")
+        );
+    }
+    assert!(!serde_json::to_string(&config.fields())
+        .unwrap()
+        .contains("private"));
 }

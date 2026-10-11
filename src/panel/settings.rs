@@ -71,7 +71,7 @@ fn input(language: Language, view: &FieldView) -> Field {
     if !choices.is_empty()
         || matches!(
             view.spec.kind,
-            FieldKind::TelegramRooms | FieldKind::SlackChannels
+            FieldKind::TelegramRooms | FieldKind::SlackChannels | FieldKind::MatrixRooms
         )
     {
         input.value =
@@ -177,6 +177,11 @@ pub(super) async fn view(
                 "SLACK_CHANNELS",
                 "SLACK_HISTORY_TIER",
                 "SLACK_TEST_CHANNEL",
+                "MATRIX_HOMESERVER",
+                "MATRIX_USER",
+                "MATRIX_ACCESS_TOKEN",
+                "MATRIX_PASSWORD",
+                "MATRIX_ROOMS",
             ][..],
             false,
         ),

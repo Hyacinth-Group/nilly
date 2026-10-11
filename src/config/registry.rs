@@ -20,6 +20,9 @@ pub enum FieldKind {
     SlackChannel,
     SlackChannels,
     SlackHistoryTier,
+    MatrixHomeserver,
+    MatrixUser,
+    MatrixRooms,
     TimezoneOffset,
     Language,
     Bool,
@@ -69,6 +72,11 @@ pub static REGISTRY: &[FieldSpec] = &[
     field!("SLACK_CHANNELS", SlackChannels, ""),
     field!("SLACK_HISTORY_TIER", SlackHistoryTier, "internal"),
     field!("SLACK_TEST_CHANNEL", SlackChannel, ""),
+    field!("MATRIX_HOMESERVER", MatrixHomeserver, ""),
+    field!("MATRIX_USER", MatrixUser, ""),
+    field!("MATRIX_ACCESS_TOKEN", Secret, ""),
+    field!("MATRIX_PASSWORD", Secret, ""),
+    field!("MATRIX_ROOMS", MatrixRooms, ""),
     field!("OWNER_KEY", UserKey, ""),
     field!("OWNER_ID", Id, ""),
     field!("TZ_OFFSET", TimezoneOffset, "0"),
@@ -189,6 +197,22 @@ pub fn normalize(field: &FieldSpec, raw: &str) -> Result<String, ConfigError> {
             }
             channels.join(",")
         }
+        FieldKind::MatrixHomeserver => {
+            let url = reqwest::Url::parse(value)
+                .map_err(|_| invalid(field, "panel.config.invalid_matrix_homeserver"))?;
+            if !matches!(url.scheme(), "http" | "https")
+                || url.host_str().is_none()
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+            {
+                return Err(invalid(field, "panel.config.invalid_matrix_homeserver"));
+            }
+            value.to_owned()
+        }
+        FieldKind::MatrixUser => matrix_user(field, value)?,
+        FieldKind::MatrixRooms => matrix_rooms(field, value)?,
         FieldKind::TimezoneOffset => {
             let hours: f64 = value
                 .parse()
@@ -258,6 +282,63 @@ fn slack_channel<'a>(field: &FieldSpec, value: &'a str) -> Result<&'a str, Confi
     } else {
         Err(invalid(field, "panel.config.invalid_slack_channel"))
     }
+}
+
+#[cfg(feature = "matrix")]
+fn matrix_user(field: &FieldSpec, value: &str) -> Result<String, ConfigError> {
+    if value
+        .chars()
+        .any(|ch| ch.is_whitespace() || ch.is_control())
+    {
+        return Err(invalid(field, "panel.config.invalid_matrix_user"));
+    }
+    let user = matrix_sdk::ruma::UserId::parse(value)
+        .map_err(|_| invalid(field, "panel.config.invalid_matrix_user"))?;
+    if user.localpart().is_empty() {
+        return Err(invalid(field, "panel.config.invalid_matrix_user"));
+    }
+    Ok(user.to_string())
+}
+
+#[cfg(feature = "matrix")]
+fn matrix_rooms(field: &FieldSpec, value: &str) -> Result<String, ConfigError> {
+    let mut rooms = Vec::new();
+    for part in value.split(',') {
+        let part = part.trim();
+        // Preserve lexical/empty-component checks while the SDK validates native IDs.
+        // Modern opaque IDs have no server component.
+        if part.chars().any(|ch| ch.is_whitespace() || ch.is_control())
+            || part.len() <= 1
+            || part
+                .split_once(':')
+                .is_some_and(|(local, server)| local.len() <= 1 || server.is_empty())
+        {
+            return Err(invalid(field, "panel.config.invalid_matrix_rooms"));
+        }
+        let room = matrix_sdk::ruma::RoomId::parse(part)
+            .map_err(|_| invalid(field, "panel.config.invalid_matrix_rooms"))?;
+        if !rooms.contains(&room) {
+            rooms.push(room);
+        }
+        if rooms.len() > 1024 {
+            return Err(invalid(field, "panel.config.too_many_ids"));
+        }
+    }
+    Ok(rooms
+        .iter()
+        .map(|room| room.as_str())
+        .collect::<Vec<_>>()
+        .join(","))
+}
+
+#[cfg(not(feature = "matrix"))]
+fn matrix_user(field: &FieldSpec, _value: &str) -> Result<String, ConfigError> {
+    Err(invalid(field, "panel.config.matrix_feature_required"))
+}
+
+#[cfg(not(feature = "matrix"))]
+fn matrix_rooms(field: &FieldSpec, _value: &str) -> Result<String, ConfigError> {
+    Err(invalid(field, "panel.config.matrix_feature_required"))
 }
 
 fn id(field: &FieldSpec, value: &str) -> Result<u64, ConfigError> {

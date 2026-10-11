@@ -1,10 +1,10 @@
-# Your first bot: Discord, Telegram or Slack
+# Your first bot: Discord, Telegram, Slack or Matrix
 
 This bot keeps conversation notes and uses them alongside a fixed persona in later replies. You do not need to write code. Start the package from Terminal or PowerShell, then connect your accounts and configure the bot in your browser.
 
-Choose **Discord**, **Telegram** or **Slack** for the connection you want. The
-numbered Discord walkthrough below retains Discord's intents and invitation
-steps; Telegram and Slack users follow their platform sections, then the same
+Choose **Discord**, **Telegram**, **Slack** or **Matrix** for the connection you
+want. The numbered Discord walkthrough below retains Discord's intents and
+invitation steps; other users follow their platform sections, then the same
 installation/start commands. The five-step browser wizard remains Discord-only;
 other platforms use the CLI or protected Settings followed by a process restart.
 
@@ -76,7 +76,11 @@ Official references: [creating a bot](https://core.telegram.org/bots/features#cr
 [privacy mode](https://core.telegram.org/bots/features#privacy-mode),
 [Bot API polling](https://core.telegram.org/bots/api#getupdates).
 
-For Slack, use [Slack Socket Mode](#slack-socket-mode); no Discord account or token is needed. Enabled Discord, Telegram and Slack connections share one brain, so approve only rooms whose members understand that their information may influence replies elsewhere.
+For Slack, use [Slack Socket Mode](#slack-socket-mode); for Matrix, use
+[Matrix plaintext room setup](#matrix-plaintext-room-setup). Neither requires a
+Discord account or token. Enabled platform connections share one brain, so
+approve only rooms whose members understand that their information may influence
+replies elsewhere.
 
 ## What you need for Discord
 
@@ -93,7 +97,7 @@ Keep the computer on for the bot to stay online.
 > - **Sent to your model service:** selected chat text and saved notes for replies and background analysis. OpenRouter also routes to the serving model provider. Images may be sent; image analysis defaults on (`IMAGE_ANALYSIS=off` disables it).
 > - **Other services:** Firecrawl receives page URLs and search queries when configured.
 >
-> Tell members which rooms the bot can read. It reads ordinary messages, not only mentions, and observes messages while asleep. Discord's first scan reads up to **14 days** of accessible text history; set `CHANNELS` before first launch. **Blank Discord `GUILD_ID` / `CHANNELS` means every accessible server / channel.** Telegram has no group-history scan and **blank `TELEGRAM_ROOMS` denies all rooms**. Slack requires explicit `SLACK_CHANNELS`; **blank denies all Slack rooms**, and history is bounded/rate-limited. Selective member deletion is not supported, and `/reset` does not erase stored records. [Retention details](#privacy).
+Tell members which rooms the bot can read. It reads ordinary messages, not only mentions, and observes messages while asleep. Discord's first scan reads up to **14 days** of accessible text history; set `CHANNELS` before first launch. **Blank Discord `GUILD_ID` / `CHANNELS` means every accessible server / channel.** Telegram has no group-history scan and **blank `TELEGRAM_ROOMS` denies all rooms**. Slack requires explicit `SLACK_CHANNELS`; **blank denies all Slack rooms**, and history is bounded/rate-limited. Matrix requires explicit room IDs or owner-approved invitations, ignores unapproved joined rooms, and never decrypts encrypted content. Selective member deletion is not supported, and `/reset` does not erase stored records. [Retention details](#privacy).
 
 ## What does it cost?
 
@@ -194,6 +198,153 @@ cargo test --locked slack:: -- --ignored
 ```
 
 This is an opt-in command, not evidence that a live workspace was tested. Without real credentials, do not report Slack end-to-end verification. The integration owner separately runs the release startup smoke with fake tokens; that checks startup/failure behavior, not a successful Slack connection.
+
+## Matrix plaintext room setup
+
+Matrix is an alternative chat transport, **not an encrypted assistant**.
+End-to-end encrypted rooms and encrypted attachments are unsupported. This bot
+uses outbound HTTP(S) sync: a home computer behind NAT can run it without port
+forwarding, a tunnel, or a public webhook. Keep the computer on and connected.
+
+### 1. Create a separate bot account
+
+1. In a Matrix client such as Element, create a **dedicated bot account** on
+   `matrix.org`, or ask your own homeserver administrator to create one. The bot
+   acts as this account; do not give it your personal account's credentials.
+2. Save its **full user ID**, such as `@mybot:matrix.org`. A display name or just
+   `mybot` is not a user ID. Your homeserver URL is usually `https://matrix.org`
+   for that server; on your own server use its Matrix client API base URL.
+3. Prefer an **access token**. While signed in as the bot, use the client's
+   account/help/developer tools to reveal its access token. Client versions
+   differ; if it is not exposed, browser developer tools can show the
+   `Authorization: Bearer ...` header on a Matrix client API request. Copy only
+   the token, never the `Bearer ` prefix. Treat it as the account's password:
+   do not paste it in chat, screenshots, issue reports or source control.
+4. Password login is also supported: choose `password` in the wizard if your
+   homeserver supports password login. For SSO-only accounts, obtain an access
+   token from a signed-in client instead. Revoke a leaked token/session in your
+   Matrix client's session settings; change a leaked password too.
+
+Keep your **owner** account separate. Find its full user ID, for example
+`@owner:matrix.org`; the wizard needs this to approve invitations and commands.
+
+### 2. Make an explicitly approved, unencrypted room
+
+1. As the owner, create a room and **disable encryption before creation**. Many
+   clients enable encryption for new rooms or direct messages by default. Check
+   the room's security settings before inviting the bot.
+2. An already encrypted room cannot safely be turned into a plaintext room.
+   Create a new room if encryption is on. The bot cannot decrypt messages or
+   use a key-backup/recovery phrase.
+3. Tell members what the bot reads and stores, and that selected conversation
+   text and saved notes are sent to your model service. It observes ordinary
+   messages in approved rooms, not only mentions. The homeserver can also read
+   plaintext content.
+4. Invite the bot **from the configured owner's account**. Alternatively,
+   explicitly allowlist the room's internal ID in `MATRIX_ROOMS`. Find it in
+   the client's room settings/advanced information: it starts with `!`, for
+   example `!roomid:matrix.org`. A room alias (`#myroom:matrix.org`) is not an ID.
+
+`MATRIX_ROOMS` accepts native room IDs separated by commas. It is an explicit
+allowlist, **not** a list of rooms to search for automatically. A blank value
+allows owner-approved invitations only, not every room the account already
+joined. Previously joined but unapproved rooms are ignored. Owner invitation
+approvals persist across restarts.
+
+**Shared-brain privacy:** approved rooms use the same memories and persona.
+Information learned in one approved room can influence replies in another.
+Do not approve unrelated private communities expecting isolated memory. A room
+invitation, leaving a room, or resetting a chat does not erase stored notes.
+See [privacy and retention](#privacy).
+
+### 3. Configure and launch a Matrix-enabled build
+
+The native `matrix-sdk` **0.19.1** integration is an optional dependency enabled
+by the default `matrix` Cargo feature. Source builds require **Rust 1.96**.
+Default release builds and the Docker image include Matrix; a binary built with
+`--no-default-features` does not offer Matrix in CLI init and rejects configured
+Matrix settings explicitly rather than silently ignoring them.
+
+Install and start using [step 5 below](#5-download-and-start-the-bot). The panel
+opens on port **8787** before platform credential validation. Complete **Claim
+and protect**, then open protected **Settings**, not the Discord-only browser
+wizard. In **Platform**, save the homeserver URL, full bot user ID, access token
+or password, and optional room IDs. Configure provider/model credentials and
+language, and set `OWNER_KEY` in **Privacy**, for example
+`matrix:user:%40owner%3Amatrix.org`. Save and **restart the process**
+(`docker compose restart bot` for Docker). Matrix Settings do not run a live
+homeserver credential test or activate a connection without restarting.
+
+For terminal-only setup, follow [Headless CLI setup](#headless-cli-setup);
+its Docker command writes `config/.env`. With a release binary run
+`discord-bot init`. For source builds:
+
+```sh
+cargo run --release --features matrix -- init
+cargo run --release --features matrix
+```
+
+Run source commands from the repository folder; saved configuration and state
+are relative to the launch directory. Get a model API key as in
+[step 2 below](#2-get-an-openrouter-key). The CLI wizard asks:
+
+| Question | What to enter |
+| --- | --- |
+| Chat platform | Type `matrix`. Enter keeps Discord. |
+| Homeserver URL | HTTP(S) base URL, e.g. `https://matrix.org`; no embedded credentials, query or fragment. |
+| Bot user ID | Full dedicated account ID, e.g. `@mybot:matrix.org`. |
+| Login method | Enter for preferred `token`, or type `password`. |
+| Token/password | The dedicated bot's credential; interactive terminal input uses hidden `rpassword` entry, while piped input is not hidden. |
+| Approved room IDs | Optional comma-separated native `!id:server` or modern opaque `!id` values; Enter uses owner invitations only. |
+| Provider, API key, model, language | Your model account and preferred language; Enter selects a **paid** default model. |
+| Owner user ID | Your full Matrix ID; the CLI validates it and writes the percent-encoded qualified `OWNER_KEY`. |
+| UTC offset | Your hours from UTC, or Enter for `0`. |
+
+The CLI uses typed config encoding and an atomic patch/save, not raw secret
+interpolation. It does not contact the homeserver to verify credentials.
+Matrix-only output does not require or write `DISCORD_TOKEN`; when editing an
+existing `.env`, leave that token blank if Discord is not wanted. Use protected
+Settings to add other platforms rather than rerunning init.
+
+Protect `.env` (Compose: **`config/.env`**) and the entire state directory.
+Matrix session files contain secrets; never share them as troubleshooting
+attachments. Keep the **`discord-bot-data`** volume between Docker restarts so
+the bot restores the same session and device instead of logging in as a fresh
+device each time. There is no crypto store, decryption, or plaintext fallback
+for encrypted rooms or attachments.
+[Exact state paths](state-files.md#matrix-session-and-sync-state).
+
+### 4. Verify as the owner
+
+With `STEALTH` off, send **`!status`** in an approved plaintext room (`!durum` for
+Turkish UI). `!help` / `!yardim` lists the available commands. Matrix commands
+are **owner-only**; a different member's command is not permission to administer
+the shared brain.
+
+Matrix has no Discord-style ephemeral reply. Commands deliver their private
+results in a separate **plaintext admin room** containing only the bot and owner.
+When the bot invites you to that room, **accept the invitation** and run
+`!status` there to see the result. Keep it unencrypted and do not invite other
+people. This admin room is excluded from conversational memory.
+
+Private results, including mind/settings detail, are denied in public rooms
+rather than printed to everyone. If the private room becomes encrypted or has
+other members, delivery fails closed: there is no public fallback. Plaintext
+admin rooms are not end-to-end confidential; the homeserver can read them too.
+Use the approved group for room-targeted actions such as `!news` and `!reset`;
+shared-brain commands such as `!status` also work in the admin room.
+Do not enable public diagnostics expecting them to be private.
+
+If no reply appears, check that the build has Matrix enabled, the full account
+IDs/homeserver are correct, the owner invited the bot or the room is allowlisted,
+the room is not encrypted, `STEALTH` is off, and you accepted the bot's private
+admin-room invitation. Then inspect local logs without sharing credentials.
+Ordinary chat still depends on the sleep schedule and the
+bot's willingness to reply; `!status` is the setup check.
+
+For developers using a disposable local homeserver, the ignored integration
+test command and `MATRIX_TEST_*` credentials are documented in
+[configuration](configuration.md#disposable-matrix-integration-test).
 
 
 ## 1. Create the bot in Discord
@@ -326,11 +477,11 @@ The panel starts before checking the bot's credentials, so a new installation do
 
 Credential tests do not save your keys to disk. Finish saves the private `config/.env` and starts the Discord runtime **without restarting the process**. Once its password has been saved, the administrator account survives an interrupted setup; log in to resume, rather than trying to reclaim it. Unfinished credential drafts are session-local, expire 15 minutes after creation or the latest successful credential test, and do not survive logout or process restart.
 
-Keep `config/.env` private: it contains plaintext tokens and keys. Browser saves replace the file atomically and preserve unrelated settings/comments; they do not encrypt it. Never upload it or share it in a screenshot. On Windows restrict folder access in **Properties → Security**. Rotate a leaked Discord token in Developer Portal, a leaked Telegram token with BotFather, leaked Slack tokens in Slack app management, and a leaked model key in its provider account.
+Keep `config/.env` private: it contains plaintext tokens and keys. Browser saves replace the file atomically and preserve unrelated settings/comments; they do not encrypt it. Never upload it or share it in a screenshot. On Windows restrict folder access in **Properties → Security**. Rotate a leaked Discord token in Developer Portal, a leaked Telegram token with BotFather, leaked Slack tokens in Slack app management, a leaked Matrix token/session in the client (and change leaked passwords), and a leaked model key in its provider account.
 
 Keep Docker Desktop running. Panel health is separate from platform connection
 health: a successful Discord token test is not proof that privileged intents,
-channel permissions or the gateway connection work. Telegram and Slack's
+channel permissions or the gateway connection work. Telegram, Slack and Matrix's
 protected Settings paths require a restart and do not offer the Discord wizard's
 credential test.
 
@@ -358,7 +509,7 @@ over the file; a browser save cannot override Compose injection.
 
 ### Panel safety and everyday settings
 
-Open `http://localhost:8787` after setup and log in. **Overview** distinguishes panel availability from platform connections and shows mood per active conversation, not a fabricated global mood. Its model-call/token counters cover only this process, not durable usage history or measured cost. **Settings** validates supported fields without revealing stored keys. Token/key fields are write-only: a blank secret field keeps its saved value, and the explicit clear control removes it. **Settings → Platform** provides Telegram's token and approved rooms, Slack's app/bot tokens, native channel allowlist and history tier, and Discord's token. Blank Telegram/Slack approval denies all rooms; Slack requires both tokens. Save the model credentials as well when configuring Telegram or Slack alone, and restart to apply settings. **Logs** is a bounded recent, redacted in-memory buffer; entries are lost on restart and it is not a permanent audit trail. Redaction is not a guarantee that logs contain no member data.
+Open `http://localhost:8787` after setup and log in. **Overview** distinguishes panel availability from platform connections and shows mood per active conversation, not a fabricated global mood. Its model-call/token counters cover only this process, not durable usage history or measured cost. **Settings** validates supported fields without revealing stored keys. Token/key/password fields are write-only: a blank secret field keeps its saved value, and the explicit clear control removes it. **Settings → Platform** provides Telegram's token and approved rooms, Slack's app/bot tokens, native channel allowlist and history tier, Matrix's homeserver/user/credentials and optional room IDs, and Discord's token. Blank Telegram/Slack approval denies all rooms; Slack requires both tokens. Matrix blank rooms permits only owner-approved invitations, not all joined rooms. Save model credentials as well for any non-Discord-only installation, and restart to apply settings. **Logs** is a bounded recent, redacted in-memory buffer; entries are lost on restart and it is not a permanent audit trail. Redaction is not a guarantee that logs contain no member data.
 
 Memory/personality editors, action buttons, and the dedicated usage page are intentionally disabled pending core APIs. Use existing supported Discord commands for bot operations; do not assume the panel supplies member erasure, durable usage history, or provider cost accounting.
 
@@ -444,7 +595,7 @@ is not a deterministic health check.
 
 ### Configuration is missing or invalid. What does that mean?
 
-The panel remains available for missing or invalid bot credentials, so log in to finish setup or repair protected Settings. Configure `DISCORD_TOKEN`, `TELEGRAM_TOKEN`, a complete `SLACK_APP_TOKEN` + `SLACK_BOT_TOKEN` pair, or several of these. Telegram or Slack alone needs no Discord token. A partial Slack pair is rejected even with another platform configured. After saving changes to an existing configuration, restart the bot. Panel availability does not mean any platform connection is healthy.
+The panel remains available for missing or invalid bot credentials, so log in to finish setup or repair protected Settings. Configure `DISCORD_TOKEN`, `TELEGRAM_TOKEN`, a complete `SLACK_APP_TOKEN` + `SLACK_BOT_TOKEN` pair, Matrix's homeserver/user plus access token or password, or several platforms. Non-Discord platforms alone need no Discord token. A partial Slack pair is rejected even with another platform configured; a build without the Matrix feature rejects configured Matrix settings explicitly. After saving changes to an existing configuration, restart the bot. Panel availability does not mean any platform connection is healthy.
 
 For Compose, check `config/.env` and the writable directory mount's ownership. Process environment values (including retained `env_file` settings) take precedence and are read-only in the panel; a file save cannot override them. A panel bind/config-file/database failure can prevent the panel itself from opening—check the console rather than assuming every failure is recoverable in the browser.
 
@@ -518,7 +669,7 @@ For a binary or source build, memory lives in the local `durum/` folder. Stop th
 
 ## Privacy
 
-Tell members before inviting it: Discord's accessible ordinary messages and up to 14 days of first-scan history may be processed, subject to `CHANNELS` and Discord permissions. Telegram processes new updates from explicitly approved `TELEGRAM_ROOMS` and retained local text, not old group history; blank approval denies all rooms. Slack uses an explicit `SLACK_CHANNELS` allowlist (blank denies all), membership permissions and bounded rate-limited history. Observation continues while asleep. Replies and background analysis send selected chat text and saved notes to the chosen model service (including OpenRouter's serving provider). Attached images, including authorized Slack private-file images, can be sent because image analysis defaults on; `IMAGE_ANALYSIS=off` disables this. Configured Firecrawl receives page URLs and search queries. Enabled platforms share memory, so approve only rooms whose members trust that cross-platform information boundary.
+Tell members before inviting it: Discord's accessible ordinary messages and up to 14 days of first-scan history may be processed, subject to `CHANNELS` and Discord permissions. Telegram processes new updates from explicitly approved `TELEGRAM_ROOMS` and retained local text, not old group history; blank approval denies all rooms. Slack uses an explicit `SLACK_CHANNELS` allowlist (blank denies all), membership permissions and bounded rate-limited history. Matrix processes plaintext rooms approved by explicit IDs or owner invitations; unapproved joined rooms and encrypted content are not readable routes. Observation continues while asleep. Replies and background analysis send selected chat text and saved notes to the chosen model service (including OpenRouter's serving provider). Attached images, including authorized Slack private-file images and plaintext Matrix media, can be sent because image analysis defaults on; `IMAGE_ANALYSIS=off` disables this. Configured Firecrawl receives page URLs and search queries. Enabled platforms share memory, so approve only rooms whose members trust that cross-platform information boundary.
 
 Saved data stays on your machine, but processing is **not** local. Channel histories are bounded; derived person/topic notes, summaries and archived raw text can remain after a conversation. **Selective member deletion is not supported.** `/reset` resets channel/chat state, not stored member records or archives. Do not promise members an erasure capability the bot does not have.
 
@@ -542,11 +693,11 @@ On Mac or Linux, if the file is not executable, run `chmod +x discord-bot` first
 .\discord-bot.exe
 ```
 
-Keep this terminal open while the bot runs. Open the printed one-use browser link; complete the five Discord steps above, the [Telegram Settings path](#telegram-setup), or the [Slack Settings path](#4-configure-and-start). Verify `/status` for Discord/Telegram or owner-only `!status` in an approved Slack channel.
+Keep this terminal open while the bot runs. Open the printed one-use browser link; complete the five Discord steps above or the protected Settings path for [Telegram](#telegram-setup), [Slack](#4-configure-and-start) or [Matrix](#3-configure-and-launch-a-matrix-enabled-build). Verify `/status` for Discord/Telegram or owner-only `!status` in an approved Slack/Matrix room, following each platform's private-result instructions.
 
 ### Build from source
 
-This route is for people who already have Git and Rust installed. From a terminal:
+This route is for people who already have Git and **Rust 1.96 or newer** installed. Matrix is enabled by default; `--no-default-features` removes Matrix without disabling Discord, Telegram or Slack. From a terminal:
 
 ```sh
 git clone https://github.com/krxi/discord-bot.git
@@ -554,26 +705,26 @@ cd discord-bot
 cargo run --release
 ```
 
-The first build takes longer. Keep the terminal open, use the printed browser link, and restrict access before starting any platform. Follow the five Discord steps, the [Telegram Settings path](#telegram-setup), or the [Slack Settings path](#4-configure-and-start). Verify `/status` for Discord/Telegram or owner-only `!status` in an approved Slack channel.
+The first build takes longer. Keep the terminal open, use the printed browser link, and restrict access before starting any platform. Follow the five Discord steps or the protected Settings path for [Telegram](#telegram-setup), [Slack](#4-configure-and-start) or [Matrix](#3-configure-and-launch-a-matrix-enabled-build). Verify `/status` for Discord/Telegram or owner-only `!status` in an approved Slack/Matrix room, following each platform's private-result instructions.
 
 ### Headless CLI setup
 
-Browser setup is the default, but `discord-bot init` (or `cargo run -- init`) remains available for headless installations. It first asks for `discord` (Enter), `telegram` or `slack`, then platform credentials, provider, API key, model, language, owner, and UTC offset. Telegram asks for a qualified `OWNER_KEY` and approved rooms instead of a Discord owner ID. Slack asks for both `xapp-` and `xoxb-` tokens, native channel IDs and a workspace-qualified `OWNER_KEY`. **Token and key input are hidden when run interactively in a terminal**; piped input is not a hidden terminal prompt. Do not place secrets in shell command arguments or share `.env`.
+Browser setup is the default, but `discord-bot init` (or `cargo run -- init`) remains available for headless installations. It first asks for `discord` (Enter), `telegram`, `slack` or feature-enabled `matrix`, then platform credentials, provider, API key, model, language, owner, and UTC offset. Telegram asks for a qualified `OWNER_KEY` and approved rooms instead of a Discord owner ID. Slack asks for both `xapp-` and `xoxb-` tokens, native channel IDs and a workspace-qualified `OWNER_KEY`. Matrix asks for an HTTP(S) homeserver, full bot user ID, token or password, optional native room IDs and a full owner ID, which it encodes into a qualified key. **Token, password and key input use hidden `rpassword` prompts when run interactively in a terminal**; piped input is not hidden. Do not place secrets in shell command arguments or share `.env`.
 
 | Question | What to enter |
 | --- | --- |
-| Platform | Press Enter for `discord`, or type `telegram` or `slack`. |
-| Platform credentials | Discord's token from step 1, Telegram's BotFather token, or Slack's `xapp-` app token followed by its `xoxb-` bot token. |
-| Approved channels (Slack only, before provider) | Native `C…` / `G…` channel IDs, comma-separated; blank denies all rooms. |
+| Platform | Press Enter for `discord`, or type `telegram`, `slack` or feature-enabled `matrix`. |
+| Platform credentials | Discord's token, Telegram's BotFather token, Slack's `xapp-` then `xoxb-` tokens, or Matrix's homeserver/full user ID plus access token or password. |
+| Approved channels/rooms (Slack/Matrix, before provider) | Slack: native `C…` / `G…` IDs; blank denies all. Matrix: native `!…` room IDs; blank allows owner-approved invitations only. |
 | Provider | Press Enter for `openrouter`, or type `mistral`. |
 | API key | Your chosen provider's key from step 2. |
 | Model ID | Choose a current `:free` OpenRouter model explicitly if wanted; Enter uses the provider's **paid** default. |
 | Language | Press Enter for `en` (English), or type `tr` (Turkish). |
-| Owner | Discord: your numeric user ID, or skip. Telegram: `telegram:user:<numeric ID>`. Slack: `slack:user:<workspace ID>:<member ID>`. Skip to deny that platform's administration. |
+| Owner | Discord: optional numeric user ID. Telegram: optional `telegram:user:<numeric ID>`. Slack: optional `slack:user:<workspace ID>:<member ID>`. Skipping denies that platform's administration. Matrix: full `@owner:server` ID; CLI writes its qualified key. |
 | Approved rooms (Telegram only) | Negative group IDs or canonical Telegram RoomKeys, comma-separated; blank denies all rooms. |
 | UTC offset hours | Your local time difference from UTC, or Enter for `0`; for example `3` means UTC+3. |
 
-The CLI saves `.env` through the same typed configuration validation and atomic save path as the panel, and refuses an existing file unless `--force` is explicit. Back up any existing file privately before overwriting collected settings. Before launching, add `PANEL_ENABLED=off`, set Discord `GUILD_ID`/`CHANNELS` to limit Discord access, explicitly approve `TELEGRAM_ROOMS` or `SLACK_CHANNELS`, and keep the file private (mode `600` on Unix). Blank Discord scope means every accessible server/channel; blank Telegram/Slack rooms deny all. Set `SLACK_HISTORY_TIER=restricted` for commercial non-Marketplace Slack apps; the default is `internal`. A blank model uses the provider's paid default. Discord prints an invite link and intent reminders; unlike browser setup, CLI init does not verify the token's application identity with Discord's API. Telegram instead prints BotFather privacy, approved-room and private-command reminders; Slack prints Socket Mode, native-channel approval and owner-only status reminders. Neither performs live authentication.
+The CLI saves `.env` through the same typed configuration validation and atomic patch/save path as the panel, and refuses an existing file unless `--force` is explicit. Back up any existing file privately before overwriting collected settings. Before launching, add `PANEL_ENABLED=off`, set Discord `GUILD_ID`/`CHANNELS` to limit Discord access, explicitly approve Telegram/Slack rooms or Matrix room IDs/owner invitations, and keep the file private (mode `600` on Unix). Blank Discord scope means every accessible server/channel; blank Telegram/Slack rooms deny all; blank Matrix rooms uses owner invitations only. Set `SLACK_HISTORY_TIER=restricted` for commercial non-Marketplace Slack apps; the default is `internal`. A blank model uses the provider's paid default. Discord prints an invite link and intent reminders; unlike browser setup, CLI init does not verify the token's application identity with Discord's API. Telegram prints BotFather privacy, approved-room and private-command reminders; Slack prints Socket Mode, native-channel approval and owner-only status reminders; Matrix prints plaintext-room approval and private admin-room guidance. CLI init performs no live platform authentication.
 
 For Docker, first create the private `config`/`photos` directories and complete any existing-volume migration above. Run `docker compose run --rm -it --workdir /data/config bot init` to write `config/.env` as container UID `10001`, then add `PANEL_ENABLED=off` and your access scope to that file before `docker compose up -d`. Do not reintroduce `env_file` if you want the file to remain browser-editable later. To re-enable the panel, remove or change `PANEL_ENABLED=off` and restart.
 

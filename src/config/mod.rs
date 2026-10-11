@@ -254,6 +254,22 @@ impl Config {
                 code: "panel.config.invalid_dotenv",
             });
         }
+        let matrix = [
+            "MATRIX_HOMESERVER",
+            "MATRIX_USER",
+            "MATRIX_ACCESS_TOKEN",
+            "MATRIX_PASSWORD",
+            "MATRIX_ROOMS",
+        ]
+        .iter()
+        .any(|key| !self.get(key).is_empty());
+        #[cfg(not(feature = "matrix"))]
+        if matrix {
+            return Err(field_error(
+                "MATRIX_HOMESERVER",
+                "panel.config.matrix_feature_required",
+            ));
+        }
         for field in REGISTRY {
             registry::normalize(field, self.get(field.key))?;
         }
@@ -269,9 +285,24 @@ impl Config {
                 "panel.config.slack_token_pair",
             ));
         }
+        if matrix {
+            for key in ["MATRIX_HOMESERVER", "MATRIX_USER"] {
+                if self.get(key).is_empty() {
+                    return Err(field_error(key, "panel.config.matrix_required"));
+                }
+            }
+            if self.get("MATRIX_ACCESS_TOKEN").is_empty() && self.get("MATRIX_PASSWORD").is_empty()
+            {
+                return Err(field_error(
+                    "MATRIX_ACCESS_TOKEN",
+                    "panel.config.matrix_auth_required",
+                ));
+            }
+        }
         if self.get("DISCORD_TOKEN").is_empty()
             && self.get("TELEGRAM_TOKEN").is_empty()
             && !slack_app
+            && !matrix
         {
             return Err(field_error(
                 "DISCORD_TOKEN",

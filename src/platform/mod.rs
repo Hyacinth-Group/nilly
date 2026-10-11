@@ -4,6 +4,8 @@ pub mod capabilities;
 pub mod discord;
 pub mod interface;
 pub mod keys;
+#[cfg(feature = "matrix")]
+pub(crate) mod matrix;
 pub mod outgoing;
 pub mod prompt_context;
 pub mod registry;

@@ -135,6 +135,11 @@ async fn run(config: config::Config) -> Result<(), BotError> {
         "TELEGRAM_TOKEN",
         "SLACK_APP_TOKEN",
         "SLACK_BOT_TOKEN",
+        "MATRIX_HOMESERVER",
+        "MATRIX_USER",
+        "MATRIX_ACCESS_TOKEN",
+        "MATRIX_PASSWORD",
+        "MATRIX_ROOMS",
     ]
     .iter()
     .all(|key| config.get(key).is_empty())
