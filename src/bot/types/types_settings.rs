@@ -25,7 +25,6 @@ const CHANNEL_HISTORY: usize = 60; // last N lines kept on disk per channel (bot
 const CHAT_SEED: usize = 10; // lines pulled from channel history when a new chat opens
 const CHAT_SIZE: usize = 20; // last N messages of a chat sent to the model
 const MESSAGE_LIMIT: usize = 1900; // discord allows 2000; this leaves headroom
-const STREAM_EDIT_INTERVAL: Duration = Duration::from_millis(1200); // stream edits never come faster than this (discord's edit rate limit)
 const BURST_LIMIT: usize = 4; // max lines (= separate messages) sent per turn; the rest are dropped
 const HALF_LINE_THRESHOLD: usize = 12; // while streaming, a trailing half-line shorter than this is held back
                                        // line-to-line delay on the non-streaming path: lines shouldn't all land at

@@ -128,7 +128,7 @@ enum StreamResult {
 
 // reply context for send_stream; a single struct instead of a pile of arguments
 /// Bundles `Bot::send_stream`'s (`provider_send_stream.rs`) arguments. Holds: `bot_name`
-/// (for stripping the name prefix from streamed text); `reply_to` (Discord reply-to target,
+/// (for stripping the name prefix from streamed text); `reply_to` (normalized reply target,
 /// if any); `reaction_target` (message an emoji reaction lands on — always the chat's last
 /// message, independent of `reply_to`, see the field comment); `history`/`instruction`/
 /// `budget` (passed straight through to a fallback `generate` call on repeat/empty).

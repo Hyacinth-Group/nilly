@@ -94,6 +94,7 @@ impl Bot {
         log::info!("model: {}", state.model);
         Ok(Arc::new(Bot {
             state: Mutex::new(state),
+            adapters: Mutex::new(platform::ConnectionRegistry::default()),
             // let a failed connection attempt fail fast (CONNECT_TIMEOUT); no overall
             // time limit, only a per-chunk cap of READ_TIMEOUT (P0: a single 60s timeout
             // used to be able to cut off a long thinking stream mid-way)
@@ -124,7 +125,7 @@ impl Bot {
     // caller only builds the format! while debug is on). Not written to memory or the
     // channel note — the bot shouldn't mistake it for its own words — and since it's a
     // bot message, it doesn't reach the message handler either
-    async fn debug_note(&self, ctx: &Context, channel: &RoomKey, text: String) {
+    async fn debug_note(&self, _ctx: &Context, channel: &RoomKey, text: String) {
         if !self.state().debug {
             return;
         }
@@ -134,29 +135,35 @@ impl Bot {
             return;
         }
         let target = self.debug_channel.as_ref().unwrap_or(channel);
-        let native = match platform::discord::native_room(target) {
-            Ok(native) => native,
-            Err(e) => { log::warn!("debug [{target}]: {e}"); return; }
-        };
         let body: String = text.chars().take(300).collect();
-        let msg =
-            CreateMessage::new().embed(modal::info_embed(strings::t("debug.trace_title"), &body));
-        if let Err(e) = native.send_message(&ctx.http, msg).await {
-            log::warn!("couldn't send debug line ({target}): {e}");
-        }
+        self.send_card(target, strings::t("debug.trace_title"), &body).await;
     }
 
     // sends several traces as a single line; silent if there's nothing to trace or debug is off
 
     async fn debug_trace(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         channel: &RoomKey,
         enabled: bool,
         trace: &[String],
     ) {
         if enabled && !trace.is_empty() {
-            self.debug_note(ctx, channel, trace.join(" · ")).await;
+            self.debug_note(_ctx, channel, trace.join(" · ")).await;
+        }
+    }
+
+    /// Sends presentation-only diagnostics without adding them to conversational memory.
+    async fn send_card(&self, channel: &RoomKey, title: &str, description: &str) {
+        let transport = match self.transport(channel) {
+            Ok(transport) => transport,
+            Err(e) => { log::warn!("card [{channel}]: {e}"); return; }
+        };
+        let room = platform::types::RoomRef::from_key(channel.clone());
+        let mut body = platform::outgoing::OutgoingMessage::text("");
+        body.presentation = Some(platform::outgoing::PresentationPayload::Card { title, description });
+        if let Err(e) = transport.send(&room, &body).await {
+            log::warn!("couldn't send card ({channel}): {e}");
         }
     }
 }

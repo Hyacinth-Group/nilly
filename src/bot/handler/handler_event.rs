@@ -13,11 +13,19 @@ impl EventHandler for Handler {
     /// Serenity's `ready` callback — fires once per gateway connection (including
     /// reconnects). Background cycles start only once, guarded by `self.started`.
     async fn ready(&self, ctx: Context, data: Ready) {
+        let connection = platform::discord::events::connection_id().clone();
+        let account = platform::discord::events::decode_user(&data.user);
+        self.bot.adapters
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .register(platform::Adapter::Discord(platform::discord::DiscordAdapter::new(
+                ctx.clone(), connection.clone(), account.clone(),
+            )));
         {
             let mut state = self.bot.state();
             state.accounts.insert(
-                platform::discord::events::connection_id().clone(),
-                platform::discord::events::decode_user(&data.user),
+                connection,
+                account,
             );
             state.bot_name = state
                 .growth

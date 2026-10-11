@@ -4,16 +4,17 @@ impl Bot {
     /// A stream read failure propagates only if no usable content was produced.
     async fn send_stream(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         channel: &RoomKey,
         mut reader: StreamReader,
         context: StreamContext<'_>,
     ) -> Result<StreamResult, BotError> {
-        let native_channel = platform::discord::native_room(channel)?;
-        let native_target = context.reaction_target.map(platform::discord::native_message).transpose()?;
+        let transport = self.transport(channel)?;
+        let room = platform::types::RoomRef::from_key(channel.clone());
+        let capabilities = transport.capabilities(&room);
         let mut text = String::new();
         let mut thought = String::new();
-        let mut sent: Vec<Message> = Vec::new();
+        let mut sent: Vec<platform::outgoing::MessageReceipt> = Vec::new();
         let mut last_write = Instant::now();
         let mut first = true;
         let mut stream_error: Option<BotError> = None;
@@ -22,6 +23,8 @@ impl Bot {
         // stealth: a visible thought (spoiler, counter, button) is a bot tell, so show/hide
         // fall back to silent — the model still reasons, nothing of it reaches the channel
         let (mode, live_edits) = stream_presentation(self.state().thinking_mode, self.stealth);
+        let live_edits = live_edits && capabilities.edit && capabilities.delete;
+        let presentation = thought_presentation(mode);
         let start = Instant::now();
         let mut chunk_count: u32 = 0;
         let mut first_chunk_ms: Option<u128> = None;
@@ -39,17 +42,18 @@ impl Bot {
                     }
                     // stealth: people don't type by live-editing a message, so nothing goes
                     // out until the stream is done (the final layout below sends it whole)
-                    if live_edits && (first || last_write.elapsed() >= STREAM_EDIT_INTERVAL) {
+                    if live_edits && (first || last_write.elapsed() >= capabilities.edit_cadence) {
                         // strip_name returns a slice: the whole text isn't cloned on every edit
-                        let layout =
-                            stream_view(mode, &thought, strip_name(&text, context.bot_name), false);
+                        let layout = transport.render_stream(
+                            &room, presentation, &thought, strip_name(&text, context.bot_name), false,
+                        );
                         // "first" is only spent once something real gets written: the
                         // earliest deltas are half a line, so the layout can come back
                         // empty — the message should open with the first meaningful
                         // content, not wait out the 1-2s edit interval first
                         if !layout.is_empty() {
                             first = false;
-                            write_stream(ctx, channel, &mut sent, &layout, context.reply_to).await;
+                            write_stream(&transport, &room, &mut sent, &layout, context.reply_to).await;
                             last_write = Instant::now();
                         }
                     }
@@ -76,7 +80,7 @@ impl Bot {
         // the stream is treated as complete even if a new message arrived meanwhile: the
         // reply goes out as captured, and the new message gets handled on the next turn
         // (no starting over)
-        let mut reply = parse_reply(strip_name(&text, context.bot_name));
+        let mut reply = parse_reply(strip_name(&text, context.bot_name), capabilities.output);
         // the model chose to stay silent: any messages already sent get deleted, and
         // nothing is added to history. If "tepki: 💀" and "-" arrive together, that's not
         // silence — the emoji still has to land
@@ -84,7 +88,7 @@ impl Bot {
             if matches!(outcome, StreamResult::Silent) {
                 log::debug!("stream [{channel}]: silent");
             }
-            delete_messages(ctx, sent).await;
+            delete_messages(&transport, sent).await;
             return match stream_error {
                 Some(e) => Err(e),
                 None => Ok(outcome),
@@ -112,7 +116,7 @@ impl Bot {
                 .generate(context.history, &follow_up, context.budget, "sohbet")
                 .await
             {
-                Ok(y) => parse_reply(&y),
+                Ok(y) => parse_reply(&y, capabilities.output),
                 Err(e) => {
                     log::debug!("stream [{channel}]: regeneration after repeat failed: {e}");
                     Reply::default()
@@ -122,35 +126,41 @@ impl Bot {
             if (retry_reply.lines.is_empty() && retry_reply.reaction.is_none())
                 || retry_reply.lines.iter().any(|s| self.is_repeat(channel, s))
             {
-                delete_messages(ctx, sent).await;
+                delete_messages(&transport, sent).await;
                 return Ok(StreamResult::Empty);
             }
             reply = retry_reply;
         }
-        let layout = stream_layout(mode, &thought, &reply.lines);
-        write_stream(ctx, channel, &mut sent, &layout, context.reply_to).await;
+        let layout = transport.render_final(&room, presentation, &thought, &reply.lines);
+        write_stream(&transport, &room, &mut sent, &layout, context.reply_to).await;
 
-        // emoji reaction: instead of or alongside a line of text, lands on the message
-        // being replied to. An error doesn't stop the flow — the reaction is a garnish
-        if let (Some(emoji), Some(target)) = (&reply.reaction, native_target) {
-            if let Err(e) = ctx
-                .http
-                .create_reaction(native_channel, target, &ReactionType::Unicode(emoji.clone()))
-                .await
-            {
-                log::warn!("couldn't add reaction ({channel}): {e}");
+        // Native reactions remain best-effort; unsupported reactions become one plain emoji.
+        if let (Some(emoji), Some(target)) = (&reply.reaction, context.reaction_target) {
+            if capabilities.react {
+                let target = platform::types::MessageRef {
+                    id: target.clone(), room: channel.clone(), author: None,
+                };
+                if let Err(e) = transport.react(&target, &platform::types::Emoji::Unicode(emoji.clone())).await {
+                    log::warn!("couldn't add reaction ({channel}): {e}");
+                }
+            } else {
+                let body = platform::outgoing::OutgoingMessage::text(emoji);
+                if let Err(e) = transport.send(&room, &body).await {
+                    log::warn!("couldn't send reaction fallback ({channel}): {e}");
+                }
             }
         }
 
         // in hide mode the thought doesn't appear in the message; a button is attached to
         // the end of the reply, opened as an ephemeral code block on click (interaction_create handles it)
-        if mode == ThinkingMode::Hide {
+        if mode == ThinkingMode::Hide && capabilities.components && capabilities.edit {
             let collapsed_thought = single_line(&thought);
             if !collapsed_thought.is_empty() {
-                if let Some(last) = sent.last_mut() {
-                    self.state().link_thought(MessageKey::discord(last.id.get()), collapsed_thought);
-                    let button_edit = thought_button_edit();
-                    if let Err(e) = last.edit(&ctx.http, button_edit).await {
+                if let Some(last) = sent.last() {
+                    self.state().link_thought(last.message.id.clone(), collapsed_thought);
+                    let mut body = platform::outgoing::OutgoingMessage::text("");
+                    body.presentation = Some(platform::outgoing::PresentationPayload::ThoughtReveal);
+                    if let Err(e) = transport.edit(last, &body).await {
                         log::warn!("couldn't add thought button ({channel}): {e}");
                     }
                 }
@@ -210,98 +220,12 @@ fn stream_early_result(reply: &Reply) -> Option<StreamResult> {
     }
 }
 
-fn thought_button_edit() -> EditMessage {
-    let button = CreateButton::new(THOUGHT_BUTTON)
-        .label("Düşünce Sürecini Göster")
-        .style(ButtonStyle::Secondary);
-    EditMessage::new().components(vec![CreateActionRow::Buttons(vec![button])])
-}
-
-#[cfg(test)]
-mod discord_stream_sender_fixtures {
-    use super::*;
-
-    #[test]
-    fn stealth_suppresses_thought_modes_and_every_live_write() {
-        for mode in [
-            ThinkingMode::Show,
-            ThinkingMode::Hide,
-            ThinkingMode::Silent,
-            ThinkingMode::Off,
-        ] {
-            assert_eq!(stream_presentation(mode, false), (mode, true));
-            let (stealth_mode, live_edits) = stream_presentation(mode, true);
-            let expected = if mode == ThinkingMode::Off {
-                ThinkingMode::Off
-            } else {
-                ThinkingMode::Silent
-            };
-            assert_eq!(stealth_mode, expected);
-            assert!(!live_edits);
-            assert!(stream_view(stealth_mode, "gizli düşünce", "", false).is_empty());
-            assert_eq!(
-                stream_layout(stealth_mode, "gizli düşünce", &["selam".into()]),
-                vec!["selam"]
-            );
-        }
-    }
-
-    #[test]
-    fn provisional_thinking_and_silence_are_distinct_from_final_layout() {
-        for mode in [ThinkingMode::Show, ThinkingMode::Hide] {
-            assert!(!stream_view(mode, "bir iki", "", false).is_empty());
-            let silent = parse_reply("-");
-            assert!(matches!(
-                stream_early_result(&silent),
-                Some(StreamResult::Silent)
-            ));
-            // send_stream exits and deletes the placeholder before this Show layout
-            // could expose the thought. stream_layout itself does not decide silence.
-            if mode == ThinkingMode::Show {
-                assert_eq!(
-                    stream_layout(mode, "bir iki", &silent.lines),
-                    vec!["||bir iki||", "```\nbir iki\n```"]
-                );
-                assert_eq!(
-                    stream_view(mode, "bir iki", "-", true),
-                    vec!["||bir iki||", "```\nbir iki\n```"]
-                );
-            } else {
-                assert!(stream_layout(mode, "bir iki", &silent.lines).is_empty());
-            }
-        }
-        assert!(matches!(
-            stream_early_result(&parse_reply(" \n ")),
-            Some(StreamResult::Empty)
-        ));
-        assert!(matches!(
-            stream_early_result(&parse_reply("tepki: geçersiz")),
-            Some(StreamResult::Empty)
-        ));
-        for text in ["tepki: 💀", "tepki: 💀\n-", "selam\n-", "selam\ntepki: 💀"] {
-            assert!(stream_early_result(&parse_reply(text)).is_none());
-        }
-        let reaction = parse_reply("tepki: 💀\n-");
-        assert_eq!(reaction.protocol_text(), "tepki: 💀");
-        assert!(stream_layout(ThinkingMode::Hide, "bir iki", &reaction.lines).is_empty());
-        assert_eq!(
-            stream_layout(ThinkingMode::Show, "bir iki", &reaction.lines),
-            vec!["||bir iki||", "```\nbir iki\n```"]
-        );
-    }
-
-    #[test]
-    fn hidden_thought_button_is_components_only_with_native_secondary_style() {
-        let actual = serde_json::to_value(thought_button_edit()).unwrap();
-        assert_eq!(actual["components"][0]["type"], serde_json::json!(1));
-        let button = &actual["components"][0]["components"][0];
-        assert_eq!(button["type"], 2);
-        assert_eq!(button["style"], 2);
-        assert_eq!(button["custom_id"], "show_thought");
-        assert_eq!(button["label"], "Düşünce Sürecini Göster");
-        assert_eq!(button["disabled"], false);
-        assert!(actual.get("content").is_none());
-        assert!(actual.get("allowed_mentions").is_none());
-        assert!(actual.get("message_reference").is_none());
+fn thought_presentation(mode: ThinkingMode) -> platform::outgoing::ThoughtPresentation {
+    use platform::outgoing::ThoughtPresentation;
+    match mode {
+        ThinkingMode::Show => ThoughtPresentation::Show,
+        ThinkingMode::Hide => ThoughtPresentation::Hide,
+        ThinkingMode::Silent => ThoughtPresentation::Silent,
+        ThinkingMode::Off => ThoughtPresentation::Off,
     }
 }

@@ -109,7 +109,7 @@ impl Bot {
                 }
             };
             let bot_name = self.state().bot_name.clone();
-            let reply = parse_reply(strip_name(&generated, &bot_name));
+            let reply = parse_reply(strip_name(&generated, &bot_name), OutputLimits::DISCORD);
             if reply.lines.is_empty() && reply.reaction.is_none() {
                 println!("{}", if reply.silent { "(silent)" } else { "(empty)" });
                 continue;

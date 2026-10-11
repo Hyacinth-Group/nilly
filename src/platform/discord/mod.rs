@@ -1,12 +1,11 @@
-//! Discord-native decoding and the temporary outbound ID conversion edge.
+//! Discord-native decoding, rendering, and private outbound SDK operations.
 pub(crate) mod events;
+pub(crate) mod render;
+mod transport;
+pub use transport::DiscordAdapter;
 
-#[cfg(test)]
-use super::types::SpaceKey;
-use super::types::{KeyError, MessageKey, RoomKey, UserKey};
-#[cfg(test)]
-use serenity::all::GuildId;
-use serenity::all::{ChannelId, MessageId, UserId};
+use super::types::{KeyError, MessageKey, RoomKey, SpaceKey, UserKey};
+use serenity::all::{ChannelId, GuildId, MessageId, UserId};
 
 fn native_id(value: &str, prefix: &str) -> Result<u64, KeyError> {
     let component = value.strip_prefix(prefix).ok_or(KeyError)?;
@@ -26,7 +25,6 @@ pub(crate) fn native_room(key: &RoomKey) -> Result<ChannelId, KeyError> {
 pub(crate) fn native_message(key: &MessageKey) -> Result<MessageId, KeyError> {
     native_id(key.as_str(), "discord:message:").map(MessageId::new)
 }
-#[cfg(test)]
 pub(crate) fn native_space(key: &SpaceKey) -> Result<GuildId, KeyError> {
     native_id(key.as_str(), "discord:space:").map(GuildId::new)
 }

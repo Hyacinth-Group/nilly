@@ -91,9 +91,9 @@ safe text, structured mentions/replies, attachments and enriched reactions befor
 personality decisions. Shared ingress types are `IncomingMessage`, `ReactionEvent`,
 `ChatEvent`, and `EventEnvelope`; account identity is connection-local.
 `ConversationKey` includes optional topic/thread scope for adapter routing.
-During the staged extraction, explicit native conversions remain only at
-Discord-facing transport/UI and the v1 storage boundary. Discord is the only
-enabled runtime transport.
+Explicit native conversions remain inside Discord transport/UI boundaries.
+Memory has completed its canonical schema-v2 cutover. Discord is the only enabled
+runtime transport; the interface does not advertise unimplemented networks.
 
 Capabilities describe usable room permissions: ordinary-message visibility,
 history/decryption, replies/threads, sending/reactions/edits/deletes/typing,
@@ -124,3 +124,36 @@ advances the schema with all identity moves in one write transaction. Unknown
 legacy keys and malformed scan entries remain retained/unresolved. Completed
 version checks are idempotent. Derived `INDEX.md` is regenerated after success.
 Rollback is offline restoration with the old binary, not a reverse runtime alias.
+
+### Outgoing transport and rendering
+
+`platform::Platform` is `Send + Sync` and exposes account/connection metadata,
+room-sensitive capabilities and synchronous renderer hooks plus native
+return-position `impl Future + Send` operations: `send`, `edit`, `delete`,
+`react`, `typing`, `set_nickname`, `fetch_history`, `list_rooms`, and
+`resolve_media`. `Adapter` match-delegates to concrete implementations, producing
+statically generated futures rather than boxed hot-path trait objects.
+
+`OutgoingMessage<'a>` borrows text through `Cow`, carries structured default-deny
+mention/reply policies, attachment sources and optional card/thought presentation.
+SDK objects, native markup and interaction tokens remain adapter-private.
+`MessageReceipt` contains connection/message/room identities, accepted text and
+version; reconciliation skips identical edits and updates accepted state only on
+success. Provisional cleanup, line ordering, failed-send bookkeeping, welcome
+prefixes, reply-user pings and Discord thought formatting remain characterized.
+Missing edit/delete capability buffers final output, missing typing omits only
+the network indicator, and an unsupported targeted reaction becomes one plain
+emoji; an opening-path reaction without a target is still dropped.
+
+`parse_reply(text, OutputLimits)` caps four logical lines before physical
+transport splitting. Discord retains its exact 1900-character split boundaries,
+1200 ms edit cadence and non-streaming pacing. Other count units support UTF-16
+and encoded bytes without breaking Unicode scalars. Actual adapters must provide
+usable budgets (positive scalar limit, at least two UTF-16 units or four UTF-8
+bytes); indivisible scalars are never discarded for impossible test budgets.
+
+`ConnectionRegistry` registers concrete adapters, binds `RoomRef` routes and
+returns shared handles before awaits. `snapshot() -> Vec<ConnectionSnapshot>`
+provides connection status, account identity and room capabilities for local
+administration. No SDK client is exposed in the snapshot. Credentials are not
+durable identities, and duplicate bindings across connections are rejected.

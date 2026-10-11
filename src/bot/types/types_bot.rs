@@ -21,6 +21,8 @@ impl Drop for BusyGuard<'_> {
 /// The bot's top-level handle: one instance, wrapped in `Arc`, shared across every Discord
 /// event handler and background cycle. Holds:
 /// - `state`: the single `Mutex<State>` (see `types_chat_state.rs`).
+/// - `adapters`: live platform connections and approved room routing. Snapshot a transport
+///   through `transport` before awaiting; never retain the registry mutex guard.
 /// - `http`: the shared `reqwest::Client` used for every outbound request (provider API,
 ///   Firecrawl, RSS, Hacker News).
 /// - `api_url`/`key`: the chosen provider's endpoint and bearer key.
@@ -35,6 +37,7 @@ impl Drop for BusyGuard<'_> {
 /// this type (`impl Bot`) or takes `&Bot`/`Arc<Bot>`.
 struct Bot {
     state: Mutex<State>,
+    adapters: Mutex<platform::ConnectionRegistry>,
     http: reqwest::Client,
     api_url: String, // chat/completions endpoint (openrouter or mistral)
     key: String,
@@ -65,6 +68,15 @@ impl Bot {
     /// Recovers the data after mutex poisoning instead of propagating the prior panic.
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Snapshots the room's transport; the registry guard never crosses an await.
+    fn transport(&self, room: &RoomKey) -> Result<Arc<platform::Adapter>, platform::PlatformError> {
+        self.adapters
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .for_room(room)
+            .ok_or(platform::PlatformError::Disconnected)
     }
 
     // adds model usage to the session metrics, broken down by category too (!status dumps this)

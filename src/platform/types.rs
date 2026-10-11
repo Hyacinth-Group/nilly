@@ -199,6 +199,11 @@ impl ConnectionId {
         &self.0
     }
 }
+impl std::borrow::Borrow<str> for ConnectionId {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
 impl fmt::Display for ConnectionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)

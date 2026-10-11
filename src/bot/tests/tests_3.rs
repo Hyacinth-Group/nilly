@@ -89,33 +89,42 @@
     /// Verifies `parse_reply` splits a multi-line reply into `lines`, with no reaction/silence flags set, and that empty input parses to an empty reply.
     #[test]
     fn reply_splits_into_lines() {
-        let reply = parse_reply("ilk satır\n\nikinci satır");
+        let reply = parse_reply("ilk satır\n\nikinci satır", OutputLimits::DISCORD);
         assert_eq!(reply.lines, vec!["ilk satır", "ikinci satır"]);
         assert!(reply.reaction.is_none() && !reply.silent);
-        assert!(parse_reply("").is_empty());
+        assert!(parse_reply("", OutputLimits::DISCORD).is_empty());
     }
 
     /// Verifies `parse_reply`'s `tepki:` reaction extraction: case/spacing variants, an unparseable custom-emoji form, first-reaction-wins on multiple `tepki:` lines, and a plain line with a colon not being mistaken for one.
     #[test]
     fn reply_extracts_reaction() {
-        assert_eq!(parse_reply("tepki: 💀").reaction.as_deref(), Some("💀"));
+        assert_eq!(
+            parse_reply("tepki: 💀", OutputLimits::DISCORD).reaction.as_deref(),
+            Some("💀")
+        );
         // uppercase and a space before the colon are also recognized
-        assert_eq!(parse_reply("Tepki : 💀").reaction.as_deref(), Some("💀"));
+        assert_eq!(
+            parse_reply("Tepki : 💀", OutputLimits::DISCORD).reaction.as_deref(),
+            Some("💀")
+        );
         // anything after the emoji is dropped, the line doesn't go out as a message
-        let reply = parse_reply("tepki: 😂 aynen");
+        let reply = parse_reply("tepki: 😂 aynen", OutputLimits::DISCORD);
         assert_eq!(reply.reaction.as_deref(), Some("😂"));
         assert!(reply.lines.is_empty());
         // a custom emoji form can't be parsed, but the line still isn't sent as a message
-        let reply = parse_reply("tepki: :kekw:");
+        let reply = parse_reply("tepki: :kekw:", OutputLimits::DISCORD);
         assert!(reply.reaction.is_none() && reply.lines.is_empty());
         // a reaction can come along with a line of text; the first reaction wins
-        let reply = parse_reply("hahaha\ntepki: 💀\ntepki: 😂");
+        let reply = parse_reply("hahaha\ntepki: 💀\ntepki: 😂", OutputLimits::DISCORD);
         assert_eq!(reply.lines, vec!["hahaha"]);
         assert_eq!(reply.reaction.as_deref(), Some("💀"));
         // a plain line with a colon in it isn't mistaken for a reaction
-        assert_eq!(parse_reply("saat 3: gidiyoruz").lines.len(), 1);
+        assert_eq!(
+            parse_reply("saat 3: gidiyoruz", OutputLimits::DISCORD).lines.len(),
+            1
+        );
         // "no text, but let's still react": the silence marker doesn't drop the reaction
-        let reply = parse_reply("tepki: 💀\n-");
+        let reply = parse_reply("tepki: 💀\n-", OutputLimits::DISCORD);
         assert!(reply.silent && reply.lines.is_empty());
         assert_eq!(reply.reaction.as_deref(), Some("💀"));
     }
@@ -126,14 +135,20 @@
         // typographic marks aren't emoji: sending one to Discord as a reaction got the request rejected with a 400
         for line in ["tepki: —", "tepki: …", "tepki: →", "tepki: ¯\\_(ツ)_/¯"] {
             assert!(
-                parse_reply(line).reaction.is_none(),
+                parse_reply(line, OutputLimits::DISCORD).reaction.is_none(),
                 "{line} counted as emoji"
             );
         }
         // an emoji inside quotes is still found, the quote mark doesn't confuse the sequence parser
-        assert_eq!(parse_reply("tepki: “👍”").reaction.as_deref(), Some("👍"));
+        assert_eq!(
+            parse_reply("tepki: “👍”", OutputLimits::DISCORD).reaction.as_deref(),
+            Some("👍")
+        );
         // an emoji with a variation selector, from the symbols block, is accepted
-        assert_eq!(parse_reply("tepki: ⭐").reaction.as_deref(), Some("⭐"));
+        assert_eq!(
+            parse_reply("tepki: ⭐", OutputLimits::DISCORD).reaction.as_deref(),
+            Some("⭐")
+        );
     }
 
     /// Verifies `transcript` prefixes every line of a multi-line bot reply with the bot's name, not just the first.
@@ -170,19 +185,19 @@
     /// Verifies `parse_reply` recognizes the silence marker (`-` and its quoted/bracketed variants) and doesn't mistake unrelated text for it.
     #[test]
     fn reply_silence_marker() {
-        let reply = parse_reply("-");
+        let reply = parse_reply("-", OutputLimits::DISCORD);
         assert!(reply.silent && reply.lines.is_empty() && !reply.is_empty());
-        assert!(parse_reply("\"-\"").silent);
-        assert!(parse_reply("'-'").silent);
-        assert!(parse_reply("[sus]").silent);
-        assert!(parse_reply("(sus)").silent);
-        assert!(!parse_reply("yok artık").silent);
+        assert!(parse_reply("\"-\"", OutputLimits::DISCORD).silent);
+        assert!(parse_reply("'-'", OutputLimits::DISCORD).silent);
+        assert!(parse_reply("[sus]", OutputLimits::DISCORD).silent);
+        assert!(parse_reply("(sus)", OutputLimits::DISCORD).silent);
+        assert!(!parse_reply("yok artık", OutputLimits::DISCORD).silent);
     }
 
     /// Verifies `parse_reply` caps the number of lines at `BURST_LIMIT`.
     #[test]
     fn reply_burst_limit() {
-        let reply = parse_reply("bir\niki\nüç\ndört\nbeş");
+        let reply = parse_reply("bir\niki\nüç\ndört\nbeş", OutputLimits::DISCORD);
         assert_eq!(reply.lines.len(), BURST_LIMIT);
         assert_eq!(reply.lines.last().unwrap(), "dört");
     }
@@ -191,10 +206,13 @@
     #[test]
     fn reply_drops_scraps_keeps_short_lines() {
         // a leftover scrap of the previous message is dropped
-        assert!(parse_reply("'cım").lines.is_empty());
+        assert!(parse_reply("'cım", OutputLimits::DISCORD).lines.is_empty());
         // short lines are no longer dropped: "he", "yok", "la" are natural replies
-        assert_eq!(parse_reply("he").lines, vec!["he"]);
-        assert_eq!(parse_reply("yok\nla").lines, vec!["yok", "la"]);
+        assert_eq!(parse_reply("he", OutputLimits::DISCORD).lines, vec!["he"]);
+        assert_eq!(
+            parse_reply("yok\nla", OutputLimits::DISCORD).lines,
+            vec!["yok", "la"]
+        );
     }
 
     /// Verifies `clean_slop` strips list-marker/markdown-emphasis prefixes while leaving code spans and real numbers untouched, and that `parse_reply` applies the same cleanup.
@@ -214,6 +232,137 @@
         // a real number that looks like a list marker isn't touched
         assert_eq!(clean_slop("3.14 sayısı"), "3.14 sayısı");
         // parsing applies the same cleanup
-        assert_eq!(parse_reply("- bir\n- iki").lines, vec!["bir", "iki"]);
+        assert_eq!(
+            parse_reply("- bir\n- iki", OutputLimits::DISCORD).lines,
+            vec!["bir", "iki"]
+        );
+    }
+
+    #[test]
+    fn reply_discord_boundaries_and_split_parity() {
+        assert_eq!(OutputLimits::DISCORD.text, 1900);
+        for scalar in ['a', 'ğ', '😀'] {
+            let exact: String = std::iter::repeat_n(scalar, 1900).collect();
+            assert_eq!(
+                parse_reply(&exact, OutputLimits::DISCORD).lines,
+                vec![exact.clone()]
+            );
+            let over = format!("{exact}{scalar}");
+            assert_eq!(
+                parse_reply(&over, OutputLimits::DISCORD).lines,
+                vec![exact, scalar.to_string()]
+            );
+        }
+        for text in [
+            "kelime ".repeat(400),
+            "birinci cümle. ikinci cümle! üçüncü cümle? ".repeat(100),
+            "😀ğ".repeat(1500),
+        ] {
+            assert_eq!(
+                parse_reply(&text, OutputLimits::DISCORD).lines,
+                split(&text, 1900)
+            );
+        }
+    }
+
+    #[test]
+    fn reply_caps_logical_lines_before_transport_splitting() {
+        let logical: Vec<String> = ['a', 'b', 'c', 'd', 'e']
+            .into_iter()
+            .map(|scalar| std::iter::repeat_n(scalar, 1901).collect())
+            .collect();
+        let reply = parse_reply(&logical.join("\n"), OutputLimits::DISCORD);
+        assert_eq!(reply.lines.len(), 8);
+        assert_eq!(reply.lines.concat(), logical[..4].concat());
+        assert!(reply.lines.iter().all(|line| line.chars().count() <= 1900));
+        // Repeated logical lines still do not consume the four-line burst budget.
+        let repeated = format!("{}\n{}", logical[0], logical.join("\n"));
+        assert_eq!(parse_reply(&repeated, OutputLimits::DISCORD), reply);
+    }
+
+    #[test]
+    fn reply_keeps_physical_chunks_for_downstream_repeat_filtering() {
+        let exact = "a".repeat(1900);
+        let text = format!("{exact}{exact}\nb");
+        // Equal physical chunks must survive splitting; the existing caller's
+        // history-based repeat filter runs afterwards, not on the unsplit blob.
+        let reply = parse_reply(&text, OutputLimits::DISCORD);
+        assert_eq!(reply.lines, vec![exact.clone(), exact.clone(), "b".into()]);
+        let filtered: Vec<_> = reply.lines.into_iter().filter(|line| line != &exact).collect();
+        assert_eq!(filtered, vec!["b"]);
+    }
+
+    #[test]
+    fn reply_utf16_budget_counts_supplementary_scalars() {
+        let limits = OutputLimits {
+            text: 3,
+            count_unit: CountUnit::Utf16Units,
+        };
+        let text = "a😀b😀c";
+        let reply = parse_reply(text, limits);
+        assert_eq!(reply.lines, vec!["a😀", "b😀", "c"]);
+        assert_eq!(reply.lines.concat(), text);
+        assert!(reply.lines.iter().all(|line| limits.count(line) <= limits.text));
+        assert_ne!(reply.lines, split(text, limits.text));
+    }
+
+    #[test]
+    fn reply_byte_budget_keeps_multibyte_scalars_whole() {
+        let limits = OutputLimits {
+            text: 6,
+            count_unit: CountUnit::EncodedBytes,
+        };
+        let text = "é😀界a";
+        let reply = parse_reply(text, limits);
+        assert_eq!(reply.lines, vec!["é😀", "界a"]);
+        assert_eq!(reply.lines.concat(), text);
+        assert!(reply.lines.iter().all(|line| limits.count(line) <= limits.text));
+        assert_ne!(reply.lines, split(text, limits.text));
+    }
+
+    #[test]
+    fn weighted_reply_chunks_preserve_content_and_protocol_controls() {
+        let text = "a😀. ğ界! e\u{301}?\tson söz";
+        for count_unit in [CountUnit::Utf16Units, CountUnit::EncodedBytes] {
+            for text_budget in 4..=12 {
+                let limits = OutputLimits {
+                    text: text_budget,
+                    count_unit,
+                };
+                let reply = parse_reply(text, limits);
+                assert_eq!(reply.lines.concat(), text);
+                assert!(reply
+                    .lines
+                    .iter()
+                    .all(|line| !line.is_empty() && limits.count(line) <= limits.text));
+                let controls = parse_reply("tepki: 💀\n-\n'cım", limits);
+                assert!(controls.silent && controls.lines.is_empty());
+                assert_eq!(controls.reaction.as_deref(), Some("💀"));
+                assert!(parse_reply("", limits).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn reply_impossible_budget_keeps_indivisible_scalars_without_hanging() {
+        for count_unit in [
+            CountUnit::UnicodeScalars,
+            CountUnit::Utf16Units,
+            CountUnit::EncodedBytes,
+        ] {
+            let zero = OutputLimits {
+                text: 0,
+                count_unit,
+            };
+            assert_eq!(parse_reply("a😀界", zero).lines, vec!["a", "😀", "界"]);
+            assert!(parse_reply("", zero).is_empty());
+        }
+        for count_unit in [CountUnit::Utf16Units, CountUnit::EncodedBytes] {
+            let limits = OutputLimits {
+                text: 1,
+                count_unit,
+            };
+            assert_eq!(parse_reply("😀a", limits).lines, vec!["😀", "a"]);
+        }
     }
 

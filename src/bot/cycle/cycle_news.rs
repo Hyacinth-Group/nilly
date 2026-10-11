@@ -142,12 +142,12 @@ impl Bot {
                 log::warn!("prank: no images in photos/, skipped");
                 return;
             }
-            let msg = CreateMessage::new()
-                .embed(modal::info_embed(strings::t("prank.title"), strings::t("prank.no_images")));
-            match platform::discord::native_room(channel) {
-                Ok(native) => { let _ = native.send_message(&ctx.http, msg).await; }
-                Err(e) => log::warn!("prank [{channel}]: {e}"),
-            }
+            self.send_card(
+                channel,
+                strings::t("prank.title"),
+                strings::t("prank.no_images"),
+            )
+            .await;
             return;
         };
         let text = if hack {
@@ -172,7 +172,11 @@ impl Bot {
         // protocol, decorations cleaned up. strip_name is applied here just like every
         // other path (name prefix, quotes)
         let bot_name = self.state().bot_name.clone();
-        let reply = parse_reply(strip_name(&text, &bot_name));
+        let limits = self
+            .transport(channel)
+            .map(|adapter| adapter.capabilities(&RoomRef::from_key(channel.clone())).output)
+            .unwrap_or(OutputLimits::DISCORD);
+        let reply = parse_reply(strip_name(&text, &bot_name), limits);
         let Some(first) = reply.lines.first().cloned() else {
             log::debug!("prank: model stayed silent, prank skipped");
             return;

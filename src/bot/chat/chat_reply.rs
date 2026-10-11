@@ -5,7 +5,12 @@ impl Bot {
     /// streams a reply (falling back to non-streaming on an empty stream), records it, and
     /// loops again if a new message arrived meanwhile. See `docs/flows.md`'s `reply` diagram
     /// for the full step-by-step.
-    async fn reply(&self, ctx: &Context, channel: &RoomKey) {
+    async fn reply(&self, _ctx: &Context, channel: &RoomKey) {
+        let transport = match self.transport(channel) {
+            Ok(transport) => transport,
+            Err(e) => { log::error!("reply [{channel}]: {e}"); return; }
+        };
+        let room = platform::types::RoomRef::from_key(channel.clone());
         loop {
             let instruction = {
                 let mut state = self.state();
@@ -145,9 +150,9 @@ impl Bot {
                 }
             }
             // show the typing indicator while the model call is in flight; the stream message opens on the first delta
-            match platform::discord::native_room(channel) {
-                Ok(native) => { let _ = native.broadcast_typing(&ctx.http).await; }
-                Err(e) => { log::error!("typing [{channel}]: {e}"); return; }
+            let capabilities = transport.capabilities(&room);
+            if capabilities.typing {
+                let _ = transport.typing(&room).await;
             }
             let budget = reply_budget!();
             let (reader, bot_name) = match self.generate_stream(&history, &instruction, budget, "sohbet").await
@@ -160,7 +165,7 @@ impl Bot {
             };
             let reply = match self
                 .send_stream(
-                    ctx,
+                    _ctx,
                     channel,
                     reader,
                     StreamContext {
@@ -181,7 +186,7 @@ impl Bot {
                     log::debug!("reply [{channel}]: silent");
                     if debug {
                         trace.push("silent (-)".to_string());
-                        self.debug_trace(ctx, channel, debug, &trace).await;
+                        self.debug_trace(_ctx, channel, debug, &trace).await;
                     }
                     // the hacked prank keeps advancing even on silence: otherwise the
                     // HACK_CONTINUE instruction would get stuck forever
@@ -209,10 +214,10 @@ impl Bot {
                             // de-duplication here is also LINE-based: in the channel
                             // history the bot's lines sit one by one, so a multi-line raw
                             // blob would never match any of them
-                            let mut fallback = parse_reply(strip_name(&c, &bot_name));
+                            let mut fallback = parse_reply(strip_name(&c, &bot_name), capabilities.output);
                             fallback.lines.retain(|s| !self.is_repeat(channel, s));
                             match self
-                                .send_reply(ctx, channel, fallback, reply_to, last_message.as_ref(), None)
+                                .send_reply(_ctx, channel, fallback, reply_to, last_message.as_ref(), None)
                                 .await
                             {
                                 Some(p) => p,
@@ -245,7 +250,7 @@ impl Bot {
                     summary = format!("{summary} · reaction {t}");
                 }
                 trace.push(summary);
-                self.debug_trace(ctx, channel, debug, &trace).await;
+                self.debug_trace(_ctx, channel, debug, &trace).await;
             }
             {
                 let mut state = self.state();

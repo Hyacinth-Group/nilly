@@ -1,7 +1,7 @@
 /// Parses raw model output into a `Reply` per the line-based protocol (see AGENTS.md rule 2
 /// and `docs/flows.md`'s "Output protocol").
 /// Expects the bot-name prefix to have been stripped already.
-fn parse_reply(text: &str) -> Reply {
+fn parse_reply(text: &str, limits: OutputLimits) -> Reply {
     let mut reply = Reply::default();
     let mut lines: Vec<String> = Vec::new();
     let mut skipped = 0usize;
@@ -56,9 +56,62 @@ fn parse_reply(text: &str) -> Reply {
     if skipped > 0 {
         log::debug!("reply: burst limit exceeded, dropped {skipped} line(s)");
     }
-    // a line over 1900 chars doesn't fit one message: split and flatten
-    reply.lines = lines.iter().flat_map(|s| split(s, MESSAGE_LIMIT)).collect();
+    // The burst budget applies to logical lines, before transport-sized chunks are
+    // flattened. Repetition filtering by callers sees those physical chunks.
+    reply.lines = lines.iter().flat_map(|s| reply_chunks(s, limits)).collect();
     reply
+}
+
+/// Splits a logical reply line using the transport's text budget. Scalar-counted
+/// transports retain the existing sentence/space splitting behavior exactly.
+/// Weighted budgets keep every byte and always cut at a Unicode scalar boundary.
+/// An indivisible scalar larger than the budget is returned whole: an impossible
+/// budget must not silently discard content or prevent forward progress.
+/// Actual adapters must declare usable budgets; sub-scalar budgets are unsupported.
+fn reply_chunks(text: &str, limits: OutputLimits) -> Vec<String> {
+    if limits.count_unit == CountUnit::UnicodeScalars && limits.text > 0 {
+        return split(text, limits.text);
+    }
+
+    let mut parts = Vec::new();
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        let mut used = 0usize;
+        let mut end = remaining.len();
+        let mut sentence = (0usize, 0usize);
+        let mut space = (0usize, 0usize);
+        for (offset, scalar) in remaining.char_indices() {
+            let width = match limits.count_unit {
+                CountUnit::UnicodeScalars => 1,
+                CountUnit::Utf16Units => scalar.len_utf16(),
+                CountUnit::EncodedBytes => scalar.len_utf8(),
+            };
+            if width > limits.text.saturating_sub(used) {
+                // Even an undersized/zero budget must consume one whole scalar.
+                end = if offset == 0 { scalar.len_utf8() } else { offset };
+                break;
+            }
+            used += width;
+            if matches!(scalar, '.' | '!' | '?' | '\n') {
+                sentence = (used, offset + scalar.len_utf8());
+            } else if scalar == ' ' {
+                space = (used, offset + scalar.len_utf8());
+            }
+        }
+        let minimum = limits.text / 4;
+        let cut = if end == remaining.len() {
+            end
+        } else if sentence.0 > minimum {
+            sentence.1
+        } else if space.0 > minimum {
+            space.1
+        } else {
+            end
+        };
+        parts.push(remaining[..cut].to_string());
+        remaining = &remaining[cut..];
+    }
+    parts
 }
 
 // if two of the last 4 bot lines (reaction lines don't count) ended in a question mark,

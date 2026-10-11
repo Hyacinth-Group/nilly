@@ -170,41 +170,41 @@ impl Bot {
     /// `ping` is the only user allowed to be mentioned.
     async fn send(
         &self,
-        ctx: &Context,
+        _ctx: &Context,
         channel: &RoomKey,
         text: &str,
         ping: Option<&UserKey>,
         file: Option<&PathBuf>,
         reply_to: Option<&MessageKey>,
     ) {
-        let native = (|| -> Result<_, platform::types::KeyError> {
-            Ok((
-                platform::discord::native_room(channel)?,
-                ping.map(platform::discord::native_user).transpose()?,
-                reply_to.map(platform::discord::native_message).transpose()?,
-            ))
-        })();
-        let (native_channel, native_ping, native_reply) = match native {
-            Ok(native) => native,
+        let transport = match self.transport(channel) {
+            Ok(transport) => transport,
             Err(e) => { log::error!("send failed ({channel}): {e}"); return; }
         };
-        let mut msg = discord_message(native_channel, text, native_ping, native_reply);
-        if let Some(path) = file {
-            match CreateAttachment::path(path).await {
-                Ok(attachment) => msg = msg.add_file(attachment),
-                Err(e) => log::warn!("couldn't read image ({}): {e}", path.display()),
-            }
-        }
-        if let Err(e) = native_channel.send_message(&ctx.http, msg).await {
-            log::error!("send failed ({channel}): {e}");
-            return;
-        }
+        let room = platform::types::RoomRef::from_key(channel.clone());
+        let target = reply_to.map(|id| platform::types::MessageRef {
+            id: id.clone(), room: channel.clone(), author: None,
+        });
+        let attachments = file
+            .map(|path| platform::outgoing::OutgoingAttachment::LocalPath(path.as_path()));
+        let mut body = platform::outgoing::OutgoingMessage::text(text);
+        body.reply_to = target.as_ref();
+        body.mentions = platform::outgoing::MentionPolicy {
+            users: ping.map(std::slice::from_ref).unwrap_or_default(),
+            reply_user: reply_to.is_some(),
+            prefix_user: ping,
+        };
+        body.attachments = attachments.as_slice();
+        let receipt = match transport.send(&room, &body).await {
+            Ok(receipt) => receipt,
+            Err(e) => { log::error!("send failed ({channel}): {e}"); return; }
+        };
         let mut s = self.state();
-        s.own_messages.push_back(text.to_string());
+        s.own_messages.push_back(receipt.last_accepted_text.clone());
         if s.own_messages.len() > 50 {
             s.own_messages.pop_front();
         }
-        let line = format!("{}: {}", s.bot_name, text);
+        let line = format!("{}: {}", s.bot_name, receipt.last_accepted_text);
         channel_note(&mut s, channel, line);
     }
 
@@ -213,78 +213,3 @@ impl Bot {
     // new message. The reply-to link and the mention only go on the first message.
 }
 
-// Keep the native mention/reference shape shared by plain sends and stream openings.
-fn discord_message(
-    channel: ChannelId,
-    text: &str,
-    ping: Option<UserId>,
-    reply_to: Option<MessageId>,
-) -> CreateMessage {
-    let mut mentions = CreateAllowedMentions::new();
-    if let Some(user) = ping {
-        mentions = mentions.users([user]);
-    }
-    if reply_to.is_some() {
-        mentions = mentions.replied_user(true);
-    }
-    let mut message = CreateMessage::new().content(text).allowed_mentions(mentions);
-    if let Some(id) = reply_to {
-        message = message.reference_message((channel, id));
-    }
-    message
-}
-
-#[cfg(test)]
-mod discord_send_fixtures {
-    use super::*;
-
-    #[test]
-    fn plain_welcome_and_reply_mention_shapes() {
-        let text = "selam <@42> <@&99> @everyone @here 💀";
-        let channel = ChannelId::new(7);
-        for (ping, reply_to, mentions, reference) in [
-            (
-                None,
-                None,
-                serde_json::json!({"parse": [], "users": [], "roles": []}),
-                None,
-            ),
-            (
-                Some(UserId::new(42)),
-                None,
-                serde_json::json!({"parse": [], "users": ["42"], "roles": []}),
-                None,
-            ),
-            (
-                None,
-                Some(MessageId::new(81)),
-                serde_json::json!({
-                    "parse": [], "users": [], "roles": [], "replied_user": true
-                }),
-                Some(serde_json::json!({
-                    "type": 0, "message_id": "81", "channel_id": "7",
-                    "guild_id": null, "fail_if_not_exists": null
-                })),
-            ),
-            (
-                Some(UserId::new(42)),
-                Some(MessageId::new(81)),
-                serde_json::json!({
-                    "parse": [], "users": ["42"], "roles": [], "replied_user": true
-                }),
-                Some(serde_json::json!({
-                    "type": 0, "message_id": "81", "channel_id": "7",
-                    "guild_id": null, "fail_if_not_exists": null
-                })),
-            ),
-        ] {
-            let actual =
-                serde_json::to_value(discord_message(channel, text, ping, reply_to)).unwrap();
-            assert_eq!(actual["content"].as_str().unwrap().as_bytes(), text.as_bytes());
-            assert_eq!(actual["allowed_mentions"], mentions);
-            assert_eq!(actual.get("message_reference"), reference.as_ref());
-            assert!(actual.get("components").is_none());
-            assert_eq!(actual["embeds"], serde_json::json!([]));
-        }
-    }
-}

@@ -4,15 +4,15 @@
     #[test]
     fn number_prefix_only_stripped_in_real_list() {
         // multiple numbered lines = the model wrote a list, the prefix is stripped
-        let reply = parse_reply("1. şunu yap\n2) sonra bunu");
+        let reply = parse_reply("1. şunu yap\n2) sonra bunu", OutputLimits::DISCORD);
         assert_eq!(reply.lines, vec!["şunu yap", "sonra bunu"]);
         // a number on a single line is a Turkish ordinal, its meaning must not be lost
         assert_eq!(
-            parse_reply("3. sınıftayım").lines,
+            parse_reply("3. sınıftayım", OutputLimits::DISCORD).lines,
             vec!["3. sınıftayım"]
         );
         assert_eq!(
-            parse_reply("2. el araba aldım").lines,
+            parse_reply("2. el araba aldım", OutputLimits::DISCORD).lines,
             vec!["2. el araba aldım"]
         );
         assert_eq!(number_prefix("12) madde"), Some("madde"));
@@ -22,14 +22,14 @@
     /// Verifies `parse_reply` collapses an immediately repeated line into one.
     #[test]
     fn same_line_not_sent_twice() {
-        assert_eq!(parse_reply("he\nhe").lines, vec!["he"]);
+        assert_eq!(parse_reply("he\nhe", OutputLimits::DISCORD).lines, vec!["he"]);
     }
 
     /// Verifies `parse_reply` splits a single line longer than `MESSAGE_LIMIT` into multiple lines, each within the limit.
     #[test]
     fn reply_long_line_gets_split() {
         let long_text = "a".repeat(MESSAGE_LIMIT + 100);
-        let reply = parse_reply(&long_text);
+        let reply = parse_reply(&long_text, OutputLimits::DISCORD);
         assert_eq!(reply.lines.len(), 2);
         for line in &reply.lines {
             assert!(line.chars().count() <= MESSAGE_LIMIT);
@@ -40,11 +40,17 @@
     #[test]
     fn protocol_text_round_trips() {
         assert_eq!(
-            parse_reply("hahaha\ntepki: 💀").protocol_text(),
+            parse_reply("hahaha\ntepki: 💀", OutputLimits::DISCORD).protocol_text(),
             "hahaha\ntepki: 💀"
         );
-        assert_eq!(parse_reply("tepki: 💀").protocol_text(), "tepki: 💀");
-        assert_eq!(parse_reply("bir\niki").protocol_text(), "bir\niki");
+        assert_eq!(
+            parse_reply("tepki: 💀", OutputLimits::DISCORD).protocol_text(),
+            "tepki: 💀"
+        );
+        assert_eq!(
+            parse_reply("bir\niki", OutputLimits::DISCORD).protocol_text(),
+            "bir\niki"
+        );
     }
 
     /// Verifies `stream_slice` holds back an incomplete short trailing line while streaming (it could still turn into a reaction marker), but reveals everything once the stream is done.
