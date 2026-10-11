@@ -403,7 +403,7 @@
   "panel.settings.PANEL_BIND.label": "Panel bind address",
   "panel.settings.PANEL_BIND.help": "Defaults to 127.0.0.1. A non-loopback bind exposes the panel to the network; use a reviewed HTTPS proxy or VPN. Requires restart.",
   "panel.settings.PANEL_PORT.label": "Panel port",
-  "panel.settings.PANEL_PORT.help": "TCP port, default 8080. Changes require restart and matching container port mapping. A bind failure does not silently choose another port.",
+  "panel.settings.PANEL_PORT.help": "TCP port, default 8787. Changes require restart and matching container port mapping. A bind failure does not silently choose another port.",
   "panel.settings.PANEL_CONFIG_PATH.label": "Configuration file path",
   "panel.settings.PANEL_CONFIG_PATH.help": "Operator-controlled startup path, default .env. Not editable through browser requests. Mount its directory for atomic saves in containers.",
   "panel.settings.PANEL_PUBLIC_URL.label": "External panel origin",

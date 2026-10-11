@@ -403,7 +403,7 @@
   "panel.settings.PANEL_BIND.label": "Panel bağlanma adresi",
   "panel.settings.PANEL_BIND.help": "Varsayılan 127.0.0.1’dir. Yerel döngü dışı adres paneli ağa açar; incelenmiş HTTPS vekili veya VPN kullan. Yeniden başlatma gerektirir.",
   "panel.settings.PANEL_PORT.label": "Panel portu",
-  "panel.settings.PANEL_PORT.help": "TCP portu, varsayılan 8080. Değişiklik yeniden başlatma ve eşleşen konteyner port yönlendirmesi gerektirir. Bağlanma hatasında sessizce başka port seçilmez.",
+  "panel.settings.PANEL_PORT.help": "TCP portu, varsayılan 8787. Değişiklik yeniden başlatma ve eşleşen konteyner port yönlendirmesi gerektirir. Bağlanma hatasında sessizce başka port seçilmez.",
   "panel.settings.PANEL_CONFIG_PATH.label": "Yapılandırma dosyası yolu",
   "panel.settings.PANEL_CONFIG_PATH.help": "İşletmecinin belirlediği başlangıç yolu, varsayılan .env. Tarayıcı isteklerinden düzenlenemez. Konteynerde atomik kayıt için dizinini bağla.",
   "panel.settings.PANEL_PUBLIC_URL.label": "Harici panel kaynağı",

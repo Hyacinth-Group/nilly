@@ -54,7 +54,7 @@ fn missing_file_supports_bootstrap_without_credentials() {
     let directory = tempfile::tempdir().unwrap();
     let config = Config::load(directory.path().join(".env"), &HashMap::new()).unwrap();
     assert_eq!(config.get("PANEL_BIND"), "127.0.0.1");
-    assert_eq!(config.get("PANEL_PORT"), "8080");
+    assert_eq!(config.get("PANEL_PORT"), "8787");
     assert_eq!(config.get("PANEL_ENABLED"), "on");
     assert_eq!(config.get("BOT_LANG"), "en");
     assert!(

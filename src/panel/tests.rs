@@ -15,7 +15,7 @@ async fn fixture() -> (Arc<App>, tempfile::TempDir) {
     (
         Arc::new(App {
             auth,
-            origin: auth::OriginPolicy::new("http://localhost:8080").unwrap(),
+            origin: auth::OriginPolicy::new("http://localhost:8787").unwrap(),
             secure: false,
             config: Mutex::new(config),
             runtime: Mutex::new(Runtime {
@@ -58,10 +58,10 @@ fn request(method: &str, path: &str, cookie: Option<&str>, body: &str) -> Reques
     let mut request = Request::builder()
         .method(method)
         .uri(path)
-        .header(header::HOST, "localhost:8080");
+        .header(header::HOST, "localhost:8787");
     if method != "GET" {
         request = request
-            .header(header::ORIGIN, "http://localhost:8080")
+            .header(header::ORIGIN, "http://localhost:8787")
             .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded");
     }
     if let Some(cookie) = cookie {
@@ -169,7 +169,7 @@ async fn dns_rebinding_and_cross_origin_posts_are_rejected_with_security_headers
     let mut malicious = request("GET", "/healthz", None, "");
     malicious
         .headers_mut()
-        .insert(header::HOST, "attacker.example:8080".parse().unwrap());
+        .insert(header::HOST, "attacker.example:8787".parse().unwrap());
     let response = router.clone().oneshot(malicious).await.unwrap();
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
     assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");

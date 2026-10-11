@@ -18,5 +18,5 @@ COPY --from=build /discord-bot /usr/local/bin/discord-bot
 USER bot
 WORKDIR /data
 VOLUME ["/data/durum"]
-EXPOSE 8080
+EXPOSE 8787
 ENTRYPOINT ["discord-bot"]

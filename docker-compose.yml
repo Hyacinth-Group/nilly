@@ -5,10 +5,10 @@ services:
     restart: unless-stopped
     environment:
       PANEL_BIND: 0.0.0.0
-      PANEL_PORT: "8080"
+      PANEL_PORT: "8787"
       PANEL_CONFIG_PATH: /data/config/.env
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8787:8787"
     volumes:
       - durum:/data/durum
       - ./config:/data/config

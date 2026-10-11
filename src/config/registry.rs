@@ -88,7 +88,7 @@ pub static REGISTRY: &[FieldSpec] = &[
     field!("LOG_COLOR", LogColor, "auto"),
     field!("PANEL_ENABLED", Bool, "on"),
     field!("PANEL_BIND", Bind, "127.0.0.1"),
-    field!("PANEL_PORT", Port, "8080"),
+    field!("PANEL_PORT", Port, "8787"),
     field!("PANEL_CONFIG_PATH", Path, ".env"),
     field!("PANEL_PUBLIC_URL", Url, ""),
     field!("PANEL_TRUSTED_PROXIES", ProxyList, ""),

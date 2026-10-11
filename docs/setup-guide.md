@@ -147,7 +147,7 @@ docker compose up -d
 docker compose logs bot
 ```
 
-The panel starts before checking the bot's credentials, so a new installation does not need an existing `.env`. Open the printed `http://localhost:8080/setup#token=...` link within **15 minutes**. Treat it as a password: do not share it or the log containing it. The claim token is consumed when claimed, before you save a password. If it expires, or you lose that setup session before saving a password, run `docker compose restart bot` and use the new link. Once the password is saved, use it to log in; restarts no longer print a claim link.
+The panel starts before checking the bot's credentials, so a new installation does not need an existing `.env`. Open the printed `http://localhost:8787/setup#token=...` link within **15 minutes**. Treat it as a password: do not share it or the log containing it. The claim token is consumed when claimed, before you save a password. If it expires, or you lose that setup session before saving a password, run `docker compose restart bot` and use the new link. Once the password is saved, use it to log in; restarts no longer print a claim link.
 
 ### The five browser steps
 
@@ -189,7 +189,7 @@ over the file; a browser save cannot override Compose injection.
 
 ### Panel safety and everyday settings
 
-Open `http://localhost:8080` after setup and log in. **Overview** distinguishes panel availability from Discord gateway connection and shows mood per active conversation, not a fabricated global mood. Its model-call/token counters cover only this process, not durable usage history or measured cost. **Settings** validates supported fields without revealing stored keys. A blank secret field keeps its saved value. **Logs** is a bounded recent, redacted in-memory buffer; entries are lost on restart and it is not a permanent audit trail. Redaction is not a guarantee that logs contain no member data.
+Open `http://localhost:8787` after setup and log in. **Overview** distinguishes panel availability from Discord gateway connection and shows mood per active conversation, not a fabricated global mood. Its model-call/token counters cover only this process, not durable usage history or measured cost. **Settings** validates supported fields without revealing stored keys. A blank secret field keeps its saved value. **Logs** is a bounded recent, redacted in-memory buffer; entries are lost on restart and it is not a permanent audit trail. Redaction is not a guarantee that logs contain no member data.
 
 Memory/personality editors, action buttons, and the dedicated usage page are intentionally disabled pending core APIs. Use existing supported Discord commands for bot operations; do not assume the panel supplies member erasure, durable usage history, or provider cost accounting.
 
@@ -199,13 +199,13 @@ original data folder. The saved `model.md` override has precedence over the conf
 
 ### Accessing a remote server
 
-Do not publish port 8080 to the internet. Compose publishes `127.0.0.1:8080:8080`, even though the container binds `0.0.0.0`. On your own computer, keep this SSH tunnel open:
+Do not publish port 8787 to the internet. Compose publishes `127.0.0.1:8787:8787`, even though the container binds `0.0.0.0`. On your own computer, keep this SSH tunnel open:
 
 ```sh
-ssh -N -L 8080:127.0.0.1:8080 your-user@your-server
+ssh -N -L 8787:127.0.0.1:8787 your-user@your-server
 ```
 
-Open `http://localhost:8080` on **your computer**. For first setup, open the server's printed claim link through that tunnel; both ports remain 8080 so the expected origin matches. Do not share the link or tunnel access.
+Open `http://localhost:8787` on **your computer**. For first setup, open the server's printed claim link through that tunnel; both ports remain 8787 so the expected origin matches. Do not share the link or tunnel access.
 
 An HTTPS reverse proxy is an advanced alternative: explicitly set `PANEL_PUBLIC_URL` to its HTTPS origin, preserve the matching Host and browser Origin, and restart the service. Forwarded headers are never trusted as authority. Merely forwarding a public HTTP port is not a safe substitute.
 

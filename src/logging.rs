@@ -548,8 +548,8 @@ mod tests {
             "Set-Cookie: session=another-secret; HttpOnly\n",
             r#"{"openrouter_key":"router-secret","x-api-key":"api-secret"}"#,
             "\nprovider-key=provider-secret setup_token=setup-secret\n",
-            "http://localhost:8080/setup#token=fragment-secret\n",
-            "http://localhost:8080/setup?token=query-secret\n",
+            "http://localhost:8787/setup#token=fragment-secret\n",
+            "http://localhost:8787/setup?token=query-secret\n",
             "sk-or-v1-unregistered fc-unregistered gsk_unregistered hf_unregistered"
         );
         let safe = redact(text, &[], false);

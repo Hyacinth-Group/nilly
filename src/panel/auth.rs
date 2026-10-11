@@ -1185,35 +1185,35 @@ mod tests {
 
     #[test]
     fn origins_hosts_and_forwarded_values_are_strict() {
-        let policy = OriginPolicy::new("http://localhost:8080").unwrap();
+        let policy = OriginPolicy::new("http://localhost:8787").unwrap();
         assert!(!policy.secure());
         let mut headers = HeaderMap::new();
-        headers.insert(header::HOST, HeaderValue::from_static("localhost:8080"));
+        headers.insert(header::HOST, HeaderValue::from_static("localhost:8787"));
         assert!(policy.check(&headers, false).is_ok());
         assert!(policy.check(&headers, true).is_err());
         headers.insert(
             header::ORIGIN,
-            HeaderValue::from_static("http://localhost:8080"),
+            HeaderValue::from_static("http://localhost:8787"),
         );
         assert!(policy.check(&headers, true).is_ok());
         headers.insert(header::ORIGIN, HeaderValue::from_static("null"));
         assert!(policy.check(&headers, true).is_err());
         headers.insert(
             header::ORIGIN,
-            HeaderValue::from_static("http://localhost:8080"),
+            HeaderValue::from_static("http://localhost:8787"),
         );
-        headers.insert(header::HOST, HeaderValue::from_static("evil.example:8080"));
+        headers.insert(header::HOST, HeaderValue::from_static("evil.example:8787"));
         headers.insert(
             "x-forwarded-host",
-            HeaderValue::from_static("localhost:8080"),
+            HeaderValue::from_static("localhost:8787"),
         );
         assert!(policy.check(&headers, true).is_err());
         headers.insert(header::HOST, HeaderValue::from_static("localhost"));
         assert!(policy.check(&headers, true).is_err());
-        headers.insert(header::HOST, HeaderValue::from_static("localhost:8080"));
+        headers.insert(header::HOST, HeaderValue::from_static("localhost:8787"));
         headers.append(
             header::ORIGIN,
-            HeaderValue::from_static("http://localhost:8080"),
+            HeaderValue::from_static("http://localhost:8787"),
         );
         assert!(policy.check(&headers, true).is_err());
         assert!(OriginPolicy::new("https://panel.example").unwrap().secure());
