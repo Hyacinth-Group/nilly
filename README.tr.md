@@ -41,8 +41,6 @@ Discord, Telegram, Slack veya Matrix grup sohbetinize eklediğiniz; insanları h
 mkdir mybot && cd mybot && curl -O https://raw.githubusercontent.com/krxi/discord-bot/main/docker-compose.yml
 ```
 
-Linux'ta sonraki adımdan önce [ayar klasörünü yazılabilir olarak hazırlayın](docs/setup-guide.md#download-the-launch-settings). Docker Desktop kullanıcıları Linux sahiplik komutlarını uygulamaz.
-
 **2. Başlatın.**
 
 ```sh
@@ -59,11 +57,13 @@ docker compose logs bot
 
 Kurulumdan sonra **http://localhost:8787** adresinde bağlantıları görebilir, hafıza/huy notlarını düzenleyebilir, işlemleri çalıştırabilir, kullanım/kayıtları inceleyebilir ve ayarları değiştirebilirsiniz. Panel varsayılan olarak yalnız bu bilgisayardan erişilir; 8787 portunu internete açmayın. Bilgisayarınız ve Docker açık kalsın. Normal cevaplara güvenmeden önce [sohbet bağlantısını doğrulayın](docs/setup-guide.md#verify-the-connection).
 
+Docker ayarları ve hafızayı kalıcı birimlerde tutar; bilgisayarınızda `.env` hazırlamanız gerekmez. [Gizli yedekler ve dosyayı elle düzenleme seçeneği](docs/setup-guide.md#where-your-memories-live) rehberde açıklanır.
+
 Terminal alternatifi: `discord-bot init` ile [komut satırından kurulum](docs/setup-guide.md#headless-cli-setup) hâlâ kullanılabilir.
 
 Docker olmadan: [hazır binary](docs/setup-guide.md#download-a-release) indirin, terminalden başlatın ve kurulum bağlantısını açın; Rust gerekmez.
 
-**v1 zaten çalışıyor mu?** Önce [yükseltme adımlarını okuyun](docs/setup-guide.md#upgrading-from-v1-to-v2). Hafıza yedek alınarak otomatik taşınır, ancak Compose ayarları artık `config/.env` içinde tutulur.
+**v1 veya eski bir Compose dosyası zaten çalışıyor mu?** Önce [yükseltme adımlarını okuyun](docs/setup-guide.md#existing-compose-installations). Hafıza yedek alınarak otomatik taşınır; Docker artık ayarları bilgisayarınızdaki `.env` dosyasında değil, özel `discord-bot-config` biriminde tutar. [Her iki birimi yedekleyin](docs/setup-guide.md#back-up-the-memory).
 
 ## Sohbet uygulamanızı seçin
 

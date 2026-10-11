@@ -31,24 +31,9 @@ In Windows PowerShell, use these separate lines (also works in older PowerShell)
 mkdir mybot
 cd mybot
 curl.exe -O https://raw.githubusercontent.com/krxi/discord-bot/main/docker-compose.yml
-mkdir config
-mkdir photos
 ```
 
-On Mac or Linux, create the folders:
-
-```sh
-mkdir -p config photos
-```
-
-On **Linux**, also allow the container's account to save private settings:
-
-```sh
-sudo chown 10001:10001 config
-sudo chmod 700 config
-```
-
-Docker Desktop manages mount permissions; these Linux ownership commands are not required on Windows or Mac. On Windows, keep the folder private using **Properties → Security**. If Docker on Linux reports `permission denied`, use `sudo` before `docker`, or follow [Docker's Linux post-installation instructions](https://docs.docker.com/engine/install/linux-postinstall/).
+Docker keeps settings and memory in its own persistent volumes; **do not create a host `config` folder or `.env` file** for a new installation. No Linux config-permission preparation is needed. If Docker itself reports `permission denied` on Linux, follow [Docker's Linux post-installation instructions](https://docs.docker.com/engine/install/linux-postinstall/).
 
 ### Start and open the setup link
 
@@ -83,7 +68,7 @@ The browser walks you through five steps:
 
 After saving your administrator password, ownership survives interrupted setup: log in to resume. Unsaved credential drafts expire 15 minutes after creation or the latest successful credential test; logout and process restart discard them.
 
-Docker saves tokens and model keys in **`config/.env`**. They are plaintext because the bot needs to use them. Never upload this file, put it in Git or include it in a screenshot. Browser saves use private file permissions on Unix, but are not encryption. On Windows, restrict access to the folder. Rotate leaked tokens/keys with their issuer.
+Docker saves tokens and model keys in **`/data/config/.env` inside the `discord-bot-config` volume**, not in your working folder. They are plaintext because the bot needs to use them. Never upload them, put them in Git or include them in a screenshot. Browser saves use private file permissions, not encryption; protect Docker access and [back up both volumes privately](#back-up-the-memory). Rotate leaked tokens/keys with their issuer.
 
 ### Model keys and cost
 
@@ -266,7 +251,7 @@ Credential authentication alone does not prove a room is readable. If commands w
 
 The panel normally remains available when chat credentials are missing/invalid; finish setup or repair **Settings**, save and restart. A partial Slack token pair is rejected; a build without Matrix explicitly rejects its settings. Other platforms alone do not need a Discord token.
 
-For Docker, check `config/.env` and the writable **directory** mount/permissions. External environment values, including old `env_file` injection, override the file and appear read-only in Settings. A file save cannot override them. [Migrate old configuration](#migrating-an-existing-docker-env) rather than injecting browser-editable fields.
+For Docker, settings are `/data/config/.env` inside the **`discord-bot-config`** volume; there is no default host `config/.env`. Check the volume mount and local save errors. External environment values, including old `env_file` injection, override the file and appear read-only in Settings. A file save cannot override them. [Migrate old configuration](#migrating-an-existing-docker-env) rather than injecting browser-editable fields.
 
 A bind, configuration-file or database failure can prevent the panel itself opening: inspect local logs. With `PANEL_ENABLED=off`, startup requires valid chat/model settings. For binaries, keep `.env` in the usual launch folder, not `.env.txt`; `init` refuses an existing file unless `--force` is explicit. Back up before overwriting.
 
@@ -302,55 +287,67 @@ The password's Argon2id hash lives in the **same `durum/hafiza.redb` database** 
 
 ## Where your memories live
 
-Docker saves memory, archives, platform sessions and panel ownership in the named volume **`discord-bot-data`**, mounted at `/data/durum`. The Compose key `durum` means state/data; the actual name no longer depends on your folder. Stopping/replacing a container or `docker compose down` keeps this volume. **Do not use `docker compose down -v`** unless you intend to delete it.
+Docker uses two persistent named volumes:
 
-Multiple installations using this Compose file share that name; use deliberately distinct names for separate bots. An old project-prefixed volume is **not** automatically reused. [Existing Compose installations](#existing-compose-installations) explains migration.
+| Volume | Container path | Private contents |
+|---|---|---|
+| `discord-bot-data` | `/data/durum` | Memory, retained versions/archives, platform session tokens/sync state, and the panel administrator account/password hash |
+| `discord-bot-config` | `/data/config` | `.env` with plaintext chat/model credentials and access/settings choices |
+
+The data volume keeps Compose key `durum`; the config key and explicit name are both `discord-bot-config`. Fresh config volumes inherit the image directory's ownership for the bot account, UID/GID `10001`. Panel browser sessions and unsaved drafts are in memory and are lost on restart; they are not platform session files or backup contents.
+
+Stopping/replacing containers or `docker compose down` keeps **both** volumes. **Do not use `docker compose down -v`** unless you intend to delete both settings and saved data. Multiple installations using this Compose file share these names; deliberately choose distinct names for **both** volumes for separate bots. Old project-prefixed data volumes and host config files are **not** automatically copied. [Existing Compose installations](#existing-compose-installations) explains migration.
 
 For binaries/source builds, saved state is in the launch folder's **`durum/`** directory, and configuration is `.env`. Stop the bot before copying the entire directory. Matrix session files contain secrets and must also be preserved; backing up only the memory database omits those sessions. [Exact state paths](state-files.md) are the advanced reference.
 
 ### Back up the memory
 
-From `mybot`, **run each line separately and wait for it to succeed before the next; do not paste the whole block at once**. Stop the bot and check that the named volume and nonempty database exist before copying. If `docker volume inspect` fails, stop: later `docker run -v` commands could otherwise create an empty volume with the wrong name. If the database check or backup fails, stop and locate your data; do not continue or restart.
+Back up **both volumes as a matching pair** while the bot is stopped. From `mybot`, **run each line separately and wait for success; do not paste the whole block at once**. These commands are for an installation that has completed configuration. Stop if **either** `docker volume inspect` fails: a later `docker run -v` could otherwise create an empty volume with the wrong name. If either nonempty-file check or backup fails, stop and locate the original storage; do not continue to the restart.
 
 ```sh
-docker compose down
+docker compose stop bot
 docker volume inspect discord-bot-data
+docker volume inspect discord-bot-config
 docker run --rm -v discord-bot-data:/data:ro ubuntu test -s /data/hafiza.redb
-docker run --rm -v discord-bot-data:/data:ro -v "$PWD:/backup" ubuntu tar czf /backup/durum-backup.tar.gz -C /data .
+docker run --rm -v discord-bot-config:/config:ro ubuntu test -s /config/.env
+docker run --rm -v discord-bot-data:/data:ro -v "$PWD:/backup" ubuntu sh -c 'umask 077; test ! -e /backup/durum-backup.tar.gz && tar czf /backup/durum-backup.tar.gz -C /data .'
+docker run --rm -v discord-bot-config:/config:ro -v "$PWD:/backup" ubuntu sh -c 'umask 077; test ! -e /backup/config-backup.tar.gz && tar czf /backup/config-backup.tar.gz -C /config .'
 docker compose up -d
 ```
 
-On PowerShell, replace the tar command with:
+On PowerShell use `"${PWD}:/backup"` instead of `"$PWD:/backup"` in **both** archive commands. Restrict the backup folder with Windows **Properties → Security**; Unix `umask 077` is not a Windows access-control rule.
 
-```powershell
-docker run --rm -v discord-bot-data:/data:ro -v "${PWD}:/backup" ubuntu tar czf /backup/durum-backup.tar.gz -C /data .
-```
+`durum-backup.tar.gz` contains member data, archives, platform session credentials and the persistent panel account. `config-backup.tar.gz` contains plaintext configuration credentials. Neither encrypts anything. Keep both private and together; archive creation refuses to overwrite an earlier backup. Choose new matching filenames for each backup (and use those names when restoring). Restart only after both copies succeed; `up -d` resumes the stopped service, whereas `restart` would not recreate a removed container.
 
-`durum-backup.tar.gz` includes memory, archives, platform session files and the panel account. Protect it like credentials and member data. Use a different filename to keep earlier backups; privately back up **`config/.env` separately**. For binaries, privately save `.env` as well as the complete stopped `durum/` folder.
+For an incomplete first setup, `.env` may not exist yet: the nonempty-file guard deliberately stops this configured-installation recipe. Preserve both volumes rather than treating a missing file as permission to discard them. For binaries, privately save `.env` as well as the complete stopped `durum/` folder.
 
 These are backup/restore instructions, not a claim that a live deployment restore was exercised.
 
 ### Restore a backup
 
-Stop the bot and separately back up the destination's current contents. **Run each line separately; continue only after success.** Restore to an **empty** volume: extracting over existing files can leave stale archives or session state. The command below deliberately refuses a nonempty destination; choose/create a different empty volume and update Compose if needed, rather than deleting data to bypass it.
+Stop the bot and privately back up the destination's current contents first. **Run each line separately; continue only after success.** Restore the matching archives to **two empty volumes**: extracting over existing files can leave stale archives, session tokens or settings. To retain populated destination volumes, choose new names, update both service mounts and their explicit Compose volume names, and substitute those names below. Do not delete data just to bypass the empty-volume guard.
 
 ```sh
-docker compose down
+docker compose stop bot
+docker volume create discord-bot-data
+docker volume create discord-bot-config
 docker volume inspect discord-bot-data
-docker run --rm -v discord-bot-data:/data -v "$PWD:/backup:ro" ubuntu sh -c 'test -z "$(find /data -mindepth 1 -print -quit)" && tar xzf /backup/durum-backup.tar.gz -C /data && chown -R 10001:10001 /data'
+docker volume inspect discord-bot-config
+docker run --rm -v discord-bot-data:/data -v discord-bot-config:/config -v "$PWD:/backup:ro" ubuntu sh -c 'test -z "$(find /data -mindepth 1 -print -quit)" && test -z "$(find /config -mindepth 1 -print -quit)" && test -s /backup/durum-backup.tar.gz && test -s /backup/config-backup.tar.gz'
+docker run --rm -v discord-bot-data:/data -v discord-bot-config:/config -v "$PWD:/backup:ro" ubuntu sh -c 'test -z "$(find /data -mindepth 1 -print -quit)" && test -z "$(find /config -mindepth 1 -print -quit)" && tar xzf /backup/durum-backup.tar.gz -C /data && tar xzf /backup/config-backup.tar.gz -C /config && test -s /data/hafiza.redb && test -s /config/.env && chown -R 10001:10001 /data /config && chmod 700 /config && chmod 600 /config/.env'
 docker compose up -d
 ```
 
-For PowerShell, use `"${PWD}:/backup:ro"` instead of `"$PWD:/backup:ro"`. If the empty-volume guard, extraction or ownership change fails, **stop; do not run the final start command**. The ownership change gives the container UID/GID `10001` access to restored data, including backups from older users.
+`volume create` intentionally creates missing destinations but does not empty existing ones. If either inspect fails, **stop before mounting**; if either empty-volume check, extraction, expected-file check or ownership change fails, **stop and do not start the bot**. A failed extraction can leave a partial restore: preserve it for diagnosis and use new empty destinations for a retry, not an overwrite. The restore sets UID/GID `10001` for both volumes, including archives from older users.
 
-Restore the matching private configuration separately. After startup, use the platform's [status check](#verify-the-connection) and the panel's **Memory** page to inspect the result. A restored database restores the administrator account/password at backup time; use [password recovery](#recovering-the-administrator-account) if needed.
+For PowerShell, use `"${PWD}:/backup:ro"` instead of `"$PWD:/backup:ro"` in both helper commands. Use only trusted private backup archives. After successful startup, use the platform's [status check](#verify-the-connection) and the panel's **Memory** page to inspect the result. Restoring the database restores the administrator account/password at backup time, **not** old browser sessions; use [password recovery](#recovering-the-administrator-account) if needed. Platform sessions and matching configuration are restored separately from that account.
 
 ## Upgrading from v1 to v2
 
 There are **two separate migrations**: preserving Docker's volume/configuration is manual; converting the memory database's identities happens automatically.
 
-1. Stop the old version and [back up the full state and private configuration](#back-up-the-memory). Keep the old executable/image version available for rollback.
-2. For Docker, complete [existing Compose migration](#existing-compose-installations) before using the new launch settings. For binaries, use the same private launch folder and preserve its `durum/`.
+1. Stop the old version and privately back up its **actual** full state and configuration. For Docker, [existing Compose migration](#existing-compose-installations) locates and backs up the old volume and host settings; do **not** assume an older installation already has the two new named volumes. For binaries, copy the complete stopped `durum/` folder and private `.env`. Keep the old executable/image version available for rollback.
+2. Complete Docker's config/data migration before using the new launch settings. For binaries, use the same private launch folder and preserve its `durum/`.
 3. Start v2 once. It automatically converts old numeric Discord person/room identities into platform-qualified identities. Before conversion it creates a consistent database snapshot and manifest beside `hafiza.redb`, in a directory named `hafiza.redb.migration-v2-…`, containing **`original.redb`** and **`manifest.json`**.
 4. The conversion and schema change are **atomic**: they commit together or leave the active database unchanged. Body text and timestamps are preserved; unknown/malformed records remain and are reported, not invented as people or silently deleted. Conflicts or backup/database errors stop the cutover. Completed migrations are not repeated.
 5. Inspect **Overview**, **Memory** and the platform's status command. Retain the old volume, operator backup, migration snapshot and manifest until the data is confirmed.
@@ -363,26 +360,49 @@ For older 1.0 settings, [configuration](configuration.md#upgrading-from-10) also
 
 ### Migrating an existing Docker `.env`
 
-With the old service stopped and its storage preserved, copy the old settings **before** replacing Compose or removing `env_file`:
+This applies to an old **`./config:/data/config` host bind** as well as an older `.env` supplied by `env_file`. Use the **old Compose file** to stop the service, preserve its actual data volume as described [below](#existing-compose-installations), and keep it stopped throughout copying. **Run each line separately; stop on any failure.**
+
+The example source is the existing **`config/.env`**. The read-only `--mount` refuses a missing source folder instead of creating one. For an older `.env` in the working folder, replace `src="$PWD/config"` with `src="$PWD"` in **both** helper commands. Do not start from an empty/generated replacement file.
 
 ```sh
-mkdir -p config photos
-cp .env config/.env
+docker compose stop bot
+docker run --rm --mount type=bind,src="$PWD/config",dst=/old-config,readonly -v "$PWD:/backup" ubuntu sh -c 'umask 077; test -s /old-config/.env && test ! -e /backup/config-before-volume.env && cp /old-config/.env /backup/config-before-volume.env && chmod 600 /backup/config-before-volume.env'
+docker volume create discord-bot-config
+docker volume inspect discord-bot-config
+docker run --rm --mount type=bind,src="$PWD/config",dst=/old-config,readonly -v discord-bot-config:/config ubuntu sh -c 'test -s /old-config/.env && test -z "$(find /config -mindepth 1 -print -quit)" && cp -p /old-config/.env /config/.env && chown -R 10001:10001 /config && chmod 700 /config && chmod 600 /config/.env'
 ```
 
-On Linux, make both the folder and file private and writable by the container account:
+For PowerShell, replace `"$PWD/config"` with `"${PWD}/config"` (or `"${PWD}"` for a root `.env`) and `"$PWD:/backup"` with `"${PWD}:/backup"`. Restrict access to the backup folder on Windows. If inspection fails, stop before the copy command; if the destination is nonempty, stop—it may belong to another installation. Use a different explicit config volume name and matching Compose mount rather than overwriting it.
+
+Only after the private backup and copy succeed, replace/download Compose using **`discord-bot-config:/data/config`**, explicit volume name **`discord-bot-config`**, and **`PANEL_CONFIG_PATH=/data/config/.env`**. Remove old **`env_file: .env`** injection for browser-editable fields; do not add a new one. Keep the source file/folder, **`config-before-volume.env`**, old Compose file and data backup privately for rollback. Finish any data-volume migration before `docker compose up -d`.
+
+If you deliberately keep external environment injection, it wins over file values and those fields appear read-only in Settings. Saving in the browser cannot override them.
+
+### Advanced host folder for settings
+
+Only choose this route if you want to **hand-edit `.env` on the host**. Default browser setup and [CLI setup](#headless-cli-setup) do not need it. Stop the bot and [back up both volumes](#back-up-the-memory), leaving it stopped after the backup rather than running that recipe's final start line.
+
+Create a private host `config` folder (`mkdir config` on PowerShell; `mkdir -p config` on Mac/Linux). For an existing named-volume installation, inspect `discord-bot-config` first and stop on failure, then export privately without printing secrets:
 
 ```sh
-sudo chown 10001:10001 config config/.env
+docker volume inspect discord-bot-config
+docker run --rm -v discord-bot-config:/config:ro -v "$PWD/config:/host-config" ubuntu sh -c 'umask 077; test -s /config/.env && test ! -e /host-config/.env && cp -p /config/.env /host-config/.env && chown -R 10001:10001 /host-config && chmod 700 /host-config && chmod 600 /host-config/.env'
+```
+
+On PowerShell use `"${PWD}/config:/host-config"`. For a new installation, leave the folder empty and let browser setup or CLI init create `.env`.
+
+Replace **only** the service's config mount with `./config:/data/config`; keep `PANEL_CONFIG_PATH=/data/config/.env`, the data volume, and **no `env_file`**. Mount the writable **directory**, never just `.env`: atomic saves create a neighboring temporary file and rename it. Keep the original named volume/backup until the switch is confirmed.
+
+On **Linux**, the container runs as UID/GID **`10001`**. The host directory and existing file must be private and writable by that identity:
+
+```sh
+sudo chown 10001:10001 config
 sudo chmod 700 config
+sudo chown 10001:10001 config/.env
 sudo chmod 600 config/.env
 ```
 
-On Docker Desktop, omit Unix ownership commands. On Windows, use `mkdir config`, `mkdir photos`, then `Copy-Item .env config/.env`, and restrict folder access.
-
-The new Compose file must mount the **directory** `./config:/data/config`, set **`PANEL_CONFIG_PATH=/data/config/.env`**, and remove **`env_file: .env`** for browser-editable fields. Atomic browser saves need a writable directory, not a single-file mount. Keep the original `.env` privately as a migration backup.
-
-If you deliberately keep external environment injection, it wins over file values and those fields appear read-only in Settings. Saving in the browser cannot override them.
+Skip the last two lines if `.env` does not exist yet. Docker Desktop users do not need these Linux host-ownership commands; on Windows restrict the folder with **Properties → Security**. On Linux, hand-edit with an authorized editor (for example `sudoedit config/.env`) and retain the ownership/private modes afterward, including if the editor replaces the file. Restart with `docker compose up -d` after switching mounts, or `docker compose restart bot` after later file edits. Once using this advanced bind, privately back up the entire host config folder alongside the named data volume; the unused config volume no longer holds the active settings.
 
 ### Existing Compose installations
 
@@ -390,21 +410,29 @@ Changing a volume name does **not** move memory. Before adopting the new Compose
 
 1. Stop the service using the **old** file: `docker compose stop bot`.
 2. Find the old container ID with `docker compose ps -a`. Run `docker inspect --format '{{range .Mounts}}{{println .Destination .Name}}{{end}}' CONTAINER_ID` with that ID and read the `/data/durum` line. Do not guess its volume from the folder name. If there is no container/volume name, locate the original storage before continuing. Do not post full `docker inspect` or `docker compose config` output: it may expose credentials.
-3. [Copy `.env` to `config/.env`](#migrating-an-existing-docker-env) before removing `env_file` injection.
-4. If the old volume is already **`discord-bot-data`**, keep it: back it up, then while stopped run `docker run --rm -v discord-bot-data:/data ubuntu chown -R 10001:10001 /data`. Update the config mounts and start using the same volume; no volume copy is needed.
+3. [Copy the existing host `config/.env` or `.env` into the named config volume](#migrating-an-existing-docker-env) before removing the old mount/`env_file`. Keep the original and private backup. If already using `discord-bot-config`, inspect it and back it up rather than attempting the empty-destination copy.
+4. If the old data volume is already **`discord-bot-data`**, keep it: inspect it first and stop on failure; while stopped check the database and make its private state backup using the commands below with `discord-bot-data` substituted for `mybot_durum`. Then run `docker run --rm -v discord-bot-data:/data ubuntu chown -R 10001:10001 /data`. Update Compose only after config migration succeeds; no data-volume copy is needed.
 5. Otherwise, inspect/back up the **actual old volume** before creating the destination. **Run each line separately, continuing only after success.** The example uses `mybot_durum`; replace that with the name you found:
 
 ```sh
 docker volume inspect mybot_durum
 docker run --rm -v mybot_durum:/data:ro ubuntu test -s /data/hafiza.redb
-docker run --rm -v mybot_durum:/data:ro -v "$PWD:/backup" ubuntu tar czf /backup/durum-backup.tar.gz -C /data .
+docker run --rm -v mybot_durum:/data:ro -v "$PWD:/backup" ubuntu sh -c 'umask 077; test ! -e /backup/durum-backup.tar.gz && tar czf /backup/durum-backup.tar.gz -C /data .'
 docker volume create discord-bot-data
 ```
 
-If inspection or the database check fails, stop and locate the data. For PowerShell use `"${PWD}:/backup"` for the backup mount.
+If inspection, the database check or backup fails, stop and locate the data. Use a new backup filename if one already exists; keep every earlier backup. For PowerShell use `"${PWD}:/backup"` for the backup mount and restrict Windows folder access.
 
-6. Update/download Compose with the new directory mounts and fixed volume name. Use [the empty-volume restore procedure](#restore-a-backup) to restore into `discord-bot-data`, then start. If that name already contains data, **stop**: it may belong to another bot. Do not overwrite it or bypass the guard.
-7. Check the panel's **Memory** page and platform status. **Keep the old volume and backup.** These steps do not delete the original. Never use `docker compose down -v` or `docker volume prune` as part of the upgrade.
+6. Update/download Compose with both fixed named volumes. If copying from an older data volume, restore **only the data archive** into an empty `discord-bot-data`; the config volume was populated separately in step 3:
+
+```sh
+docker volume inspect discord-bot-data
+docker run --rm -v discord-bot-data:/data -v "$PWD:/backup:ro" ubuntu sh -c 'test -z "$(find /data -mindepth 1 -print -quit)" && test -s /backup/durum-backup.tar.gz && tar xzf /backup/durum-backup.tar.gz -C /data && test -s /data/hafiza.redb && chown -R 10001:10001 /data'
+```
+
+For PowerShell use `"${PWD}:/backup:ro"`. If inspect, the empty-volume guard, extraction or ownership fails, **stop without starting**. If the destination contains data, it may belong to another bot: choose a different named volume and update Compose instead of overwriting it. Once **both** configuration and data are ready, start with `docker compose up -d`.
+
+7. Check the panel's **Memory** page and platform status. **Keep the old data volume, original settings, old Compose file and private backups.** These steps do not delete the originals. Never use `docker compose down -v` or `docker volume prune` as part of the upgrade.
 
 This is a migration procedure, not a claim that a live migration was tested.
 
@@ -472,13 +500,29 @@ Before launching:
 - Set the correct Slack history tier, and choose a model explicitly if you want a free one; a blank model uses a paid default.
 - Keep `.env` private (Unix mode `600`; restrict Windows access), and keep secrets out of command arguments/history.
 
-For Docker, first prepare the private `config`/`photos` folders as in [Docker setup](#start-with-docker), and complete any existing-volume migration. Then:
+For Docker, download Compose as in [Docker setup](#start-with-docker) and complete any existing-storage migration first; **do not create a host config folder**. Stop any running bot before init. Then:
 
 ```sh
 docker compose run --rm -it --workdir /data/config bot init
 ```
 
-This writes **`config/.env`** as container UID `10001`. Add `PANEL_ENABLED=off` and your access scope there **before** `docker compose up -d`. Do not reintroduce `env_file`. To enable the panel later, remove/change `PANEL_ENABLED=off` and restart. Headless startup requires valid chat/model settings. Verify using [your platform's command](#verify-the-connection).
+CLI init hardcodes **`.env` in its working directory**; it does **not** use `PANEL_CONFIG_PATH` to choose its output. The explicit `--workdir /data/config` writes `/data/config/.env` **inside `discord-bot-config`** as container UID `10001`, not `config/.env` on the host.
+
+Before starting, add the no-panel setting inside that same volume. For a **fresh CLI-created file**, run this once:
+
+```sh
+docker compose run --rm --entrypoint sh bot -c 'test -s /data/config/.env && printf "\nPANEL_ENABLED=off\n" >> /data/config/.env'
+```
+
+For **Discord**, also set its scope before the first history scan. Replace both placeholders with your actual nonsecret IDs, then run this once for the fresh file:
+
+```sh
+docker compose run --rm --entrypoint sh bot -c 'test -s /data/config/.env && printf "\nGUILD_ID=YOUR_SERVER_ID\nCHANNELS=YOUR_CHANNEL_ID\n" >> /data/config/.env'
+```
+
+Telegram/Slack/Matrix room approval is already prompted by CLI init; review those choices before launch. These append commands are for adding missing fields, not editing an existing value or duplicating keys. For later changes, use Settings (when enabled) or the [advanced host-folder route](#advanced-host-folder-for-settings) for hand editing; do not reintroduce a bind or `env_file` just to perform default CLI setup. Keep secrets out of command arguments/history.
+
+Now run `docker compose up -d`. Headless startup requires valid chat/model settings. To enable the panel later, change/remove `PANEL_ENABLED=off` in the active configuration and restart. Verify using [your platform's command](#verify-the-connection).
 
 For advanced settings and optional integration-test recipes, use [configuration](configuration.md), not onboarding credential tests as proof of live health.
 

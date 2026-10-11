@@ -17,8 +17,8 @@ Notable changes are recorded here in [Keep a Changelog](https://keepachangelog.c
 ### Changed
 - The default persona answers AI/bot identity questions honestly; its fictional university biography and fixed political identity are removed. `STEALTH` means reduced bot UI, not human impersonation.
 - Browser setup can start the first configured platform without restarting. Later Settings changes need a restart; credential checks are not proof of live room access.
-- Compose mounts writable `./config` at `/data/config`, uses `PANEL_CONFIG_PATH=/data/config/.env`, and publishes the panel only on `127.0.0.1:8787:8787`. Saved data keeps the explicit `discord-bot-data` volume.
-- README and setup docs lead with Docker and browser configuration, with platform-specific requirements, collection boundaries and unmeasured-cost disclosure.
+- Compose mounts the fixed named `discord-bot-config` volume at `/data/config`, uses `PANEL_CONFIG_PATH=/data/config/.env`, and publishes the panel only on `127.0.0.1:8787:8787`. Fresh config volumes inherit bot UID/GID `10001` ownership; default Docker setup needs no host config folder or Linux permission commands. Saved data keeps the `durum` key and explicit `discord-bot-data` volume.
+- README and setup docs lead with three-command Docker/browser configuration, platform-specific requirements, collection boundaries and unmeasured-cost disclosure. Backup/restore covers both named volumes; Docker CLI setup uses explicit `--workdir /data/config`, while host `.env` editing is an advanced directory-bind option.
 - Usage shows observed process-local calls/tokens; missing monetary charges stay “Not reported,” not estimated. Provider dashboards remain the billing source.
 
 ### Removed
@@ -27,7 +27,7 @@ Notable changes are recorded here in [Keep a Changelog](https://keepachangelog.c
 ### Upgrading from 1.x
 - Stop the old bot and make a private backup of the entire saved-data directory/volume before launching v2. First startup automatically creates a migration snapshot/manifest and commits identity changes atomically; unresolved legacy material is retained, not silently deleted.
 - Keep the migration backup and old binary for rollback. Stop v2 and restore its pre-migration snapshot before using the old binary; do not run v1 against the migrated database. See [memory migration and rollback](docs/state-files.md#identity-schema-migration-and-rollback).
-- Replace the old Compose file. Copy the existing `.env` to `config/.env` and mount the **directory**, not a single file; remove old `env_file` injection for browser-editable settings. Port 8787 is local-only. Do not discard an old project-prefixed volume: [migrate it explicitly](docs/setup-guide.md#existing-compose-installations).
+- With the old service stopped, preserve a private settings backup and copy the existing host `.env` or `./config/.env` into `discord-bot-config` with bot ownership before replacing Compose; remove old `env_file` injection for browser-editable settings. Port 8787 is local-only. Do not discard an old project-prefixed data volume: [migrate config and data explicitly](docs/setup-guide.md#existing-compose-installations).
 - Set optional `OWNER_KEY` to a canonical platform-qualified user identity for Telegram/Slack/Matrix administration. It takes precedence over legacy Discord-only `OWNER_ID`; invalid nonblank values fail validation. See [configuration](docs/configuration.md).
 - All connected platforms share memory/personality. Only approve trusted rooms; use separate installations for unrelated groups.
 

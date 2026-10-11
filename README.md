@@ -41,8 +41,6 @@ Install and open [Docker](https://docs.docker.com/get-started/get-docker/) first
 mkdir mybot && cd mybot && curl -O https://raw.githubusercontent.com/krxi/discord-bot/main/docker-compose.yml
 ```
 
-On Linux, [prepare the writable settings folder](docs/setup-guide.md#download-the-launch-settings) before the next step. Docker Desktop users do not need the Linux ownership commands.
-
 **2. Start it.**
 
 ```sh
@@ -59,11 +57,13 @@ Find the `http://localhost:8787/setup#token=...` link and open it in your browse
 
 After setup, return to **http://localhost:8787** to view connections, edit memory/temperament, run actions, check usage/logs, or change settings. The panel is available only on this computer by default; do not publish port 8787 to the internet. Keep your computer and Docker running. [Verify your chat connection](docs/setup-guide.md#verify-the-connection) before relying on ordinary replies.
 
+Docker keeps settings and memory in persistent volumes; there is no host `.env` to prepare. [Private backups and advanced host-file editing](docs/setup-guide.md#where-your-memories-live) are covered in the guide.
+
 Terminal alternative: `discord-bot init` still provides [CLI setup](docs/setup-guide.md#headless-cli-setup).
 
 Without Docker: download a [release binary](docs/setup-guide.md#download-a-release), start it from a terminal, and open its setup link; Rust is not needed.
 
-**Already running v1?** [Read the upgrade instructions first](docs/setup-guide.md#upgrading-from-v1-to-v2). Memory migrates automatically with a backup, but Compose settings now live in `config/.env`.
+**Already running v1 or an older Compose file?** [Read the upgrade instructions first](docs/setup-guide.md#existing-compose-installations). Memory migrates automatically with a backup; Docker now keeps settings in the private `discord-bot-config` volume, not a host `.env` file. [Back up both volumes](docs/setup-guide.md#back-up-the-memory).
 
 ## Choose your chat app
 

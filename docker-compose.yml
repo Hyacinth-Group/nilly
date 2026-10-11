@@ -11,8 +11,10 @@ services:
       - "127.0.0.1:8787:8787"
     volumes:
       - durum:/data/durum
-      - ./config:/data/config
+      - discord-bot-config:/data/config
       - ./photos:/data/photos:ro
 volumes:
   durum:
     name: discord-bot-data
+  discord-bot-config:
+    name: discord-bot-config
