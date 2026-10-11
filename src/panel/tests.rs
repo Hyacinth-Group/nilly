@@ -733,3 +733,17 @@ async fn login_explains_existing_ownership_and_nonsecret_settings_have_no_secret
     .unwrap();
     assert!(html.contains("Leave Presence Intent off."));
 }
+
+#[tokio::test]
+async fn numeric_loopback_health_needs_no_auth_or_host_override() {
+    let (app, _directory) = fixture().await;
+    let mut health = request("GET", "/healthz", None, "");
+    health
+        .headers_mut()
+        .insert(header::HOST, "127.0.0.1:8787".parse().unwrap());
+    let response = routes::router(app).oneshot(health).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1024).await.unwrap()).unwrap();
+    assert_eq!(body, serde_json::json!({"status":"ok"}));
+}

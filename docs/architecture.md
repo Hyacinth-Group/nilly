@@ -46,6 +46,8 @@ Local recovery is `discord-bot panel reset-password`, with the running bot stopp
 
 The default panel address is `http://localhost:8787`. Compose binds the container to `0.0.0.0` but publishes only `127.0.0.1:8787:8787`. Remote access should use a private SSH tunnel. An HTTPS proxy requires an explicit `PANEL_PUBLIC_URL` and matching Host/browser Origin; forwarded headers never determine authority. The [setup guide](setup-guide.md#accessing-a-remote-server) covers access and recovery.
 
+Direct loopback access accepts only the fixed `localhost`, `127.0.0.1`, and `[::1]` aliases at the configured scheme and exact port; a mutation's browser Origin must match its request Host. Thus `curl http://127.0.0.1:8787/healthz` works without a Host override. Non-loopback proxy origins stay exact, and forwarded headers never expand this allowlist.
+
 ### Logs and persistence
 
 `src/logging.rs` provides a bounded, redacted recent-entry ring and authenticated panel streaming. The ring is in memory and disappears at restart; it is not a durable audit log or proof that exported logs contain no member data. Console/container logs are separate retention surfaces and may include the one-use claim link.

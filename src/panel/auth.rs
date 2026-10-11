@@ -165,11 +165,10 @@ pub fn cookie_token(headers: &HeaderMap) -> Result<Option<String>, AuthError> {
     Ok(token)
 }
 
-/// Exact configured origins resist DNS rebinding; forwarded headers are never trusted here.
+/// Public origins are exact; loopback aliases keep the same scheme and port.
 #[derive(Clone)]
 pub struct OriginPolicy {
-    origin: String,
-    authority: String,
+    endpoints: Vec<(String, String)>,
     secure: bool,
 }
 
@@ -186,15 +185,32 @@ impl OriginPolicy {
         {
             return Err(AuthError::OriginInvalid);
         }
-        let origin = url.origin().ascii_serialization();
-        let authority = origin
-            .split_once("://")
-            .ok_or(AuthError::OriginInvalid)?
-            .1
-            .to_owned();
+        let endpoints = if matches!(
+            url.host_str(),
+            Some("localhost" | "127.0.0.1" | "[::1]" | "::1")
+        ) {
+            let port = url
+                .port()
+                .map(|port| format!(":{port}"))
+                .unwrap_or_default();
+            ["localhost", "127.0.0.1", "[::1]"]
+                .into_iter()
+                .map(|host| {
+                    let authority = format!("{host}{port}");
+                    (format!("{}://{authority}", url.scheme()), authority)
+                })
+                .collect()
+        } else {
+            let origin = url.origin().ascii_serialization();
+            let authority = origin
+                .split_once("://")
+                .ok_or(AuthError::OriginInvalid)?
+                .1
+                .to_owned();
+            vec![(origin, authority)]
+        };
         Ok(Self {
-            origin,
-            authority,
+            endpoints,
             secure: url.scheme() == "https",
         })
     }
@@ -205,11 +221,13 @@ impl OriginPolicy {
 
     pub fn check(&self, headers: &HeaderMap, mutation: bool) -> Result<(), AuthError> {
         let host = single_header(headers, header::HOST)?.ok_or(AuthError::OriginInvalid)?;
-        if !host.eq_ignore_ascii_case(&self.authority) {
-            return Err(AuthError::OriginInvalid);
-        }
+        let (expected_origin, _) = self
+            .endpoints
+            .iter()
+            .find(|(_, authority)| host.eq_ignore_ascii_case(authority))
+            .ok_or(AuthError::OriginInvalid)?;
         match single_header(headers, header::ORIGIN)? {
-            Some(origin) if origin == self.origin => Ok(()),
+            Some(origin) if origin == expected_origin => Ok(()),
             None if !mutation => Ok(()),
             _ => Err(AuthError::OriginInvalid),
         }
@@ -1270,5 +1288,51 @@ mod tests {
         assert!(verify_password("incorrect password", &hash).is_err());
         assert!(checked_hash(&hash.replace("m=19456", "m=4294967295")).is_err());
         assert!(checked_hash(&hash.replace("argon2id", "argon2i")).is_err());
+    }
+
+    #[test]
+    fn loopback_aliases_keep_host_origin_scheme_and_port_bound() {
+        for configured in [
+            "http://localhost:8787",
+            "http://127.0.0.1:8787",
+            "http://[::1]:8787",
+        ] {
+            let policy = OriginPolicy::new(configured).unwrap();
+            for host in ["localhost:8787", "127.0.0.1:8787", "[::1]:8787"] {
+                let mut headers = HeaderMap::new();
+                headers.insert(header::HOST, HeaderValue::from_static(host));
+                assert!(policy.check(&headers, false).is_ok());
+                assert!(policy.check(&headers, true).is_err());
+                headers.insert(
+                    header::ORIGIN,
+                    HeaderValue::from_str(&format!("http://{host}")).unwrap(),
+                );
+                assert!(policy.check(&headers, true).is_ok());
+                headers.insert(
+                    header::ORIGIN,
+                    HeaderValue::from_str(&format!("https://{host}")).unwrap(),
+                );
+                assert!(policy.check(&headers, true).is_err());
+            }
+            let mut headers = HeaderMap::new();
+            headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:8787"));
+            headers.insert(
+                header::ORIGIN,
+                HeaderValue::from_static("http://localhost:8787"),
+            );
+            assert!(policy.check(&headers, true).is_err());
+            headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:8788"));
+            assert!(policy.check(&headers, false).is_err());
+        }
+        let policy = OriginPolicy::new("https://panel.example").unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1:8787"));
+        assert!(policy.check(&headers, false).is_err());
+        headers.insert(header::HOST, HeaderValue::from_static("panel.example"));
+        headers.insert(
+            header::ORIGIN,
+            HeaderValue::from_static("https://panel.example"),
+        );
+        assert!(policy.check(&headers, true).is_ok());
     }
 }
