@@ -11,9 +11,7 @@ struct Handler {
 #[async_trait]
 impl EventHandler for Handler {
     /// Serenity's `ready` callback — fires once per gateway connection (including
-    /// reconnects). Input: `&self`; `ctx: Context`; `data: Ready` — session info (used only
-    /// for `data.user.name`). Output: none. Uses: `self.bot.state()`, `modal::register_commands`,
-    /// `run_cycle` (once, guarded by `self.started`) for all six background cycles.
+    /// reconnects). Background cycles start only once, guarded by `self.started`.
     async fn ready(&self, ctx: Context, data: Ready) {
         {
             let mut state = self.bot.state();
@@ -61,10 +59,6 @@ impl EventHandler for Handler {
     }
 
     /// Serenity's `guild_create` callback — fires once per guild on every connect/reconnect.
-    /// Input: `&self`; `ctx: Context`; `guild: Guild`; `_new: Option<bool>` (unused).
-    /// Output: none. Uses: `self.bot.guild_id`, `self.bot.state()` (`scanned` set),
-    /// `memory::write`, `default_channel`, `version_text`, `modal::info_embed`,
-    /// `read_history`/`self.bot.profiler`/`coach` (spawned in the background, first-join only).
     async fn guild_create(&self, ctx: Context, guild: Guild, _new: Option<bool>) {
         // if GUILD_ID is set, only that guild gets scanned; it also never enters the on-disk scanned list
         if self.bot.guild_id.is_some_and(|g| g != guild.id) {
@@ -114,9 +108,6 @@ impl EventHandler for Handler {
     }
 
     /// Serenity's `guild_member_addition` callback — fires when a new member joins.
-    /// Input: `&self`; `ctx: Context`; `member: Member`. Output: none. Uses:
-    /// `self.bot.guild_id`, `default_channel`, `display_name`, `self.bot.state()`,
-    /// `self.bot.generate` (with `WELCOME`), `self.bot.send_lines`, `start_chat`.
     async fn guild_member_addition(&self, ctx: Context, member: Member) {
         if self.bot.guild_id.is_some_and(|g| g != member.guild_id) {
             return;
@@ -175,12 +166,6 @@ impl EventHandler for Handler {
 
     /// Serenity's `message` callback — the core of the bot's Discord-side logic (see
     /// `docs/flows.md`'s "A message arrives" for the full step list).
-    /// Input: `&self`; `ctx: Context`; `msg: Message` (a raw Discord message, any author).
-    /// Output: none. Uses (non-exhaustive — this is the crate's densest function):
-    /// `self.bot.guild_id`/`allowed_channels`, `msg.content_safe`, `self.bot.image_analysis`,
-    /// `display_name`, `self.bot.state()`, `remember`, `sleep::is_awake`, `casefold`,
-    /// `self.bot.willingness`, `growth::stage`, `travel::now`, `start_chat`, `channel_note`,
-    /// `self.bot.debug_note`, `self.bot.reply` (`chat_reply.rs`).
     async fn message(&self, ctx: Context, msg: Message) {
         // bots, webhooks, and DMs are excluded, so there's no bot-to-bot loop
         if msg.author.bot || msg.webhook_id.is_some() || msg.guild_id.is_none() {
@@ -418,12 +403,8 @@ impl EventHandler for Handler {
     // willingness check, no new message goes out); the bot just notices it and may bring
     // it up next time it naturally replies
     /// Serenity's `reaction_add` callback — fires when anyone reacts to any message.
-    /// Input: `&self`; `ctx: Context`; `add_reaction: Reaction`. Output: none (returns
-    /// early unless the reacted-to message is the bot's own, in a guild, from a human,
-    /// and has text). Uses: `self.bot.guild_id`/`allowed_channels`, `add_reaction.user`/
-    /// `message` (fetches the reactor and the reacted message over HTTP — a `Reaction`
-    /// carries no message text), `reaction_label`, `display_name`, `self.bot.state()`,
-    /// `remember`, `channel_note`, `self.bot.debug_note`.
+    /// Only records human reactions to the bot's text messages in a guild.
+    /// Fetches the reactor and message over HTTP because `Reaction` carries no text.
     async fn reaction_add(&self, ctx: Context, add_reaction: Reaction) {
         let bot_id = ctx.cache.current_user().id;
         // DMs, and reactions on someone else's message, aren't this bot's business
@@ -500,12 +481,7 @@ impl EventHandler for Handler {
     // submission just gets a short acknowledgment (display-only, no input is collected);
     // the thought button follows its own older path
     /// Serenity's `interaction_create` callback — routes slash commands, modal submissions,
-    /// and button/select-menu clicks. Input: `&self`; `ctx: Context`; `interaction:
-    /// Interaction`. Output: none. Uses: `command::definitions` (`Command`),
-    /// `THOUGHT_BUTTON`/`self.thought_button` (`Component`, `handler_buttons.rs`),
-    /// `self.setting_button` (`Component`, `handler_buttons.rs`),
-    /// `modal::topics_modal`/`events_modal`/`summary_modal`/`person_modal` (`Component`,
-    /// zihin detail buttons/menu).
+    /// and button/select-menu clicks.
     async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
         // stealth: no commands are registered and no buttons are sent, so anything arriving
         // here is stale (an old button on an earlier message) — left unanswered
@@ -581,9 +557,7 @@ impl EventHandler for Handler {
 // ReactionType's own Display gives Discord's raw mention form for a custom emoji
 // (`<:name:id>`), which the model would just repeat back verbatim — not what a person means
 // when they say what emoji someone used
-/// Input: `emoji: &ReactionType`. Output: `String` — the unicode emoji as-is, or a custom
-/// (server) emoji's name wrapped in colons, `"bilinmeyen emoji"` if even the name is
-/// missing. Used by: `Handler::reaction_add` above, the only caller.
+/// Custom emoji names are wrapped in colons; missing names become "bilinmeyen emoji".
 fn reaction_label(emoji: &ReactionType) -> String {
     match emoji {
         ReactionType::Unicode(s) => s.clone(),

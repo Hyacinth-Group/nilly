@@ -34,9 +34,7 @@ pub struct RssNews {
 }
 
 // html to plain text: script/style dropped, tags stripped, whitespace collapsed
-/// Input: `raw: &str` — raw HTML/XML fragment. Output: `String` — plain text with
-/// script/style blocks removed, tags stripped, entities decoded, whitespace collapsed.
-/// Used by: `tag_content` below, `Bot::read_page` below (no-firecrawl path).
+/// Decodes entities as well as stripping script/style blocks and tags.
 pub fn clean_html(raw: &str) -> String {
     let mut s = raw.replace("<![CDATA[", "").replace("]]>", "");
     for tag in ["script", "style"] {
@@ -67,10 +65,7 @@ pub fn clean_html(raw: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Input: `chunk: &str` — an XML fragment (one `<item>...</item>` block); `tag: &str` — the
-/// element name to extract. Output: `Option<String>` — the cleaned text between
-/// `<tag>`/`<tag ...>` and `</tag>`, or `None` if not found. Uses: `clean_html`. Used by:
-/// `rss` below.
+/// Extracts cleaned text from an XML element, allowing attributes in its opening tag.
 fn tag_content(chunk: &str, tag: &str) -> Option<String> {
     let start = chunk
         .find(&format!("<{tag}>"))
@@ -81,10 +76,7 @@ fn tag_content(chunk: &str, tag: &str) -> Option<String> {
 }
 
 /// Fetches and parses the configured RSS feed.
-/// Input: `http: &reqwest::Client`. Output: `Result<Vec<RssNews>, BotError>` — items with a
-/// non-empty title and an `http(s)` link; `Err` if the request/parse fails or nothing
-/// qualified. Uses: `tag_content`. Used by: `Bot::wander` below, `Bot::news_agent`
-/// (`agents.rs`), `Bot::research` (`chat_lookup.rs`).
+/// Keeps items with a non-empty title and an http(s) link; fails if none qualify.
 pub async fn rss(http: &reqwest::Client) -> Result<Vec<RssNews>, BotError> {
     let xml = http
         .get(rss_url())
@@ -116,10 +108,7 @@ pub async fn rss(http: &reqwest::Client) -> Result<Vec<RssNews>, BotError> {
 }
 
 // a number derived from the link, to remember which news items were already posted
-/// Input: `link: &str`. Output: `u64` — a stable hash of `link`, used as a pseudo-id for
-/// RSS items (which have no numeric id the way Hacker News does). Uses:
-/// `DefaultHasher`. Used by: `Bot::news_agent`/`Bot::research` (`agents.rs`/`chat_lookup.rs`),
-/// against `State.posted_news`.
+/// RSS items lack numeric IDs, so the link hash acts as a deduplication key.
 pub fn link_id(link: &str) -> u64 {
     let mut hasher = DefaultHasher::new();
     link.hash(&mut hasher);
@@ -127,9 +116,7 @@ pub fn link_id(link: &str) -> u64 {
 }
 
 // gundem.md entries: each entry starts with a "## date time" line
-/// Input: `text: &str` — the contents of `durum/gundem.md`. Output: `Vec<String>` — one
-/// entry per `"## ..."`-headed block, trimmed, empty ones dropped. Used by: `latest_agenda`
-/// below, `Bot::wander` below.
+/// Trims entries and drops empty blocks.
 pub fn entries(text: &str) -> Vec<String> {
     let mut list: Vec<String> = Vec::new();
     for line in text.lines() {
@@ -146,9 +133,7 @@ pub fn entries(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Input: `text: &str` — the contents of `durum/gundem.md`. Output: `String` — the last 3
-/// entries, joined with blank lines. Uses: `entries`. Used by: `State::load`
-/// (`types_chat_state.rs`), `Bot::wander` below (to refresh `State.agenda`).
+/// Returns the last three agenda entries, separated by blank lines.
 pub fn latest_agenda(text: &str) -> String {
     let list = entries(text);
     let skip = list.len().saturating_sub(3);
@@ -157,10 +142,7 @@ pub fn latest_agenda(text: &str) -> String {
 
 impl Bot {
     // page text: via firecrawl if a key is set, otherwise a plain download with tags stripped
-    /// Input: `&self`; `url: &str`. Output: `Result<String, BotError>` — the page's text
-    /// (markdown via Firecrawl if `self.firecrawl` is set, else `clean_html` of a plain
-    /// GET), capped at `PAGE_LIMIT` characters. Uses: `self.http`, `clean_html`. Used by:
-    /// `Bot::research` (`chat_lookup.rs`), `Bot::wander` below.
+    /// Caps the page text at `PAGE_LIMIT` characters.
     pub async fn read_page(&self, url: &str) -> Result<String, BotError> {
         let text = match &self.firecrawl {
             Some(key) => {
@@ -202,10 +184,7 @@ impl Bot {
     }
 
     // a firecrawl web search: title, description, url (an error if there's no key)
-    /// Input: `&self`; `query: &str`. Output: `Result<String, BotError>` — up to 5
-    /// `"- title — description (url)"` lines; `Err` if there's no Firecrawl key or the
-    /// search returned nothing. Uses: `self.firecrawl`, `self.http`, `memory::trim`. Used
-    /// by: `Bot::research` (`chat_lookup.rs`), the only caller.
+    /// Returns up to five title/description/URL lines; fails without a key or results.
     pub async fn firecrawl_search(&self, query: &str) -> Result<String, BotError> {
         let key = self.firecrawl.as_ref().ok_or("no firecrawl key set")?;
         #[derive(Deserialize)]
@@ -254,12 +233,7 @@ impl Bot {
 
     // browses the news every so often: picks whatever catches its interest from the rss
     // feed, reads it, writes its own take into its journal
-    /// Input: `&self`. Output: none (writes `durum/gundem.md` and `State.agenda` as a side
-    /// effect; failures are logged, not propagated). Uses: `rss`, `self.analyze` (with
-    /// `WANDERER_PICK`), `self.read_page`, `self.generate` (with `WANDERER_NOTE`),
-    /// `entries`, `memory::read`/`write`/`archive`/`date_time`, `latest_agenda`. Used by:
-    /// `wanderer_cycle` (`cycle_background.rs`), `Bot::cmd_wander` (`command/actions.rs`,
-    /// `/gez`).
+    /// Updates the agenda on disk and in memory; failures are logged, not propagated.
     pub async fn wander(&self) {
         let news_items = match rss(&self.http).await {
             Ok(h) => h,

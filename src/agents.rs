@@ -73,10 +73,7 @@ struct TopicRecord {
 }
 
 impl Bot {
-    /// Input: `&self`. Output: none (writes `profil.md` and `State.profile`). Uses:
-    /// `recent_messages`, `PROFILE_EXTRACT` (`prompts.rs`), `self.analyze`. Used by:
-    /// `Handler::guild_create` (`handler_event.rs`, first join), `news_cycle`
-    /// (`cycle_news.rs`, every 6h), `Bot::cmd_agents` (`command/actions.rs`, `/ajanlar`).
+    /// Updates the persisted group profile from recent messages.
     pub async fn profiler(&self) {
         let sample = recent_messages(&self.state(), 600);
         if sample.is_empty() {
@@ -102,14 +99,7 @@ impl Bot {
 
     // pulls what should be written to memory out of a finished chat (or a 6-hour
     // observation) and files it away
-    /// Input: `&self`; `transcript: String` — the chat/observation text; `source: &str` —
-    /// context label folded into the prompt (Turkish, e.g. `"biten sohbet"`); `channel:
-    /// &str` — channel name, for the event line. Output: `Result<DiaristSummary, BotError>`.
-    /// Uses: `DIARIST`/`prompts.rs`, `self.analyze`, `extract_json`, `Record`
-    /// (deserialize), `memory::add_event`/`read_person`/`write_person`/`add_topic`/`write`/
-    /// `refresh_index`/`archive`/`slug`/`trim`/`date_time`/`FAVORITE_NOTE`, `self.summarizer`.
-    /// Used by: `memory_cycle` (`cycle_background.rs`), `Bot::cmd_mind`'s `test:true`
-    /// (`command/cards.rs`).
+    /// `source` labels the observation in the prompt; `channel` labels the event entry.
     pub async fn diarist(
         &self,
         transcript: String,
@@ -249,11 +239,6 @@ impl Bot {
     }
 
     // shrinks files that are over their limit; the raw chunk that comes out goes to the archive
-    /// Input: `&self`. Output: none. Uses: `memory::over_limit`, `SUMMARIZER_PERSON`/
-    /// `SUMMARIZER_TOPIC`/`SUMMARIZER_EVENTS` (`prompts.rs`), `self.analyze`,
-    /// `memory::archive`/`write`/`refresh_index`. Used by: `Bot::diarist` above (after
-    /// every write), `Bot::cmd_mind`'s `test:true` (`command/cards.rs`, transitively via
-    /// `diarist`).
     pub async fn summarizer(&self) {
         for (kind, rel) in memory::over_limit() {
             let old = memory::read(&rel);
@@ -332,11 +317,7 @@ impl Bot {
         self.state().index = memory::refresh_index();
     }
 
-    /// Input: `&self`. Output: none (writes `huy.md`/`State.temperament`; no-op if there's
-    /// no message history yet). Uses: `self.state()`, `recent_messages`, `COACH`
-    /// (`prompts.rs`), `self.analyze`. Used by: `Handler::guild_create`
-    /// (`handler_event.rs`), `news_cycle` (`cycle_news.rs`), `Bot::cmd_agents`
-    /// (`command/actions.rs`).
+    /// Updates temperament notes; does nothing until message history exists.
     pub async fn coach(&self) {
         let (text, instruction) = {
             let state = self.state();
@@ -374,10 +355,7 @@ impl Bot {
         }
     }
 
-    /// Input: `&self`; `transcript: String` — a finished chat's transcript. Output: none
-    /// (writes `duzeltmeler.md`/`State.corrections`; no-op if `transcript` is empty). Uses:
-    /// `CRITIC` (`prompts.rs`), `self.analyze`. Used by: `memory_cycle`
-    /// (`cycle_background.rs`), for every chat closed with `run_critic=true`.
+    /// Saves corrections from a finished chat; ignores an empty transcript.
     pub async fn critic(&self, transcript: String) {
         if transcript.trim().is_empty() {
             return;
@@ -403,10 +381,7 @@ impl Bot {
     }
 
     // gathers news from two sources (hacker news + Turkey's agenda), picks one based on the profile
-    /// Input: `&self`. Output: `Result<News, BotError>` — the picked item, removed from the
-    /// candidate list; `Err` if both sources came up empty/errored. Uses: `self.http`
-    /// (Hacker News API), `agenda::rss`/`link_id`, `NEWS_PICK` (`prompts.rs`),
-    /// `self.analyze`. Used by: `Bot::post_news`/`news_cycle` (`cycle_news.rs`).
+    /// Fails if both news sources are empty or unavailable.
     pub async fn news_agent(&self) -> Result<News, BotError> {
         let posted = self.state().posted_news.clone();
         let mut news_items: Vec<News> = Vec::new();
@@ -481,12 +456,6 @@ impl Bot {
 
     // shows the model the image and gets a one-line personality comment; if the model
     // doesn't support vision, it writes blind
-    /// Input: `&self`; `path: &PathBuf` — an image file (from `photos/`). Output:
-    /// `Result<String, BotError>` — a one-line personality comment. Uses: `system_text`
-    /// (`provider_system.rs`, with `IMAGE_POST`), `base64::Engine`, `self.ask_raw`
-    /// (vision call), `self.generate` (blind fallback if the vision call fails), `clean`.
-    /// Used by: `Bot::run_prank` (`cycle_news.rs`), the only caller (when not doing the
-    /// hacked bit).
     pub async fn image_commenter(&self, path: &PathBuf) -> Result<String, BotError> {
         let (system, bot_name) = {
             let state = self.state();
@@ -555,9 +524,7 @@ pub struct News {
 }
 
 // a random image from the photos/ folder
-/// Input: none. Output: `Option<PathBuf>` — a random image file from `IMAGE_DIR`
-/// (png/jpg/jpeg/gif/webp), or `None` if the folder is missing/empty. Used by:
-/// `Bot::run_prank` (`cycle_news.rs`), the only caller.
+/// Accepts png/jpg/jpeg/gif/webp; returns `None` if no image is available.
 pub fn random_image() -> Option<PathBuf> {
     let files: Vec<PathBuf> = std::fs::read_dir(IMAGE_DIR)
         .ok()?

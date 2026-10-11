@@ -1,31 +1,17 @@
-/// `/durum`. Input: `bot: &Bot`; `ctx: &Context`; `cmd: &CommandInteraction`. Output: none.
-/// Uses: `modal::status_message`, `send_response`. Registered as `run` for `"durum"` in
-/// `registration_table.rs`.
 async fn cmd_status(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
     let response = modal::status_message(&bot.state());
     send_response(ctx, cmd, response).await;
 }
 
-/// `/yardim`. Input: `_bot: &Bot` (unused); `ctx: &Context`; `cmd: &CommandInteraction`.
-/// Output: none. Uses: `modal::help_message`, `send_response`. Registered as `run` for
-/// `"yardim"` in `registration_table.rs`.
 async fn cmd_help(_bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
     send_response(ctx, cmd, modal::help_message()).await;
 }
 
-/// `/ayarlar`. Input: `bot: &Bot`; `ctx: &Context`; `cmd: &CommandInteraction`. Output:
-/// none. Uses: `modal::settings_message`, `send_response`. Registered as `run` for
-/// `"ayarlar"` in `registration_table.rs`.
 async fn cmd_settings(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
     let response = modal::settings_message(&bot.state(), true);
     send_response(ctx, cmd, response).await;
 }
 
-/// `/zihin [test]`. Input: `bot: &Bot`; `ctx: &Context`; `cmd: &CommandInteraction` (its
-/// `test` option selects the diagnostic path). Output: none. Uses: `option_bool`, `defer`,
-/// `bot.state()`, `bot.diarist` (`agents.rs`), `memory::trim`, `report_result`,
-/// `modal::mind_message`, `send_response`. Registered as `run` for `"zihin"` in
-/// `registration_table.rs`.
 async fn cmd_mind(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
     if option_bool(cmd, strings::t("cmd.zihin.opt.test.name")).unwrap_or(false) {
         defer(ctx, cmd).await;

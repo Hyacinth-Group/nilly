@@ -1,9 +1,6 @@
 impl Bot {
     // is this the same as one of the bot's last 5 messages?
-    /// Input: `&self`; `channel: ChannelId`; `reply: &str` — a candidate line. Output:
-    /// `bool` — case-insensitive match against the channel's last 5 bot lines. Uses:
-    /// `self.state().channel_history`. Used by: `Bot::send_stream` (`provider_send_stream.rs`,
-    /// per line), `Bot::reply`'s fallback (`chat_reply.rs`).
+    /// Comparison is case-insensitive.
     fn is_repeat(&self, channel: ChannelId, reply: &str) -> bool {
         let state = self.state();
         let prefix = format!("{}: ", state.bot_name);
@@ -23,11 +20,7 @@ impl Bot {
 
     // looks something up online if the message calls for it: a link -> the page; "araştır/bak"
     // ("look it up") -> a firecrawl search (if a key is set); "haber/gündem/ne oldu" ("news/what's up") -> rss headlines
-    /// Input: `&self`; `text: &str` — the triggering message. Output: `Option<String>` — a
-    /// Turkish-language findings blurb to fold into the reply instruction, or `None` if no
-    /// trigger matched or the lookup failed. Uses: `self.read_page` (`agenda.rs`),
-    /// `self.firecrawl_search` (`agenda.rs`), `agenda::rss`, `memory::trim`. Used by:
-    /// `Bot::reply` (`chat_reply.rs`), the only caller.
+    /// Returns a Turkish findings blurb, or `None` if no trigger matches or lookup fails.
     async fn research(&self, text: &str) -> Option<String> {
         let lower = text.to_lowercase();
         if let Some(url) = text

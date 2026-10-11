@@ -5,12 +5,6 @@ impl Bot {
     /// streams a reply (falling back to non-streaming on an empty stream), records it, and
     /// loops again if a new message arrived meanwhile. See `docs/flows.md`'s `reply` diagram
     /// for the full step-by-step.
-    /// Input: `&self`; `ctx: &Context`; `channel: ChannelId`. Output: none (sends messages as
-    /// a side effect; returns early on any hard failure). Uses: `self.state()`, `BusyGuard`,
-    /// `self.determine_mood`, `self.research`, `self.pick_target`, `too_many_questions`,
-    /// `self.generate_stream`, `self.send_stream`, `self.generate`, `strip_name`,
-    /// `parse_reply`, `self.is_repeat`, `self.send_reply`, `assistant`, `new_message_arrived`,
-    /// `self.debug_trace`. Used by: `Handler::message` (`handler_event.rs`), the only caller.
     async fn reply(&self, ctx: &Context, channel: ChannelId) {
         loop {
             let instruction = {

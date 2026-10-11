@@ -22,9 +22,6 @@ struct Record {
     modified: u64,
 }
 
-/// Input: `args: &[String]` — everything after `migrate-durum` on the command line.
-/// Output: `Result<(), BotError>`. Uses: `collect`, `memory::init`/`record_count`/
-/// `write_with_mtime`. Used by: `main`, for `cargo run -- migrate-durum`.
 pub fn run(args: &[String]) -> Result<(), BotError> {
     let mut from = PathBuf::from(STATE_DIR);
     let mut to = PathBuf::from(STATE_DIR).join("hafiza.redb");
@@ -89,12 +86,9 @@ pub fn run(args: &[String]) -> Result<(), BotError> {
     Ok(())
 }
 
-/// Input: `dir: &Path` — the directory currently being walked; `base: &Path` — the root
-/// `--from` directory (key = path relative to this, `/`-joined regardless of OS);
-/// `skip_top_level: &str` — a directory name to skip, but only right under `base` (so a
-/// person/topic file legitimately named the same never gets excluded). Output: `Vec<Record>`
-/// — every `.md` file found, recursively. Used by: `run` above, this function's own
-/// recursion.
+/// Recursively collects markdown records with `/`-joined keys relative to `base`.
+/// Skips `skip_top_level` only directly under `base`, so same-named person/topic
+/// files are still included.
 fn collect(dir: &Path, base: &Path, skip_top_level: &str) -> Vec<Record> {
     let mut out = Vec::new();
     let Ok(entries) = fs::read_dir(dir) else {
@@ -136,9 +130,6 @@ fn collect(dir: &Path, base: &Path, skip_top_level: &str) -> Vec<Record> {
     out
 }
 
-/// Input: `records: &[Record]`. Output: `(kisi, konu, olay, tekil): (usize, usize, usize,
-/// usize)` — counts by top-level folder, for the summary line `run` prints. Used by: `run`
-/// above, the only caller.
 fn counts(records: &[Record]) -> (usize, usize, usize, usize) {
     let mut kisi = 0;
     let mut konu = 0;

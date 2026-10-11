@@ -24,6 +24,7 @@ cookie = "=0.18.1"
 sha2 = "=0.10.9"
 tempfile = "=3.20.0"
 futures-util = "0.3"
+rpassword = "7.5.4"
 
 [dev-dependencies]
 tower = { version = "=0.5.2", features = ["util"] }

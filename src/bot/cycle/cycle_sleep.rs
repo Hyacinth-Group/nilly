@@ -1,10 +1,6 @@
 impl Bot {
     // handles the asleep/awake transition; on waking, replies to mentions received while asleep
-    /// Input: `&self`; `ctx: &Context`. Output: none (no-op if there was no asleep↔awake
-    /// transition this tick). Uses: `sleep::is_awake`, `self.state()`, `self.generate` (for
-    /// `WOKE_UP`), `self.send_lines`, `start_chat`, `self.evaluate_waking`. Used by:
-    /// `sleep_cycle` (`cycle_background.rs`), `Bot::cmd_wake`/`cmd_sleep`
-    /// (`command/actions.rs`), `Handler::setting_button` (`handler_buttons.rs`).
+    /// Does nothing if this tick has no sleep-state transition.
     async fn sleep_transition(&self, ctx: &Context) {
         let (pending, just_woke) = {
             let mut state = self.state();
@@ -84,10 +80,6 @@ impl Bot {
     }
 
     // picks out what actually concerns the bot from what was written overnight; replies with a morning line if it clears the threshold
-    /// Input: `&self`; `ctx: &Context`; `night: &[String]` — lines written while asleep.
-    /// Output: none. Uses: `WAKING`/`WAKING_REPLY` (`prompts.rs`), `self.analyze`,
-    /// `extract_json`, `self.state()`, `self.generate`, `self.send_lines`, `start_chat`.
-    /// Used by: `sleep_transition` above, the only caller.
     async fn evaluate_waking(&self, ctx: &Context, night: &[String]) {
         let night_text = night.join("\n");
         let instruction = {

@@ -1,9 +1,8 @@
 # Glossary (runtime terms that stay in Turkish)
 
-Identifiers on the code side are English (see AGENTS.md item 8). This glossary is no longer
-a code glossary: it explains the bot's surface that **stays in Turkish** (prompts, `durum/`
-file fields, category labels shown on Discord, slash command names) to a developer reading
-in English.
+Most code identifiers are English. This glossary explains retained storage/protocol vocabulary.
+Some persisted keys retain Turkish names for compatibility; they do not select the bot's language.
+Prompts and Discord UI follow process-fixed `BOT_LANG` (`en` default).
 
 | Turkish term | Meaning / where it appears |
 |---|---|
@@ -50,9 +49,8 @@ in English.
 | dogum | birth — the moment it first ran (unix timestamp) |
 
 ## Turkish field names in the model's JSON output (deliberately not translated)
-These fields are Turkish in the Rust structs too: because the prompts are Turkish, the model
-produces JSON with these names, and serde matches by field name — if they were translated it
-would silently come back empty/0.
+These field names are shared by the English and Turkish prompts and serde structs.
+Translating the contract without updating both producers and consumers would break parsing.
 - Willingness (`WILLINGNESS`): `puan` (0-10 score), `sebep` (single-sentence justification)
 - Target selection (`TARGET_PICK`): `hedef` (person's name)
 - Mood (`MOOD`): `durum` (e.g. "confusion"), `yogunluk` (1-10)
@@ -61,11 +59,8 @@ would silently come back empty/0.
   `konular[].ad/not`, `kendim`
 
 ## The Turkish surface shown on Discord
-Slash command names (`durum, yardim, zihin, ayarlar, sifirla, haber, sorun, gez, saka, hack,
-ajanlar, uyan, uyu, dusunme, model, debug`), option names/labels, embed title/field text,
-button/menu labels, and of course every reply the model produces — all of it stays Turkish
-(see AGENTS.md item 8, README.md "commands"). The category labels in the `!durum` breakdown
-(`sohbet, isteklilik, profilci, gunlukcu, hoca, elestirmen, ozetleyici_*, haber_sec, hedef_sec,
-ruh_hali, uyanis, uyandim, isim_sec, hack_giris, sorun, laf, gozlem`) are also deliberately
-kept Turkish/in-code — they both show up on Discord and changing them would break backward
-compatibility of the metrics breakdown.
+With `BOT_LANG=tr`, slash names include `/durum`, `/yardim`, `/zihin`, `/ayarlar` and `/dusunme`.
+English uses `/status`, `/help`, `/mind`, `/settings` and `/thinking`; see [commands](commands.md).
+Some internal metric categories retain Turkish names (`sohbet`, `isteklilik`, `profilci`,
+`gunlukcu`, `hoca`, `elestirmen`, `ozetleyici_*`, `haber_sec`, `hedef_sec`, `ruh_hali`,
+`uyanis`, `uyandim`, `isim_sec`, `hack_giris`, `sorun`, `laf`, `gozlem`).

@@ -13,8 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Input: `f: LevelFilter`. Output: `u8` — 0 (off) through 5 (trace). Used by: `init` below,
-/// to store the configured level in the atomic `LEVEL`.
+/// Atomic log-level scale: 0 (off) through 5 (trace).
 fn filter_number(f: LevelFilter) -> u8 {
     match f {
         LevelFilter::Off => 0,
@@ -26,8 +25,7 @@ fn filter_number(f: LevelFilter) -> u8 {
     }
 }
 
-/// Input: `l: Level`. Output: `u8` — 1 (error) through 5 (trace), same scale as
-/// `filter_number`. Used by: `Sink::enabled` below.
+/// Uses the same numeric scale as `filter_number`.
 fn level_number(l: Level) -> u8 {
     match l {
         Level::Error => 1,
@@ -426,8 +424,6 @@ fn parse_level(value: &str) -> LevelFilter {
     LevelFilter::Info
 }
 
-/// Input: `l: Level`. Output: `&'static str` — an ANSI color escape code for that level.
-/// Used by: `Sink::log` below.
 fn level_color(l: Level) -> &'static str {
     match l {
         Level::Error => "\x1b[1;31m", // red, bold
@@ -437,8 +433,6 @@ fn level_color(l: Level) -> &'static str {
     }
 }
 
-/// Input: `target: &str` — a log record's module path. Output: `bool` — whether it
-/// originates in this crate. Used by: `Sink::enabled` below.
 fn is_our_target(target: &str) -> bool {
     target.starts_with("discord_bot")
 }
@@ -448,10 +442,7 @@ fn is_our_target(target: &str) -> bool {
 struct Sink;
 
 impl Log for Sink {
-    /// Input: `&self`; `metadata: &Metadata`. Output: `bool` — whether this record should
-    /// be printed (our crate: up to the configured `LEVEL`; other crates: warn/error only).
-    /// Uses: `level_number`, `is_our_target`. Called by the `log` crate machinery for every
-    /// `log::info!`/`warn!`/etc. call in the process.
+    /// Applies the configured level to this crate; dependency logs are warn/error only.
     fn enabled(&self, metadata: &Metadata) -> bool {
         let passes = level_number(metadata.level()) <= LEVEL.load(Ordering::Relaxed);
         if is_our_target(metadata.target()) {

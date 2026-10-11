@@ -12,9 +12,6 @@ const CLI_CHANNEL: u64 = 1;
 
 // appends to channel history in MEMORY ONLY; channel_note does the same thing but also
 // writes to disk — the bench shouldn't pollute the real durum/kanallar files
-/// Input: `state: &mut State`; `channel: ChannelId`; `line: String`. Output: none (updates
-/// `state.channel_history` only, capped at `CHANNEL_HISTORY`). Used by: `Bot::chat_cli`
-/// below, the only caller.
 fn append_history(state: &mut State, channel: ChannelId, line: String) {
     let hist = state.channel_history.entry(channel).or_default();
     hist.push_back(line);
@@ -24,8 +21,6 @@ fn append_history(state: &mut State, channel: ChannelId, line: String) {
 }
 
 // parses "name: text"; without a colon, or with an empty side, the speaker defaults to "misafir"
-/// Input: `line: &str` — one line of terminal input. Output: `(String, String)` — (speaker
-/// name, text). Used by: `Bot::chat_cli` below, the only caller.
 fn parse_line(line: &str) -> (String, String) {
     match line.split_once(':') {
         Some((name, text)) if !name.trim().is_empty() && !text.trim().is_empty() => {
@@ -37,10 +32,6 @@ fn parse_line(line: &str) -> (String, String) {
 
 impl Bot {
     /// Runs the interactive terminal chat loop until `!quit`/EOF.
-    /// Input: `&self`. Output: none. Uses: `self.state()`, `start_chat`, `parse_line`,
-    /// `append_history`, `remember`, `too_many_questions`, `self.generate`, `chat_budget`,
-    /// `strip_name`, `parse_reply`. Used by: `main` (`main.rs`), when invoked as
-    /// `cargo run -- chat`.
     pub async fn chat_cli(&self) {
         let channel = ChannelId::new(CLI_CHANNEL);
         {

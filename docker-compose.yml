@@ -9,3 +9,4 @@ services:
       - ./photos:/data/photos:ro
 volumes:
   durum:
+    name: discord-bot-data

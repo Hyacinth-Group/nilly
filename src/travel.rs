@@ -131,9 +131,7 @@ const EVENTS: &[Event] = &[
 ];
 
 // day number from a calendar date (1970-01-01 = 0), no external crate
-/// Input: `year`/`month`/`day: i64`. Output: `i64` — days since 1970-01-01, via Howard
-/// Hinnant's `days_from_civil` algorithm. Used by: `on_day` below (event start dates),
-/// `memory.rs`'s date tests, indirectly `year_of` below.
+/// Uses Howard Hinnant's `days_from_civil` algorithm.
 pub fn day_number(year: i64, month: i64, day: i64) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
     let era = year.div_euclid(400);
@@ -144,8 +142,6 @@ pub fn day_number(year: i64, month: i64, day: i64) -> i64 {
     era * 146097 + doe - 719468
 }
 
-/// Input: `day: i64` — a local day number. Output: `i64` — the calendar year it falls in.
-/// Uses: `memory::date_from_unix`. Used by: `on_day` below, the only caller.
 fn year_of(day: i64) -> i64 {
     memory::date_from_unix(day * 86400)[..4]
         .parse()
@@ -153,10 +149,7 @@ fn year_of(day: i64) -> i64 {
 }
 
 // is there a trip on the given local day?
-/// Input: `day: i64` — a local day number. Output: `Option<Trip>` — the trip covering
-/// `day`, if any, checking both this year's and last year's occurrence of each `EVENTS`
-/// entry (so a trip spanning New Year's still matches). Uses: `year_of`, `day_number`,
-/// `EVENTS`. Used by: `now`/`tomorrow` below, `agenda_entries`-adjacent tests.
+/// Checks this year's and last year's event occurrences so New-Year-spanning trips match.
 pub fn on_day(day: i64) -> Option<Trip> {
     let this_year = year_of(day);
     for event in EVENTS {
@@ -180,16 +173,11 @@ pub fn on_day(day: i64) -> Option<Trip> {
     None
 }
 
-/// Input: none. Output: `i64` — today's local day number. Uses: `sleep::local_time`,
-/// `now_unix`. Used by: `now`/`tomorrow` below, `poke_cycle` (`cycle_background.rs`),
-/// `status_text` below.
+/// Today's local day number.
 pub fn today() -> i64 {
     sleep::local_time(now_unix()).0
 }
 
-/// Input: none. Output: `Option<Trip>` — the trip underway today, if any. Uses: `on_day`,
-/// `today`. Used throughout `src/bot/cycle/cycle_*.rs`/`handler_event.rs` wherever
-/// travel/no-travel behavior branches.
 pub fn now() -> Option<Trip> {
     if lang::Lang::current() == lang::Lang::En {
         return None;
@@ -198,9 +186,6 @@ pub fn now() -> Option<Trip> {
 }
 
 // a trip starting tomorrow but not already underway today
-/// Input: none. Output: `Option<Trip>` — a trip that starts tomorrow, only if there's no
-/// trip already underway today (avoids re-announcing an ongoing one). Uses: `today`,
-/// `on_day`. Used by: `poke_cycle` (`cycle_background.rs`), the only caller.
 pub fn tomorrow() -> Option<Trip> {
     if lang::Lang::current() == lang::Lang::En {
         return None;
@@ -213,9 +198,6 @@ pub fn tomorrow() -> Option<Trip> {
 }
 
 // the line that goes into the system message
-/// Input: none. Output: `String` — a Turkish "you're currently traveling"/"you're leaving
-/// tomorrow" line, or `""` if neither applies. Uses: `now`, `today`, `tomorrow`. Used by:
-/// `system_text` (`provider_system.rs`), `modal.rs`'s embed builders.
 pub fn status_text() -> String {
     match now() {
         Some(trip) => format!(

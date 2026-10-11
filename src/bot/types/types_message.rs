@@ -22,10 +22,6 @@ struct ChatMessage {
 }
 
 /// Builds a plain user turn (no image).
-/// Input: `text` — anything convertible to `String` (a `String` or `&str`).
-/// Output: `ChatMessage{role: "user", image: None, ..}`.
-/// Used throughout `impl Bot` and the agents wherever a one-off user message is sent, e.g.
-/// `Bot::analyze`, `Bot::pick_name`, `chat_cli.rs`.
 fn user(text: impl Into<String>) -> ChatMessage {
     ChatMessage {
         role: "user",
@@ -36,9 +32,6 @@ fn user(text: impl Into<String>) -> ChatMessage {
 
 // a user message with an image attached: both the text and the image go to the model
 /// Builds a user turn with an attached image.
-/// Input: `text` — message text; `url` — the image's URL (both `impl Into<String>`).
-/// Output: `ChatMessage{role: "user", image: Some(url), ..}`.
-/// Used by: `Handler::message` (`handler_event.rs`) when a Discord message carries an image.
 fn user_with_image(text: impl Into<String>, url: impl Into<String>) -> ChatMessage {
     ChatMessage {
         role: "user",
@@ -48,8 +41,6 @@ fn user_with_image(text: impl Into<String>, url: impl Into<String>) -> ChatMessa
 }
 
 /// Builds an assistant turn (the bot's own prior reply, for seeding chat history).
-/// Input: `text` — the reply text. Output: `ChatMessage{role: "assistant", image: None, ..}`.
-/// Used by: `start_chat` (`provider_system.rs`), `chat_reply.rs`, `chat_cli.rs`.
 fn assistant(text: impl Into<String>) -> ChatMessage {
     ChatMessage {
         role: "assistant",
@@ -62,10 +53,7 @@ fn assistant(text: impl Into<String>) -> ChatMessage {
 // multi-part array instead of plain text; the shape matches the image commenter in
 // agents.rs, since providers understand this same format
 /// Serializes one `ChatMessage` into the JSON shape a chat/completions request expects.
-/// Input: `m: &ChatMessage`. Output: `serde_json::Value` — `{role, content: string}` if
-/// `m.image` is `None`, or `{role, content: [{type:"text",...}, {type:"image_url",...}]}` if
-/// it's `Some`. Uses: `serde_json::json!`. Used by: `Bot::ask_split`/`ask_raw_stream`
-/// (`provider_ask.rs`), which map this over the whole history to build a request body.
+/// Image turns use text/image_url content blocks; other turns use a plain content string.
 fn message_json(m: &ChatMessage) -> serde_json::Value {
     match &m.image {
         None => serde_json::json!({ "role": m.role, "content": m.content }),

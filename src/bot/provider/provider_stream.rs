@@ -1,11 +1,5 @@
 /// Parses a single SSE line.
-/// Input: `line: &str` — one raw line from the stream (may or may not start with `"data:"`).
-/// Output: `Option<SseData>` — `None` for a non-`data:` line (keepalive comment) or one that
-/// fails to parse as `StreamResponse` JSON; `Some(SseData{done:true,..})` for the literal
-/// `"data: [DONE]"` marker; otherwise `Some` with `chunk`/`usage` filled in from the parsed
-/// `StreamResponse`. Uses: `StreamResponse` (`provider_types.rs`), `Chunk`.
-/// Used by: `StreamReader::next`/`process_lines` below, and directly by the `tests_1.rs`
-/// `sse_parses` test.
+/// Ignores non-data lines and malformed JSON; `[DONE]` marks the stream complete.
 fn extract_sse(line: &str) -> Option<SseData> {
     let data = line.trim().strip_prefix("data:")?.trim();
     if data == "[DONE]" {
@@ -51,10 +45,7 @@ struct StreamReader {
 
 impl StreamReader {
     /// Fetches the next parsed chunk, reading and buffering more of the HTTP body as needed.
-    /// Input: `&mut self`. Output: `Result<Option<Chunk>, BotError>` — `Ok(Some(chunk))` for
-    /// the next piece of content/thought, `Ok(None)` once the stream is fully drained, `Err`
-    /// on a read failure. Uses: `self.response.chunk()`, `process_lines`, `apply_data`,
-    /// `extract_sse`. Used by: `Bot::send_stream` (`provider_send_stream.rs`), in a loop.
+    /// Returns `None` when fully drained, or an error on a body-read failure.
     async fn next(&mut self) -> Result<Option<Chunk>, BotError> {
         loop {
             if let Some(p) = self.queue.pop() {
@@ -86,9 +77,6 @@ impl StreamReader {
     }
 
     // applies the done/usage side effects; the chunk itself is returned, not queued
-    /// Input: `&mut self`, `v: &SseData` — one parsed SSE line's result. Output: none
-    /// (updates `self.done`/`self.usage`; the `chunk` field of `v` is left to the caller).
-    /// Used by: `next` and `process_lines` above/below.
     fn apply_data(&mut self, v: &SseData) {
         if v.done {
             self.done = true;
@@ -101,10 +89,7 @@ impl StreamReader {
     // only complete lines are processed; trailing incomplete bytes wait in the buffer
     // (even if a utf-8 character is split across chunks, it resolves once the line completes)
     /// Splits `self.buffer` on `\n`, parses each complete line, and queues the resulting
-    /// chunks. Input: `&mut self`. Output: none (drains the consumed prefix of `self.buffer`,
-    /// pushes parsed `Chunk`s onto `self.queue` in pop-first order, applies each line's
-    /// done/usage via `apply_data`). Uses: `extract_sse`. Used by: `next` above, once more
-    /// bytes have arrived on the wire.
+    /// chunks in arrival order, retaining any incomplete trailing line.
     fn process_lines(&mut self) {
         let mut start = 0;
         let mut items = Vec::new();

@@ -75,9 +75,7 @@ pub struct Growth {
     pub name: Option<String>,
 }
 
-/// Input: none. Output: `Growth` — parsed from `durum/gelisim.md`, or a fresh one (`birth =
-/// now`) if the file is empty/missing. Uses: `now_unix`, `memory::read`. Used by:
-/// `State::load` (`types_chat_state.rs`).
+/// Loads saved growth state, starting a fresh birth timestamp if the record is missing/empty.
 pub fn load() -> Growth {
     let mut growth = Growth {
         birth: now_unix(),
@@ -100,8 +98,6 @@ pub fn load() -> Growth {
     growth
 }
 
-/// Input: `growth: &Growth`. Output: none (writes `durum/gelisim.md` as `key: value` lines).
-/// Uses: `memory::write`. Used by: `Bot::check_growth`/`pick_name` (`cycle_growth.rs`).
 pub fn save(growth: &Growth) {
     memory::write(
         "gelisim.md",
@@ -116,17 +112,12 @@ pub fn save(growth: &Growth) {
     );
 }
 
-/// Input: `growth: &Growth`. Output: `i64` — whole days since `growth.birth`. Uses:
-/// `now_unix`. Used by: `earned_stage`/`stage_text` below, `modal::mind_embeds`/
-/// `summary_modal`/`status_message`.
+/// Returns whole elapsed days since the bot's first run.
 pub fn days(growth: &Growth) -> i64 {
     (now_unix() - growth.birth) / 86400
 }
 
 // the earned stage: the highest stage that clears both the day and chat thresholds
-/// Input: `growth: &Growth`. Output: `usize` — index into `STAGES`; the highest stage whose
-/// `min_days`/`min_chats` are both satisfied (0 if none). Uses: `days`, `STAGES`. Used by:
-/// `Bot::check_growth` (`cycle_growth.rs`).
 pub fn earned_stage(growth: &Growth) -> usize {
     let d = days(growth);
     STAGES
@@ -138,18 +129,12 @@ pub fn earned_stage(growth: &Growth) -> usize {
         .unwrap_or(0)
 }
 
-/// Input: `growth: &Growth`. Output: `&'static Stage` — `STAGES[growth.stage]` (clamped, in
-/// case `stage` was ever loaded out of range). Uses: `STAGES`. Used by: `check_growth`
-/// (`cycle_growth.rs`), `stage_text` below, `handler_event.rs`'s `message` (confidence),
-/// `poke_cycle` (`cycle_background.rs`, poke multiplier), `modal.rs`'s embed builders.
+/// Clamps a persisted stage index to the available stages.
 pub fn stage(growth: &Growth) -> &'static Stage {
     &STAGES[growth.stage.min(STAGES.len() - 1)]
 }
 
 // the section that goes into the system message
-/// Input: `growth: &Growth`. Output: `String` — the Turkish "GELİŞİM EVREN" system-message
-/// section (stage name, day count, chat count, description). Uses: `stage`, `days`. Used
-/// by: `system_text` (`provider_system.rs`).
 pub fn stage_text(growth: &Growth) -> String {
     let s = stage(growth);
     format!(
@@ -162,9 +147,7 @@ pub fn stage_text(growth: &Growth) -> String {
 }
 
 // collapses the model's name suggestion down to a single word; None if it didn't work out
-/// Input: `text: &str` — the model's raw `NAME_PICK` reply. Output: `Option<String>` — the
-/// first alphanumeric-filtered word (max 20 chars), or `None` if that's under 2 characters.
-/// Used by: `Bot::pick_name` (`cycle_growth.rs`).
+/// Keeps the first word's alphanumeric characters, capped at 20; requires at least two.
 pub fn clean_name(text: &str) -> Option<String> {
     let candidate: String = text
         .split_whitespace()

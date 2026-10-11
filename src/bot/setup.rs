@@ -1,8 +1,6 @@
 // ---------- startup ----------
 
-/// Input: `name: &str` — an environment variable name. Output: `Result<String, BotError>` —
-/// the trimmed value, or an error naming which variable is missing/empty. Used by:
-/// `Bot::setup` below, `main` (for `DISCORD_TOKEN`).
+/// Reads and trims a required environment setting; errors name a missing/empty variable.
 fn setting(name: &str) -> Result<String, BotError> {
     match crate::config::runtime_value(name) {
         Ok(v) if !v.trim().is_empty() => Ok(v.trim().to_string()),
@@ -15,9 +13,6 @@ impl Bot {
     // directories, loads state from disk, and assembles the bot. Doesn't connect to
     // Discord, doesn't need a token: both main and chat CLI mode go through this.
     /// Assembles a ready-to-use `Bot` from `.env`/disk state, without touching Discord.
-    /// Input: none (reads environment variables and `durum/` files). Output:
-    /// `Result<Arc<Bot>, BotError>`. Uses: `setting`, `State::load`, `sleep::update`,
-    /// `memory::read`. Used by: `main` (both the Discord path and `cargo run -- chat`).
     fn setup() -> Result<Arc<Bot>, BotError> {
         // BOT_LANG: resolved once here (first touch), fixed for the rest of the process —
         // every prompts::current()/strings::t() call downstream reads this same choice.
@@ -129,9 +124,6 @@ impl Bot {
     // caller only builds the format! while debug is on). Not written to memory or the
     // channel note — the bot shouldn't mistake it for its own words — and since it's a
     // bot message, it doesn't reach the message handler either
-    /// Input: `&self`; `ctx: &Context`; `channel: ChannelId`; `text: String`. Output: none
-    /// (no-op if `self.state().debug` is false). Uses: `self.debug_channel`,
-    /// `modal::info_embed`. Used by: `debug_trace` below, the only caller.
     async fn debug_note(&self, ctx: &Context, channel: ChannelId, text: String) {
         if !self.state().debug {
             return;
@@ -151,9 +143,6 @@ impl Bot {
     }
 
     // sends several traces as a single line; silent if there's nothing to trace or debug is off
-    /// Input: `&self`; `ctx: &Context`; `channel: ChannelId`; `enabled: bool`; `trace:
-    /// &[String]` — this turn's decision notes. Output: none. Uses: `debug_note` above.
-    /// Used by: `Bot::reply` (`chat_reply.rs`), `Handler::message` (`handler_event.rs`).
     async fn debug_trace(
         &self,
         ctx: &Context,
@@ -167,8 +156,7 @@ impl Bot {
     }
 }
 
-/// Input: none. Output: none — resolves once ctrl-c or (on Unix) SIGTERM is received.
-/// Used by: `main`'s shutdown-handling `tokio::spawn`, the only caller.
+/// Waits for ctrl-c or, on Unix, SIGTERM.
 async fn wait_for_shutdown() {
     let ctrl_c = tokio::signal::ctrl_c();
     #[cfg(unix)]

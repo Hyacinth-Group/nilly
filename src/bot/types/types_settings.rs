@@ -43,9 +43,7 @@ const THOUGHT_BUTTON: &str = "show_thought"; // custom_id of the thought button 
 // debug uses a smaller Some() so a dev/test run doesn't burn tokens.
 const REPLY_CAP: u32 = 4096;
 /// Expands to the token budget for a chat reply.
-/// Input: none. Output: `Option<u32>` — `Some(2000)` in a debug build, `Some(REPLY_CAP)` in
-/// release. Uses: the `REPLY_CAP` constant above. Used directly by `generate_stream`'s caller
-/// in `chat_reply.rs` and, via `chat_budget()`, by `chat_cli.rs`.
+/// Debug builds allow 2000 tokens; release builds use `REPLY_CAP`.
 macro_rules! reply_budget {
     () => {
         if cfg!(debug_assertions) {
@@ -60,8 +58,6 @@ macro_rules! reply_budget {
 // same budget (chat_cli uses it too), so the cap isn't duplicated in two places.
 /// Callable wrapper around the `reply_budget!` macro, for use from files where the macro
 /// itself isn't in scope (see the textual-order note above).
-/// Input: none. Output: `Option<u32>`, identical to `reply_budget!()`. Uses: `reply_budget!`.
-/// Used by: `Bot::chat_cli` (src/chat_cli.rs) as the budget for `generate`.
 fn chat_budget() -> Option<u32> {
     reply_budget!()
 }
@@ -108,10 +104,6 @@ const VERSION_COMMIT: &str = env!("VERSION_COMMIT");
 const VERSION_DATE: &str = env!("VERSION_DATE");
 
 /// Formats the running build's version string, e.g. `v0.2.0 (69e2851, 2026-09-02)`.
-/// Input: none. Output: `String`. Uses: `VERSION` (from `Cargo.toml` via `CARGO_PKG_VERSION`),
-/// `VERSION_COMMIT`/`VERSION_DATE` (from `build.rs`, see that file's `main`).
-/// Used by: `modal::status_message`, `modal::settings_embed`, `handler_event.rs`'s
-/// `guild_create` (startup version announcement).
 fn version_text() -> String {
     format!("v{VERSION} ({VERSION_COMMIT}, {VERSION_DATE})")
 }
