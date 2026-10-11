@@ -48,10 +48,7 @@ pub const FAVORITE_NOTE: &str = "canın ciğerin, ne yaparsa yapsın arkasındas
 // ---------- database open + primitives ----------
 
 /// Opens (creating if missing) the redb database at `path` and makes it the process-wide
-/// store every other function in this module reads/writes through. Input: `path: &Path`.
-/// Output: none (a failure to open is fatal — logged then the process can't proceed, same
-/// severity as today's directory-creation failures). Used by: `Bot::setup` (`setup.rs`),
-/// once, before `State::load` runs.
+/// store. Opening failure is fatal; initialize before loading any state.
 pub fn init(path: &Path) {
     let db = match Database::create(path) {
         Ok(db) => db,
@@ -70,17 +67,12 @@ pub fn init(path: &Path) {
     let _ = DB.set(db);
 }
 
-/// Input: none. Output: `&'static Database`. Panics if `init` hasn't run yet (a
-/// programming error, not a runtime condition — every real entry point calls `init` first).
-/// Used by every function below.
+/// Panics if called before `init`, which is a programming error.
 fn db() -> &'static Database {
     DB.get().expect("memory::init wasn't called")
 }
 
-/// Input: `rel: &str` — a path relative to `STATE_DIR` (e.g. `"kisiler/1.md"`), used as the
-/// database key. Output: `String` — the stored content, or `""` if there's no entry or the
-/// database can't be read. Used throughout the crate (`State::load`, agents, commands)
-/// wherever a durum record is read.
+/// Record keys are paths relative to STATE_DIR. Missing or unreadable records return "".
 pub fn read(rel: &str) -> String {
     let Ok(txn) = db().begin_read() else {
         return String::new();
@@ -96,9 +88,7 @@ pub fn read(rel: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Input: `rel: &str`; `content: &str` — the full new value. Output: none (failures are
-/// logged, not propagated). Uses: `db`, `now_unix`. Used throughout the crate wherever a
-/// whole durum record is rewritten.
+/// Replaces the whole record; write failures are logged, not propagated.
 pub fn write(rel: &str, content: &str) {
     if let Err(e) = write_inner(rel, content) {
         log::error!("couldn't write {rel}: {e}");
@@ -109,10 +99,8 @@ fn write_inner(rel: &str, content: &str) -> Result<(), redb::Error> {
     write_with_mtime_inner(rel, content, now_unix() as u64)
 }
 
-/// Input: `rel`; `content`; `modified: u64` — a specific unix timestamp instead of "now".
-/// Output: none (failures logged). Uses: `db`. Used by: `migrate::run`, to seed `MODIFIED`
-/// with each source file's real historical mtime instead of resetting every record's
-/// recency to migration day.
+/// Preserves source-file Unix mtimes during migration instead of resetting recency to now.
+/// Write failures are logged.
 pub(crate) fn write_with_mtime(rel: &str, content: &str, modified: u64) {
     if let Err(e) = write_with_mtime_inner(rel, content, modified) {
         log::error!("couldn't write {rel}: {e}");
@@ -129,9 +117,7 @@ fn write_with_mtime_inner(rel: &str, content: &str, modified: u64) -> Result<(),
     Ok(())
 }
 
-/// Input: none. Output: `u64` — how many records `CONTENT` currently holds (0 if it can't
-/// be read). Uses: `db`. Used by: `migrate::run`, to refuse overwriting a populated target
-/// without `--force`.
+/// Counts stored records, returning zero if the database cannot be read.
 pub(crate) fn record_count() -> u64 {
     let Ok(txn) = db().begin_read() else {
         return 0;
@@ -146,8 +132,6 @@ pub(crate) fn record_count() -> u64 {
 // happens inside one write transaction, so it's atomic even under concurrent writers (redb
 // serializes write transactions internally — the get here can never race with another
 // writer's insert)
-/// Input: `rel: &str`; `line: &str` — one line to add (a trailing `\n` is added). Output:
-/// none (failures are logged). Uses: `db`, `now_unix`. Used by: `add_event` below.
 fn append(rel: &str, line: &str) {
     let result: Result<(), redb::Error> = (|| {
         let txn = db().begin_write()?;
@@ -173,9 +157,6 @@ fn append(rel: &str, line: &str) {
 // a raw chunk dropped by summarizing goes to the archive; nothing is ever deleted. arsiv/
 // stays real files on disk (see module doc) — write-only, human-inspection-only, never read
 // back by the bot, so it's kept out of the transactional store on purpose.
-/// Input: `rel: &str` — the original record's key; `content: &str` — the chunk being
-/// dropped. Output: none. Uses: `archive_append`, `date_time`. Used by: `Bot::summarizer`
-/// (`agents.rs`), whenever a record shrinks.
 pub fn archive(rel: &str, content: &str) {
     archive_append(
         &format!("arsiv/{rel}"),
@@ -183,9 +164,6 @@ pub fn archive(rel: &str, content: &str) {
     );
 }
 
-/// Input: `rel: &str` — path relative to `STATE_DIR`; `line: &str` — appended verbatim plus
-/// a trailing `\n`. Output: none (failures logged). Uses: `ARCHIVE_LOCK`. Used by: `archive`
-/// above, the only caller.
 fn archive_append(rel: &str, line: &str) {
     let _lock = ARCHIVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let p = Path::new(STATE_DIR).join(rel);
@@ -205,9 +183,7 @@ fn archive_append(rel: &str, line: &str) {
     }
 }
 
-/// Input: `name: &str`. Output: `String` — a lowercase, Turkish-letter-simplified,
-/// hyphen-separated slug (e.g. `"Emin Şeyrek"` → `"emin-seyrek"`), or `"bilinmeyen"` if
-/// nothing alphanumeric remains. Used by: `add_topic` below.
+/// Lowercase, Turkish-letter-simplified slug; defaults to "bilinmeyen" without alphanumerics.
 pub fn slug(name: &str) -> String {
     let mut s = String::new();
     for c in name.chars().flat_map(|c| c.to_lowercase()) {
@@ -238,23 +214,18 @@ pub fn slug(name: &str) -> String {
 }
 
 // YYYY-MM-DD, no external crate
-/// Input: none. Output: `String` — today's date, `YYYY-MM-DD`. Uses: `date_from_unix`,
-/// `now_unix`. Used by: `date_time` below, `month` below, `modal::mind_embeds`.
+/// Today's UTC date.
 pub fn date() -> String {
     date_from_unix(now_unix())
 }
 
 // every record lands with a seconds-precision timestamp: YYYY-MM-DD HH:MM:SS
-/// Input: none. Output: `String` — `"YYYY-MM-DD HH:MM:SS"`. Uses: `date`,
-/// `sleep::time_of_day`. Used by: `archive` above, `add_topic`/`add_event` below,
-/// `Bot::diarist` (`agents.rs`).
 pub fn date_time() -> String {
     format!("{} {}", date(), crate::sleep::time_of_day())
 }
 
-/// Input: `unix: i64` — a Unix timestamp. Output: `String` — `"YYYY-MM-DD"` in UTC, via
-/// Howard Hinnant's `civil_from_days` algorithm (no external crate). Used by: `date` above,
-/// `travel::year_of`/`day_number`-adjacent tests, `modal::status_message`.
+/// Formats a Unix timestamp as YYYY-MM-DD in UTC using Howard Hinnant's
+/// `civil_from_days` algorithm.
 pub fn date_from_unix(unix: i64) -> String {
     let z = unix.div_euclid(86400) + 719468;
     let era = z.div_euclid(146097);
@@ -268,9 +239,7 @@ pub fn date_from_unix(unix: i64) -> String {
     format!("{y:04}-{m:02}-{d:02}")
 }
 
-/// Input: none. Output: `String` — `"YYYY-MM"` (the first 7 characters of `date()`). Used
-/// by: `add_event`/`over_limit`/`retrieve` below, `Bot::send_news`/`news_cycle`
-/// (`cycle_news.rs`, `awaiting_comment` window's event record name).
+/// Current UTC month as YYYY-MM.
 pub fn month() -> String {
     date()[..7].to_string()
 }
@@ -294,12 +263,8 @@ pub struct Person {
 }
 
 impl Person {
-    /// Input: `id: u64`; `text: &str` — a `kisiler/<id>.md` record's contents. Output:
-    /// `Person`. Unknown lines are ignored; the field prefixes it looks for
-    /// (`kullanici_adi:`, `eski_adlar:`, `puan:`, `etiket:`, `not:`) are Turkish on purpose
-    /// — they're the on-disk format (see `docs/state-files.md`), not translated so
-    /// existing data keeps parsing. Used by: `read_person`/`person_summaries` below,
-    /// `Bot::diarist` (`agents.rs`).
+    /// Ignores unknown lines. Turkish field prefixes (`kullanici_adi:`, `eski_adlar:`,
+    /// `puan:`, `etiket:`, `not:`) are persisted format keys, retained so existing data parses.
     pub fn parse(id: u64, text: &str) -> Person {
         let mut p = Person {
             id,
@@ -349,8 +314,7 @@ impl Person {
         p
     }
 
-    /// Input: `&self`. Output: `String` — the `kisiler/<id>.md` record format (inverse of
-    /// `parse`). Used by: `write_person` below.
+    /// Serializes the persisted person-record format.
     pub fn text(&self) -> String {
         let mut s = format!(
             "# {}\nid: {}\nkullanici_adi: {}\neski_adlar: {}\npuan: {:+}\netiket: {}\nnot: {}\n\n## Bildiklerin\n",
@@ -373,10 +337,7 @@ impl Person {
     }
 }
 
-/// Input: `id: u64`. Output: `Person` — parsed from `kisiler/<id>.md`, or an empty
-/// `Person{id, ..}` if there's no record. Uses: `read`, `Person::parse`. Used by:
-/// `Bot::diarist` (`agents.rs`), `modal::person_modal`, `retrieve` below (via `read`
-/// directly, not this — see that function).
+/// A missing record yields an empty person with the requested ID.
 pub fn read_person(id: u64) -> Person {
     let m = read(&format!("kisiler/{id}.md"));
     if m.is_empty() {
@@ -389,18 +350,13 @@ pub fn read_person(id: u64) -> Person {
     }
 }
 
-/// Input: `p: &Person`. Output: none (writes `kisiler/<p.id>.md`). Uses: `write`,
-/// `Person::text`. Used by: `Bot::diarist` (`agents.rs`), the only caller.
 pub fn write_person(p: &Person) {
     write(&format!("kisiler/{}.md", p.id), &p.text());
 }
 
 // ---------- topics and events ----------
 
-/// Input: `name: &str` — the topic name (used verbatim as the `# ` header on a new record,
-/// slugified for the key); `note: &str` — the dated note to append. Output: none. Uses:
-/// `db`, `slug`, `date_time`, `now_unix`. Used by: `Bot::diarist` (`agents.rs`), the only
-/// caller.
+/// Uses the topic name as the header and its slug as the record key; appends a dated note.
 pub fn add_topic(name: &str, note: &str) {
     let rel = format!("konular/{}.md", slug(name));
     let result: Result<(), redb::Error> = (|| {
@@ -428,9 +384,7 @@ pub fn add_topic(name: &str, note: &str) {
     }
 }
 
-/// Input: `channel: &str` — the channel name to record; `event: &str` — the one-line
-/// summary. Output: none (appends to `olaylar/<current month>.md`). Uses: `append`,
-/// `month`, `date_time`. Used by: `Bot::diarist` (`agents.rs`), the only caller.
+/// Appends a timestamped channel/event entry to the current month's record.
 pub fn add_event(channel: &str, event: &str) {
     append(
         &format!("olaylar/{}.md", month()),
@@ -440,9 +394,7 @@ pub fn add_event(channel: &str, event: &str) {
 
 // summaries for the modal display (most recently changed first)
 
-/// Input: none. Output: `Vec<Person>` — every `kisiler/*` record with a valid numeric id
-/// and non-empty name, most recently changed first. Uses: `files`, `stem`, `Person::parse`.
-/// Used by: `modal::mind_embeds`/`person_options`, the `/zihin` card.
+/// Omits records without a numeric Discord ID or a non-empty name.
 pub fn person_summaries() -> Vec<Person> {
     let mut list = Vec::new();
     for key in files("kisiler") {
@@ -460,9 +412,7 @@ pub fn person_summaries() -> Vec<Person> {
 }
 
 // (topic name, latest note)
-/// Input: none. Output: `Vec<(String, String)>` — up to 30 topics as (name, latest note),
-/// most recently changed first. Uses: `files`, `first_line`. Used by: `modal::mind_embeds`/
-/// `topics_modal`.
+/// Returns at most 30 topics with their latest notes.
 pub fn topic_summaries() -> Vec<(String, String)> {
     files("konular")
         .into_iter()
@@ -483,9 +433,6 @@ pub fn topic_summaries() -> Vec<(String, String)> {
 
 // event records for the last `month_count` months: (month, "- " lines); newest month first.
 // looking only at the current month gave an empty view at the start of a new month
-/// Input: `month_count: usize`. Output: `Vec<(String, Vec<String>)>` — up to `month_count`
-/// months as (`"YYYY-MM"`, its `"- "` lines), newest first. Uses: `files`, `stem`. Used by:
-/// `modal::mind_embeds`/`events_modal`.
 pub fn event_months(month_count: usize) -> Vec<(String, Vec<String>)> {
     files("olaylar")
         .into_iter()
@@ -505,9 +452,6 @@ pub fn event_months(month_count: usize) -> Vec<(String, Vec<String>)> {
 // ---------- channel history ----------
 
 // reads durum/kanallar/<id> records: (channel id, recent lines)
-/// Input: none. Output: `Vec<(u64, VecDeque<String>)>` — every channel history record as
-/// (channel id, non-empty lines). Uses: `files`, `stem`. Used by: `State::load`
-/// (`types_chat_state.rs`), the only caller (once, at startup).
 pub fn load_channel_history() -> Vec<(u64, VecDeque<String>)> {
     let mut list = Vec::new();
     for key in files("kanallar") {
@@ -526,11 +470,7 @@ pub fn load_channel_history() -> Vec<(u64, VecDeque<String>)> {
 
 // ---------- index ----------
 
-/// Input: `folder: &str` — a key prefix (e.g. `"kisiler"`, everything under it is
-/// `"kisiler/..."`). Output: `Vec<String>` — matching keys, most recently modified first.
-/// Uses: `db`, `MODIFIED`. Used by: `person_summaries`/`topic_summaries`/`event_months`/
-/// `load_channel_history`/`refresh_index`/`retrieve`/`over_limit` — every listing function
-/// in this module.
+/// Lists keys under a folder prefix, most recently modified first.
 fn files(folder: &str) -> Vec<String> {
     let prefix = format!("{folder}/");
     let (Ok(txn),) = (db().begin_read(),) else {
@@ -561,17 +501,11 @@ fn files(folder: &str) -> Vec<String> {
     list.into_iter().map(|(_, key)| key).collect()
 }
 
-/// Input: `key: &str` — a full record key (e.g. `"kisiler/1.md"`). Output: `&str` — the
-/// part after the last `/` with a trailing `.md` stripped (`"1"`). Used by:
-/// `person_summaries`/`event_months`/`load_channel_history`/`refresh_index` above/below,
-/// wherever an id/month used to come from `Path::file_stem()`.
 fn stem(key: &str) -> &str {
     let name = key.rsplit('/').next().unwrap_or(key);
     name.strip_suffix(".md").unwrap_or(name)
 }
 
-/// Input: `content: &str` — a record's contents. Output: `String` — its first line, with a
-/// leading `"# "` stripped. Used by: `topic_summaries` above.
 fn first_line(content: &str) -> String {
     content
         .lines()
@@ -592,9 +526,7 @@ struct PersonHeader {
     note: String,
 }
 
-/// Input: `text: &str` — a `kisiler/<id>.md` record's contents. Output: `PersonHeader`.
-/// Stops at the first `## ` heading (never descends into the `facts`/`events` lists).
-/// Used by: `refresh_index` below, the only caller.
+/// Stops at the first subsection heading, avoiding the facts/events lists.
 fn person_header(text: &str) -> PersonHeader {
     let mut header = PersonHeader {
         name: String::new(),
@@ -625,11 +557,6 @@ fn person_header(text: &str) -> PersonHeader {
 }
 
 // regenerates and returns INDEX.md: the "what I know" list sent with every reply
-/// Input: none. Output: `String` — the regenerated `INDEX.md` content (also written to the
-/// database). Uses: `files`, `stem`, `person_header`, `write`. Used by: `State::load`
-/// (`types_chat_state.rs`), `Bot::diarist`/`summarizer` (`agents.rs`),
-/// `Bot::cmd_agents` (`command/actions.rs`) — anywhere the person/topic/event listing
-/// might have changed.
 pub fn refresh_index() -> String {
     use std::fmt::Write as _;
     let mut output = String::from("## Kişiler\n");
@@ -689,9 +616,7 @@ const STOPWORDS: &[&str] = &[
 ];
 
 // search keywords from chat text: 4+ letters, common words filtered out
-/// Input: `texts: &[String]` — recent chat lines. Output: `Vec<String>` — up to 40 distinct
-/// lowercase words of 4+ letters, `STOPWORDS` excluded. Uses: `STOPWORDS`. Used by:
-/// `Bot::chat_system` (`provider_generate.rs`), feeding `retrieve` below.
+/// Caps the distinct keyword set at 40 lowercase words.
 pub fn keywords(texts: &[String]) -> Vec<String> {
     let mut list: Vec<String> = Vec::new();
     for m in texts {
@@ -709,9 +634,7 @@ pub fn keywords(texts: &[String]) -> Vec<String> {
     list
 }
 
-/// Input: `text: &str`; `keywords: &[String]`. Output: `usize` — how many `keywords` appear
-/// (case-insensitively) in `text`. Used by: `retrieve` below, twice (topic records and raw
-/// history lines).
+/// Counts case-insensitive keyword substring matches.
 fn score_matches(text: &str, keywords: &[String]) -> usize {
     let lower = text.to_lowercase();
     keywords
@@ -724,11 +647,6 @@ fn score_matches(text: &str, keywords: &[String]) -> usize {
 // menu option's description — enforce this exact limit strictly); "…" is included in the
 // count too, otherwise the trimmed result comes out to limit+1 characters (see
 // docs/decisions.md — this caused a live "Must be 100 or fewer in length" error)
-/// Input: `text: &str`; `limit: usize`. Output: `String` — `text` trimmed, or hard-cut to
-/// `limit - 1` characters plus a trailing `…` (so the total is always `<= limit`). Used
-/// throughout the crate wherever text has to fit a Discord field/embed limit (`modal.rs`,
-/// `retrieve` below, `Bot::firecrawl_search`/`wander` (`agenda.rs`), `Bot::research`
-/// (`chat_lookup.rs`)).
 pub fn trim(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
         text.trim().to_string()
@@ -740,15 +658,9 @@ pub fn trim(text: &str, limit: usize) -> String {
 
 // what to retrieve for this chat: the speakers' records, topic records touching the
 // subject, recent events, and old raw-memory lines matching a keyword. The budget is fixed.
-/// Input: `participants: &[String]` — names currently talking (up to 4 used);
-/// `name_to_id: &HashMap<String, u64>` — to resolve names to person records;
-/// `keywords: &[String]` — from `keywords` above; `history: &VecDeque<String>` — the raw
-/// message buffer; `exclude_recent: usize` — how many of the most recent `history` lines
-/// to skip (they're already in the chat, no need to retrieve them again).
-/// Output: `String` — sections (person records, up to 2 matching topic records, the month's
-/// last 8 events, up to 12 old keyword-matching lines) concatenated up to
-/// `CONTEXT_BUDGET` characters. Uses: `read`, `trim`, `files`, `score_matches`, `month`.
-/// Used by: `Bot::chat_system` (`provider_generate.rs`), the only caller.
+/// Uses at most four participants, two matching topics, eight events from the current
+/// month, and twelve older matching message lines. Skips `exclude_recent` history
+/// lines because they already appear in the chat; sections share `CONTEXT_BUDGET`.
 pub fn retrieve(
     participants: &[String],
     name_to_id: &std::collections::HashMap<String, u64>,
@@ -833,9 +745,8 @@ pub fn retrieve(
 }
 
 // records over their limit: (kind, record key)
-/// Input: none. Output: `Vec<(&'static str, String)>` — `("kisi", key)`/`("konu", key)`/
-/// `("olay", key)` for every record over `PERSON_LIMIT`/`TOPIC_LIMIT`/`EVENT_LIMIT`. Uses:
-/// `files`, `read`, `month`. Used by: `Bot::summarizer` (`agents.rs`), the only caller.
+/// Compares record byte lengths against the person/topic/event limits;
+/// only the current month's event record is considered.
 pub fn over_limit() -> Vec<(&'static str, String)> {
     let mut list = Vec::new();
     for key in files("kisiler") {

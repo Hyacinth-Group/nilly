@@ -8,8 +8,7 @@ use log::{Level, LevelFilter, Log, Metadata, Record};
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-/// Input: `f: LevelFilter`. Output: `u8` — 0 (off) through 5 (trace). Used by: `init` below,
-/// to store the configured level in the atomic `LEVEL`.
+/// Atomic log-level scale: 0 (off) through 5 (trace).
 fn filter_number(f: LevelFilter) -> u8 {
     match f {
         LevelFilter::Off => 0,
@@ -21,8 +20,7 @@ fn filter_number(f: LevelFilter) -> u8 {
     }
 }
 
-/// Input: `l: Level`. Output: `u8` — 1 (error) through 5 (trace), same scale as
-/// `filter_number`. Used by: `Sink::enabled` below.
+/// Uses the same numeric scale as `filter_number`.
 fn level_number(l: Level) -> u8 {
     match l {
         Level::Error => 1,
@@ -40,8 +38,7 @@ static COLOR: AtomicBool = AtomicBool::new(false);
 const RESET: &str = "\x1b[0m";
 const DIM: &str = "\x1b[2m";
 
-/// Input: none (reads the `LOG_LEVEL` env var). Output: `LevelFilter` — parsed value, or
-/// `Info` if unset/unrecognized. Used by: `init` below, the only caller.
+/// Unset or unrecognized LOG_LEVEL values default to Info.
 fn read_level() -> LevelFilter {
     match std::env::var("LOG_LEVEL")
         .unwrap_or_default()
@@ -57,8 +54,6 @@ fn read_level() -> LevelFilter {
     }
 }
 
-/// Input: `l: Level`. Output: `&'static str` — an ANSI color escape code for that level.
-/// Used by: `Sink::log` below.
 fn level_color(l: Level) -> &'static str {
     match l {
         Level::Error => "\x1b[1;31m", // red, bold
@@ -68,8 +63,6 @@ fn level_color(l: Level) -> &'static str {
     }
 }
 
-/// Input: `target: &str` — a log record's module path. Output: `bool` — whether it
-/// originates in this crate. Used by: `Sink::enabled` below.
 fn is_our_target(target: &str) -> bool {
     target.starts_with("discord_bot")
 }
@@ -80,10 +73,7 @@ fn is_our_target(target: &str) -> bool {
 struct Sink;
 
 impl Log for Sink {
-    /// Input: `&self`; `metadata: &Metadata`. Output: `bool` — whether this record should
-    /// be printed (our crate: up to the configured `LEVEL`; other crates: warn/error only).
-    /// Uses: `level_number`, `is_our_target`. Called by the `log` crate machinery for every
-    /// `log::info!`/`warn!`/etc. call in the process.
+    /// Applies the configured level to this crate; dependency logs are warn/error only.
     fn enabled(&self, metadata: &Metadata) -> bool {
         let passes = level_number(metadata.level()) <= LEVEL.load(Ordering::Relaxed);
         if is_our_target(metadata.target()) {
@@ -94,10 +84,6 @@ impl Log for Sink {
         }
     }
 
-    /// Input: `&self`; `record: &Record` — one log event. Output: none (prints a formatted
-    /// line to stdout, colored if `COLOR` is set; no-op if `enabled` returns false). Uses:
-    /// `self.enabled`, `memory::date`, `sleep::time`, `level_color`. Called by the `log`
-    /// crate machinery.
     fn log(&self, record: &Record) {
         if !self.enabled(record.metadata()) {
             return;
@@ -122,9 +108,7 @@ impl Log for Sink {
 static SINK: Sink = Sink;
 
 /// Installs `Sink` as the global logger and sets the level from `LOG_LEVEL`/color from
-/// `LOG_COLOR`. Input: none. Output: none. Uses: `read_level`, `filter_number`,
-/// `std::io::stdout().is_terminal()`, `log::set_max_level`/`set_logger`. Used by: `main`
-/// (`main.rs`), the only caller — must run before any other `log::` call.
+/// `LOG_COLOR`. Must run before any logging call.
 pub fn init() {
     let level = read_level();
     LEVEL.store(filter_number(level), Ordering::Relaxed);

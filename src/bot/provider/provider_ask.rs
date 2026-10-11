@@ -1,10 +1,5 @@
 impl Bot {
     /// Single-block-system convenience wrapper around `ask_split`.
-    /// Input: `&self`; `system: &str` — the whole system message (no fixed/variable split);
-    /// `history: &[ChatMessage]`; `max_tokens: u32`; `category: &'static str`.
-    /// Output: `Result<String, BotError>`, forwarded from `ask_split`. Uses: `ask_split`
-    /// (with `variable=""`, `budget=Some(max_tokens)`). Used by: `Bot::analyze`
-    /// (`provider_generate.rs`), the only caller — every agent call goes through `analyze`.
     async fn ask(
         &self,
         system: &str,
@@ -19,11 +14,6 @@ impl Bot {
     // the system message is two blocks: the fixed block is marked with cache_control on
     // providers that support it (anthropic/gemini); the variable block is re-read every time.
     // budget None means max_tokens isn't sent at all, and the model talks unbudgeted.
-    /// Input: `&self`; `fixed`/`variable: &str` — the two system-message blocks (see comment
-    /// above); `history: &[ChatMessage]`; `budget: Option<u32>` — `max_tokens`, or unbudgeted
-    /// if `None`; `category: &'static str`. Output: `Result<String, BotError>`. Uses:
-    /// `self.state().model`, `system_json`, `message_json`, `self.ask_raw`. Used by: `ask`
-    /// above and `Bot::generate` (`provider_generate.rs`).
     async fn ask_split(
         &self,
         fixed: &str,
@@ -50,14 +40,8 @@ impl Bot {
     // budget None means max_tokens isn't sent, and the model talks unbudgeted (the release chat path).
     /// The single streaming HTTP call site — opens the request and, on success, hands back a
     /// `StreamReader` positioned at the start of the stream (no chunks read yet).
-    /// Input: `&self`; `fixed`/`variable: &str`; `history: &[ChatMessage]`;
-    /// `budget: Option<u32>`; `category: &'static str` (same meaning as `ask_split`).
-    /// Output: `Result<StreamReader, BotError>`. Retries (pre-stream only — once a chunk
-    /// arrives, `Bot::send_stream` owns failure handling) on the same conditions as
-    /// `ask_raw`. Uses: `self.state().model`, `system_json`, `message_json`,
-    /// `self.reasoning_mandatory_known`/`apply_budget_floor`/`disable_reasoning`,
-    /// `self.http`, `trim_error`, `status_retryable`, `reasoning_mandatory_error`.
-    /// Used by: `Bot::generate_stream` (`provider_generate.rs`), the only caller.
+    /// Retries only before streaming begins; once chunks arrive, `send_stream` owns
+    /// failure handling. Retry conditions match `ask_raw`.
     async fn ask_raw_stream(
         &self,
         fixed: &str,

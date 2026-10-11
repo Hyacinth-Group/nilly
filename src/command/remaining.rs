@@ -2,10 +2,7 @@ impl Bot {
     // !uyan and the settings panel: doesn't delete the plan (deleting it would just let
     // it get rebuilt a minute later and put the bot back to sleep) — instead stays
     // "forced awake" until the planned sleep window would have ended
-    /// Input: `&self`. Output: none (sets `state.forced_awake_until` to the end of the
-    /// current sleep window, or 6h from now if none is active). Uses: `self.state()`,
-    /// `now_unix`. Used by: `Bot::cmd_wake` (`command/actions.rs`), `Handler::setting_button`
-    /// (`handler_buttons.rs`).
+    /// Without an active sleep window, the override lasts six hours.
     pub fn wake(&self) {
         let mut state = self.state();
         let now = now_unix();
@@ -21,10 +18,7 @@ impl Bot {
 
     // !uyu [saat] and the settings panel: a temporary sleep plan for testing.
     // `hours` is how long from now the plan should last.
-    /// Input: `&self`; `hours: i64`. Output: none (clears any forced-awake override, adds
-    /// a `sleep::Plan` running from now for `hours`). Uses: `self.state()`, `now_unix`,
-    /// `sleep::Plan`. Used by: `Bot::cmd_sleep` (`command/actions.rs`),
-    /// `Handler::setting_button` (`handler_buttons.rs`).
+    /// Clears any forced-awake override before adding the new plan.
     pub fn put_to_sleep(&self, hours: i64) {
         let mut state = self.state();
         let now = now_unix();
@@ -38,10 +32,6 @@ impl Bot {
     }
 
     // !debug ac|kapat (toggles if empty); persisted in durum/debug.md. Returns the new state.
-    /// Input: `&self`; `arg: &str` — `"ac"`/`"kapat"`/variants, or `""` to toggle. Output:
-    /// `bool` — the new debug state. Uses: `self.state()`, `memory::write`. Used by:
-    /// `Bot::cmd_debug` (`command/settings.rs`), `Handler::setting_button`
-    /// (`handler_buttons.rs`).
     pub fn set_debug(&self, arg: &str) -> bool {
         let mut state = self.state();
         let new_value = match arg.trim().to_lowercase().as_str() {
@@ -55,10 +45,7 @@ impl Bot {
     }
 
     // whether `id` is in openrouter's model catalog (queries the live /models list)
-    /// Input: `&self`; `id: &str` — a model id to check. Output: `bool` — `true` if `id` is
-    /// listed, or if the catalog request itself failed (fails open so an unrelated network
-    /// hiccup doesn't block `/model`). Uses: `self.http`. Used by: `Bot::cmd_model`
-    /// (`command/settings.rs`), the only caller.
+    /// Fails open if the catalog request fails, so a network hiccup doesn't block `/model`.
     async fn model_exists(&self, id: &str) -> bool {
         #[derive(Deserialize)]
         struct ModelList {

@@ -181,10 +181,6 @@ const EN: Prompts = Prompts {
     mood: en::MOOD,
 };
 
-/// Input: `lang: Lang`. Output: `&'static Prompts` — the compiled-in prompt set for that
-/// language. Used by: `current` below (the call sites throughout src/bot/*.rs, agents.rs,
-/// agenda.rs all go through `current`, never this directly — kept separate for the unit
-/// test below).
 fn get(lang: Lang) -> &'static Prompts {
     match lang {
         Lang::Tr => &TR,
@@ -192,9 +188,7 @@ fn get(lang: Lang) -> &'static Prompts {
     }
 }
 
-/// Input: none. Output: `&'static Prompts` — the active language's prompt set
-/// (`Lang::current()`). Used by: every prompt call site (was a bare `prompts::X` constant
-/// before the language split; now `prompts::current().x`).
+/// The compiled-in prompts for the process's active language.
 pub fn current() -> &'static Prompts {
     get(Lang::current())
 }

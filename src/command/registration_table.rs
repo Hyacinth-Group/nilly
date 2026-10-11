@@ -42,9 +42,6 @@ pub struct CommandDefinition {
 
 /// Builds one `CommandDefinition`, wrapping `$f` (an `async fn(&Bot, &Context,
 /// &CommandInteraction)`) into the boxed-future shape `CommandFn` requires.
-/// Input: `$name`/`$description: &'static str`; `$options: fn() -> Vec<CreateCommandOption>`;
-/// `$f` — the async handler function. Output: `CommandDefinition`. Used by: `definitions`
-/// below, once per command.
 macro_rules! define_command {
     ($name:expr, $description:expr, $options:expr, $f:expr) => {
         CommandDefinition {
@@ -57,11 +54,7 @@ macro_rules! define_command {
 }
 
 /// The single source of truth for every slash command.
-/// Input: none. Output: `&'static [CommandDefinition]`, built once (`OnceLock`) and reused.
-/// Uses: `define_command!`, each `options_*` fn (`registration_helpers.rs`), each `cmd_*`
-/// fn (`cards.rs`/`actions.rs`/`settings.rs`). Used by: `modal::register_commands`
-/// (registration), `Handler::interaction_create` (`handler_event.rs`, dispatch),
-/// `command.rs`'s own tests.
+/// Built once and reused for registration and dispatch.
 pub fn definitions() -> &'static [CommandDefinition] {
     static TABLE: OnceLock<Vec<CommandDefinition>> = OnceLock::new();
     TABLE.get_or_init(|| {

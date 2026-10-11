@@ -37,11 +37,8 @@ const JSON_CATEGORIES: [&str; 5] = ["gunlukcu", "isteklilik", "hedef_sec", "ruh_
 // field (reasoning-mandatory models can bury the reply in the thought); on a plain-prose
 // call, reasoning is NEVER treated as content (the coach agent shouldn't mistake a chain
 // of thought for the temperament summary it asked for).
-/// Input: `content: &Content` — a parsed response message; `category: &str` — the call-site
-/// tag (see `add_metric`), used to decide whether a JSON-in-thought fallback applies.
-/// Output: `Option<String>` — the trimmed `content.content` if non-empty, else (only for a
-/// `JSON_CATEGORIES` member) a `{...}` block extracted from the thought via `extract_json`
-/// and validated as JSON, else `None`. Used by: `Bot::ask_raw` (`provider_ask_raw.rs`).
+/// Uses non-empty reply content first. For JSON categories only, falls back to a
+/// JSON-validated object extracted from the thought.
 fn response_content(content: &Content, category: &str) -> Option<String> {
     if let Some(c) = content
         .content
@@ -64,9 +61,7 @@ fn response_content(content: &Content, category: &str) -> Option<String> {
 }
 
 // length of the thought in a response (for the error message: did the thought eat the whole budget)
-/// Input: `content: &Content`. Output: `usize` — character count of
-/// `reasoning_content`/`reasoning` (0 if both absent). Used by: `Bot::ask_raw`
-/// (`provider_ask_raw.rs`), only to report a diagnostic number in log/error messages.
+/// Counts Unicode characters in the thought, or zero when absent.
 fn thought_length(content: &Content) -> usize {
     content
         .reasoning_content
@@ -101,9 +96,6 @@ struct CacheDetail {
 
 impl Usage {
     /// Adds another `Usage`'s counters into `self` (field-by-field sum).
-    /// Input: `&mut self`, `other: Usage`. Output: none (mutates `self`).
-    /// Used by: `Bot::add_metric` (`types_bot.rs`), to fold a call's usage into
-    /// `Metrics.categories.entry(category)`.
     fn add(&mut self, other: Usage) {
         self.prompt_tokens += other.prompt_tokens;
         self.completion_tokens += other.completion_tokens;

@@ -1,15 +1,7 @@
 impl Bot {
     /// Drains a `StreamReader` to completion, live-editing Discord message(s) as text/thought
     /// arrive, then finalizes into sent messages, a reaction, and history/channel-note entries.
-    /// Input: `&self`; `ctx: &Context`; `channel: ChannelId`; `reader: StreamReader` (consumed
-    /// via repeated `reader.next()`); `context: StreamContext` (bot name, reply-to/reaction
-    /// targets, history/instruction/budget for a fallback `generate` call).
-    /// Output: `Result<StreamResult, BotError>` — `Sent(protocol_text)`, `Empty`, or `Silent`;
-    /// `Err` only propagates a stream read failure that also produced no usable content.
-    /// Uses: `stream_view`, `write_stream`, `strip_name`, `parse_reply`, `delete_messages`,
-    /// `self.is_repeat`, `self.generate` (dedup retry), `single_line`, `self.state()`,
-    /// `channel_notes`, `self.add_metric`. Used by: `Bot::reply` (`chat_reply.rs`), the only
-    /// caller.
+    /// A stream read failure propagates only if no usable content was produced.
     async fn send_stream(
         &self,
         ctx: &Context,

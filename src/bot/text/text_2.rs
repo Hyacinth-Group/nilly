@@ -12,17 +12,12 @@ struct Reply {
 
 impl Reply {
     // did nothing usable come out of the reply (no words, no reaction, no silence decision)?
-    /// Input: `&self`. Output: `bool`. Used by: `Bot::send_stream`/`send_reply`, to decide
-    /// between `StreamResult::Empty`/`None` and actually sending something.
     fn is_empty(&self) -> bool {
         self.lines.is_empty() && self.reaction.is_none() && !self.silent
     }
 
     // the form that goes into chat history and the channel notes: the model sees its own
     // protocol reflected back, and writes in the same form next turn
-    /// Input: `&self`. Output: `String` — `lines` joined with `\n`, plus a trailing
-    /// `"tepki: <emoji>"` line if `reaction` is set. Used by: `Bot::send_stream`/`send_reply`
-    /// (return value / history entry), `chat_cli.rs`.
     fn protocol_text(&self) -> String {
         let mut s = self.lines.join("\n");
         if let Some(t) = &self.reaction {
@@ -38,10 +33,7 @@ impl Reply {
 
 // does the line start with "tepki:" (case-insensitive, "tepki :" also counts)?
 // if so, returns what's after the colon
-/// Input: `line: &str`. Output: `Option<&str>` — the text after the colon if `line` starts
-/// with `"tepki"` (any case, optional space before `:`), else `None`. Uses: `casefold`.
-/// Used by: `parse_reply` (`text_3.rs`), `too_many_questions`/`send_reply`
-/// (`text_3.rs`/`provider_send_line.rs`, to exclude reaction lines from other counts).
+/// Matches "tepki" case-insensitively, allowing whitespace before the colon.
 fn reaction_body(line: &str) -> Option<&str> {
     let (head, rest) = line.split_once(':')?;
     (casefold(head.trim()) == "tepki").then_some(rest)
@@ -51,8 +43,6 @@ fn reaction_body(line: &str) -> Option<&str> {
 // "→", and typographic quotes all pass that test too, and sending one to Discord as a
 // Unicode reaction gets the request rejected with a 400. Known emoji blocks are counted,
 // nothing else qualifies as a reaction.
-/// Input: `c: char`. Output: `bool` — whether `c` opens a known emoji block. Used by:
-/// `extract_emoji` below.
 fn emoji_start(c: char) -> bool {
     matches!(c as u32,
         0xA9 | 0xAE | 0x2122 | 0x3030 | 0x303D | 0x3297 | 0x3299
@@ -63,18 +53,13 @@ fn emoji_start(c: char) -> bool {
 }
 
 // characters that can trail an emoji sequence: variation selector, ZWJ, keycap
-/// Input: `c: char`. Output: `bool` — `emoji_start(c)` or one of the trailing modifier
-/// codepoints (variation selector/ZWJ/keycap). Uses: `emoji_start`. Used by: `extract_emoji`
-/// below.
 fn emoji_continues(c: char) -> bool {
     emoji_start(c) || matches!(c as u32, 0xFE0F | 0xFE0E | 0x200D | 0x20E3)
 }
 
 // the first emoji sequence in the text; a trailing variation selector/ZWJ is included too.
 // None for a custom emoji form like ":kekw:" or when there's no emoji at all.
-/// Input: `text: &str`. Output: `Option<String>` — the first emoji sequence found (up to 8
-/// chars), or `None`. Uses: `emoji_start`, `emoji_continues`. Used by: `parse_reply`
-/// (`text_3.rs`), on a `reaction_body` result.
+/// Caps the first emoji sequence at eight characters.
 fn extract_emoji(text: &str) -> Option<String> {
     let (head, _) = text.char_indices().find(|(_, c)| emoji_start(*c))?;
     Some(
@@ -87,9 +72,7 @@ fn extract_emoji(text: &str) -> Option<String> {
 }
 
 // is the line, on its own, the silence marker?
-/// Input: `line: &str`. Output: `bool` — whether `line` is exactly `-`, `"-"`, `'-'`,
-/// `[sus]`, or `(sus)` (case-insensitive for the bracketed forms). Uses: `casefold`. Used
-/// by: `parse_reply` (`text_3.rs`).
+/// Recognizes a dash (optionally quoted), [sus], or (sus); bracketed forms ignore case.
 fn silence_marker(line: &str) -> bool {
     matches!(line, "-" | "\"-\"" | "'-'") || matches!(casefold(line).as_str(), "[sus]" | "(sus)")
 }
@@ -97,9 +80,6 @@ fn silence_marker(line: &str) -> bool {
 // what follows a "1. " / "2) "-style number prefix (digits are single-byte, so the slice
 // is safe). Not dropped on its own: "3. sınıftayım" ("I'm in 3rd grade"), "2. el araba"
 // ("2nd-hand car") are ordinals in Turkish, not list markers.
-/// Input: `s: &str`. Output: `Option<&str>` — the text after a `"N. "`/`"N) "` prefix, or
-/// `None` if `s` doesn't start with digits followed by one of those separators. Used by:
-/// `parse_reply` (`text_3.rs`), only when the reply as a whole looks like a real list.
 fn number_prefix(s: &str) -> Option<&str> {
     let digits = s.chars().take_while(char::is_ascii_digit).count();
     if digits == 0 {
@@ -115,9 +95,6 @@ fn number_prefix(s: &str) -> Option<&str> {
 // The number prefix is NOT stripped here but in parse_reply (only looking at the whole
 // reply makes it clear whether it's really a list or an ordinal number). The INSIDE of a
 // backtick is preserved: something like `__init__` is a code fragment carrying real information.
-/// Input: `line: &str`. Output: `String` — `line` with a leading `- `/`* `/`• ` marker and
-/// `**`/`__` markdown stripped (backtick-quoted spans left untouched). Used by: `parse_reply`
-/// (`text_3.rs`), on every line.
 fn clean_slop(line: &str) -> String {
     let mut s = line.trim();
     for prefix in ["- ", "* ", "• "] {

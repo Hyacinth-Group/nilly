@@ -52,23 +52,19 @@ pub struct Plan {
     pub end: i64,                    // sleep end (unix)
 }
 
-/// Input: `unix: i64`. Output: `(i64, i64)` — (local day number, seconds since local
-/// midnight), applying `timezone_offset()`. Used by: `time`/`time_of_day`/`time_text`/
-/// `update` below.
+/// Returns the local day number and seconds since midnight using TZ_OFFSET.
 pub fn local_time(unix: i64) -> (i64, i64) {
     let local = unix + timezone_offset();
     (local.div_euclid(86400), local.rem_euclid(86400))
 }
 
-/// Input: none. Output: `String` — current local time, `"HH:MM"`. Uses: `local_time`,
-/// `now_unix`. Used by: `time_text` below, `logging.rs`'s `Sink::log`.
+/// Formats the current local time as HH:MM.
 pub fn time() -> String {
     let (_, secs) = local_time(now_unix());
     format!("{:02}:{:02}", secs / 3600, (secs % 3600) / 60)
 }
 
-/// Input: none. Output: `String` — current local time, `"HH:MM:SS"`. Uses: `local_time`,
-/// `now_unix`. Used by: `memory::date_time`, the only caller.
+/// Formats the current local time as HH:MM:SS.
 pub fn time_of_day() -> String {
     let (_, secs) = local_time(now_unix());
     format!(
@@ -79,8 +75,7 @@ pub fn time_of_day() -> String {
     )
 }
 
-/// Input: none. Output: `String` — `"YYYY-MM-DD <Turkish weekday> HH:MM"`. Uses:
-/// `local_time`, `memory::date_from_unix`, `time`. Used by: `status_text` below.
+/// Formats the local date, Turkish weekday, and time as `YYYY-MM-DD <weekday> HH:MM`.
 pub fn time_text() -> String {
     let (day, _) = local_time(now_unix());
     let names = [
@@ -100,15 +95,12 @@ pub fn time_text() -> String {
     )
 }
 
-/// Input: none. Output: `i64` — a random offset in `[-2700, 2700)` seconds (±45 min). Used
-/// by: `build_plan` below, for both the start and end of a sleep window.
+/// Random offset in `[-2700, 2700)` seconds (±45 minutes).
 fn jitter() -> i64 {
     (rand::random::<u32>() % 5400) as i64 - 2700 // ±45 min
 }
 
-/// Input: `state: &State`. Output: `bool` — whether `state.myself`/`temperament` contain a
-/// tension-signaling Turkish word (hurt, on-edge, fixated, ...). Used by: `update` below,
-/// to pick the insomnia chance.
+/// Uses Turkish mood keywords to raise the insomnia probability.
 fn is_tense(state: &State) -> bool {
     let lower = format!("{} {}", state.myself, state.temperament).to_lowercase();
     [
@@ -124,10 +116,8 @@ fn is_tense(state: &State) -> bool {
     .any(|k| lower.contains(k))
 }
 
-/// Input: `day: i64` — the local day to plan for; `tense: bool` — from `is_tense`. Output:
-/// `Plan` — either a normal night (01:00±45→09:00±45) or, with `INSOMNIA_TENSE`/
-/// `INSOMNIA_CHANCE` odds, a sleepless one (up 01:00-06:00, asleep 06:00±45→13:00±45).
-/// Uses: `jitter`. Used by: `update` below, the only caller.
+/// Plans a normal night (01:00±45→09:00±45), or a sleepless one
+/// (up 01:00–06:00, asleep 06:00±45→13:00±45), with higher odds when tense.
 fn build_plan(day: i64, tense: bool) -> Plan {
     let night = (day + 1) * 86400 - timezone_offset(); // next day's 00:00, unix
     let chance = if tense {
@@ -153,10 +143,6 @@ fn build_plan(day: i64, tense: bool) -> Plan {
 }
 
 // builds a plan for tonight and last night if missing, drops ones that are over
-/// Input: `state: &mut State`. Output: none (adds today's/yesterday's `Plan` if missing,
-/// drops expired ones from `state.plans`). Uses: `local_time`, `build_plan`, `is_tense`,
-/// `memory::date_from_unix`. Used by: `Bot::setup` (`setup.rs`), `sleep_cycle`
-/// (`cycle_background.rs`), the only callers.
 pub fn update(state: &mut State) {
     let now = now_unix();
     let (today, _) = local_time(now);
@@ -175,9 +161,7 @@ pub fn update(state: &mut State) {
     state.plans.retain(|plan| plan.end > now);
 }
 
-/// Input: `state: &State`. Output: `bool` — `true` if `state.forced_awake_until` covers now
-/// (`!uyan` was used) or no plan's window contains now. Used throughout the crate wherever
-/// asleep/awake behavior branches (`Handler::message`, the background cycles, `modal.rs`).
+/// A forced-awake override takes precedence over the planned sleep windows.
 pub fn is_awake(state: &State) -> bool {
     let now = now_unix();
     if now < state.forced_awake_until {
@@ -190,9 +174,7 @@ pub fn is_awake(state: &State) -> bool {
 }
 
 // the "right now" line that goes into the system message
-/// Input: `state: &State` (currently unused — kept for a symmetric signature with
-/// `travel::status_text`). Output: `String` — the "ŞU AN" system-message line. Uses:
-/// `time_text`. Used by: `system_text` (`provider_system.rs`), `modal.rs`'s embed builders.
+/// `state` is unused; the signature mirrors `travel::status_text`.
 pub fn status_text(state: &State) -> String {
     let _ = state;
     time_text()

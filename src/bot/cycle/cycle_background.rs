@@ -1,7 +1,5 @@
-/// Input: `bot: &Bot`. Output: `Option<(ChannelId, String)>` — the last-talked-in channel
-/// plus its last 40 lines, if it has no open chat and there's already a profile to work
-/// from; `None` otherwise. Uses: `bot.state()`, `recent_messages`. Used by: `poke_cycle`/
-/// `prank_cycle` below.
+/// Returns the last active channel's last 40 lines only when no chat is open
+/// and a profile is available.
 fn idle_channel(bot: &Bot) -> Option<(ChannelId, String)> {
     let state = bot.state();
     let channel = state.last_channel?;
@@ -12,11 +10,6 @@ fn idle_channel(bot: &Bot) -> Option<(ChannelId, String)> {
 }
 
 // every so often, speaks up unprompted like a familiar face would
-/// Input: `bot: Arc<Bot>`; `ctx: Context`. Output: none (runs forever until shutdown).
-/// Uses: `sleep::is_awake`, `travel::now`/`tomorrow`/`today`, `growth::stage`,
-/// `default_channel`, `bot.post_problem`, `idle_channel`, `bot.generate`, `bot.send_lines`,
-/// `start_chat`. Used by: `Handler::ready` (`handler_event.rs`), via
-/// `run_cycle("poke", ...)`.
 async fn poke_cycle(bot: Arc<Bot>, ctx: Context) {
     loop {
         sleep(POKE_INTERVAL).await;
@@ -79,9 +72,6 @@ async fn poke_cycle(bot: Arc<Bot>, ctx: Context) {
 }
 
 // every so often, posts an image from the photos/ folder; sometimes with the hacked bit
-/// Input: `bot: Arc<Bot>`; `ctx: Context`. Output: none. Uses: `sleep::is_awake`,
-/// `travel::now`, `idle_channel`, `bot.run_prank`. Used by: `Handler::ready`
-/// (`handler_event.rs`), via `run_cycle("prank", ...)`.
 async fn prank_cycle(bot: Arc<Bot>, ctx: Context) {
     loop {
         sleep(PRANK_INTERVAL).await;
@@ -103,8 +93,6 @@ async fn prank_cycle(bot: Arc<Bot>, ctx: Context) {
 }
 
 // browses the news every so often; the first pass is 10 min after startup, then every 4 hours
-/// Input: `bot: Arc<Bot>`. Output: none. Uses: `sleep::is_awake`, `bot.wander` (`agenda.rs`).
-/// Used by: `Handler::ready` (`handler_event.rs`), via `run_cycle("wanderer", ...)`.
 async fn wanderer_cycle(bot: Arc<Bot>) {
     let mut first = true;
     loop {
@@ -126,10 +114,7 @@ async fn wanderer_cycle(bot: Arc<Bot>) {
 
 // every 10 minutes: processes the queue of closed chats and observations into memory.
 // Doesn't check whether the bot is asleep — things that pile up overnight get saved before morning too
-/// Input: `bot: Arc<Bot>`. Output: none. Uses: `sleep::is_awake`, `now_unix`,
-/// `recent_messages`, `bot.diarist`/`critic` (`agents.rs`), `trim_error`. Used by:
-/// `Handler::ready` (`handler_event.rs`), via `run_cycle("memory", ...)`. This is the
-/// consumer side of `State.memory_queue`, fed by `close_timed_out`/`news_cycle`.
+/// Consumes the memory queue, including chats closed with no critic pass.
 async fn memory_cycle(bot: Arc<Bot>) {
     loop {
         sleep(Duration::from_secs(10 * 60)).await;
@@ -181,9 +166,6 @@ async fn memory_cycle(bot: Arc<Bot>) {
 }
 
 // checks the sleep plan once a minute; on waking, replies to mentions received while asleep
-/// Input: `bot: Arc<Bot>`; `ctx: Context`. Output: none. Uses: `sleep::update`,
-/// `bot.sleep_transition` (`cycle_sleep.rs`), `bot.close_timed_out` (`cycle_growth.rs`).
-/// Used by: `Handler::ready` (`handler_event.rs`), via `run_cycle("sleep", ...)`.
 async fn sleep_cycle(bot: Arc<Bot>, ctx: Context) {
     loop {
         sleep(Duration::from_secs(60)).await;

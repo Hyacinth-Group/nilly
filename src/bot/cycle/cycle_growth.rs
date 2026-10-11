@@ -1,9 +1,6 @@
 impl Bot {
     // closes chats that have gone quiet: no goodbye message, no channel ban.
     // a closed chat's transcript goes to the diarist and the critic (moved to the queue in the memory step)
-    /// Input: `&self`; `ctx: &Context`. Output: none. Uses: `self.state()`, `end_chat`,
-    /// `transcript`, `self.debug_note`, `self.check_growth`. Used by: `sleep_cycle`
-    /// (`cycle_background.rs`), the only caller (runs on the minute tick).
     async fn close_timed_out(&self, ctx: &Context) {
         let closed: Vec<(ChannelId, Chat)> = {
             let mut state = self.state();
@@ -79,9 +76,6 @@ impl Bot {
 
 impl Bot {
     // jumps to the earned stage and persists it; picks a name once it reaches the established stage
-    /// Input: `&self`; `ctx: &Context`. Output: none. Uses: `growth::earned_stage`/`stage`/
-    /// `save`, `self.pick_name`. Used by: `close_timed_out` above, `news_cycle`
-    /// (`cycle_news.rs`), `Bot::cmd_agents` (`command/actions.rs`).
     async fn check_growth(&self, ctx: &Context) {
         let needs_name = {
             let mut state = self.state();
@@ -99,10 +93,6 @@ impl Bot {
     }
 
     // picks its own name, changes its nickname on every server, and announces it to the group
-    /// Input: `&self`; `ctx: &Context`. Output: none. Uses: `self.generate` (twice: pick,
-    /// then announcement), `NAME_PICK`/`NAME_ANNOUNCE` (`prompts.rs`), `growth::clean_name`,
-    /// `growth::save`, `default_channel`, `self.send_lines`, `start_chat`. Used by:
-    /// `check_growth` above, the only caller.
     async fn pick_name(&self, ctx: &Context) {
         let reply = match self
             .generate(

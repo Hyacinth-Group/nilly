@@ -13,12 +13,7 @@ impl Bot {
     // and an "empty response from the model" error. ask_raw_stream (streaming, chat) still
     // respects the user's mode: "hide" shows a thought counter, "show" shows the full text,
     // so it passes force=false.
-    /// Input: `&self`; `body: &mut serde_json::Value` — the outgoing request JSON;
-    /// `force: bool` — see comment above. Output: `bool` — whether a disabling field was
-    /// added (`false` on mistral, or when the mode isn't `Off` and `force` is false). Uses:
-    /// `self.state().thinking_mode`, `self.api_url`. Used by: `Bot::ask_raw`
-    /// (`provider_ask_raw.rs`, `force=true`) and `Bot::ask_raw_stream` (`provider_ask.rs`,
-    /// `force=false`), before sending a request.
+    /// Returns whether a disabling field was added.
     fn disable_reasoning(&self, body: &mut serde_json::Value, force: bool) -> bool {
         if !force && self.state().thinking_mode != ThinkingMode::Off {
             return false;
@@ -38,9 +33,6 @@ impl Bot {
     }
 
     // rolls back the fields disable_reasoning added (used to retry after a mandatory-reasoning error)
-    /// Input: `body: &mut serde_json::Value`. Output: none (removes the `"reasoning"`/
-    /// `"enable_thinking"` keys if present). Used by: `Bot::ask_raw`/`ask_raw_stream`, right
-    /// before retrying a request that got a `reasoning_mandatory_error` (`text_3.rs`) response.
     fn remove_reasoning_fields(body: &mut serde_json::Value) {
         if let Some(o) = body.as_object_mut() {
             o.remove("reasoning");
@@ -51,10 +43,6 @@ impl Bot {
     // raises max_tokens if it's below the floor, so a reasoning-mandatory model isn't left
     // without enough budget. Leaves it alone if max_tokens isn't set at all (an unbudgeted
     // call). Returns true if it changed anything (for logging).
-    /// Input: `body: &mut serde_json::Value`; `floor: u32` — the minimum `max_tokens`.
-    /// Output: `bool` — whether `body["max_tokens"]` was raised to `floor`. Used by:
-    /// `Bot::ask_raw_stream` (`provider_ask.rs`) when a model is already known to require
-    /// reasoning (`reasoning_mandatory_known`).
     fn apply_budget_floor(body: &mut serde_json::Value, floor: u32) -> bool {
         match body.get("max_tokens").and_then(serde_json::Value::as_u64) {
             Some(current) if (current as u32) < floor => {
@@ -68,10 +56,6 @@ impl Bot {
     // grows the budget on a model that won't let reasoning be turned off: the thought can
     // eat most of the budget, and a 500 floor left a 1200-budget diarist call untouched.
     // Leaves it alone if max_tokens isn't set; returns the new value if it grew the budget.
-    /// Input: `body: &mut serde_json::Value`; `floor: u32` — the minimum after doubling.
-    /// Output: `Option<u32>` — the new `max_tokens` if it grew, `None` if `max_tokens` was
-    /// absent or already `>= max(2× current, floor)`. Used by: `Bot::ask_raw`/`ask_raw_stream`
-    /// as a retry step when reasoning ate the whole budget.
     fn grow_budget(body: &mut serde_json::Value, floor: u32) -> Option<u32> {
         let current = body
             .get("max_tokens")
@@ -87,10 +71,6 @@ impl Bot {
     // openrouter: if reasoning can't be turned off, at least make it think briefly (a
     // unified parameter that a model without support simply ignores). Skipped for every
     // other URL: an unknown field could break the request there.
-    /// Input: `&self`, `body: &mut serde_json::Value`. Output: none (adds
-    /// `"reasoning": {"effort": "low"}` when `self.api_url` is an OpenRouter URL; a no-op
-    /// otherwise). Used by: `Bot::ask_raw` (`provider_ask_raw.rs`), once a model is known to
-    /// require reasoning.
     fn reasoning_low_effort(&self, body: &mut serde_json::Value) {
         if !self.api_url.to_lowercase().contains("openrouter") {
             return;

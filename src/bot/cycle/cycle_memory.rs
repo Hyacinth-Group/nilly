@@ -1,8 +1,5 @@
 /// One-time (per guild) scan of the last `HISTORY_DAYS` of messages, on first join.
-/// Input: `bot: &Bot`; `ctx: &Context`; `guild: &Guild`. Output: none (populates
-/// `state.recent_messages`/`name_to_id`/`favorite_name`, paginating via `GetMessages`).
-/// Uses: `display_name`, `now_unix`, `bot.state()`. Used by: `Handler::guild_create`
-/// (`handler_event.rs`), the only caller (spawned in the background, once per guild).
+/// Populates recent messages and user-name mappings in the background.
 async fn read_history(bot: &Bot, ctx: &Context, guild: &Guild) {
     let bot_id = ctx.cache.current_user().id;
     let member = match guild.member(ctx, bot_id).await {
@@ -91,11 +88,6 @@ async fn read_history(bot: &Bot, ctx: &Context, guild: &Guild) {
 
 // channel used for news and welcome messages: the configured one if set, else the
 // server's system channel, else the topmost text channel
-/// Input: `bot: &Bot`; `ctx: &Context`. Output: `Option<ChannelId>` — see comment above;
-/// `None` if nothing qualifies. Uses: `bot.news_channel`/`allowed_channels`/`guild_id`,
-/// `ctx.cache`. Used by: `news_cycle`/`post_problem` callers (`cycle_news.rs`), `poke_cycle`
-/// (`cycle_background.rs`), `Handler::guild_member_addition`/`guild_create`
-/// (`handler_event.rs`), `Bot::pick_name` (`cycle_growth.rs`).
 fn default_channel(bot: &Bot, ctx: &Context) -> Option<ChannelId> {
     if let Some(k) = bot.news_channel {
         return Some(k);
@@ -132,12 +124,7 @@ fn default_channel(bot: &Bot, ctx: &Context) -> Option<ChannelId> {
 // keeps a cycle alive: on a panic or an unexpected return, logs it and restarts after 5s
 // (the panic hook writes the backtrace; this watchdog prevents a silent death; the 5s
 // wait is on both branches so a cycle that returns immediately after starting can't burn CPU).
-/// Input: `name: &'static str` — for log messages; `build: F` — a closure that produces a
-/// fresh cycle future each restart (`F: Fn() -> Fut`). Output: none (spawns a `tokio::spawn`
-/// supervisor loop that never returns until `SHUTTING_DOWN` is set). Uses: `tokio::spawn`,
-/// `SHUTTING_DOWN`. Used by: `Handler::ready` (`handler_event.rs`), once per background
-/// cycle (`news_cycle`, `poke_cycle`, `prank_cycle`, `wanderer_cycle`, `memory_cycle`,
-/// `sleep_cycle`).
+/// `build` must produce a fresh cycle future on each restart.
 // Never restarts once the shutdown signal is set.
 fn run_cycle<F, Fut>(name: &'static str, build: F)
 where

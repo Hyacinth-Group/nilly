@@ -1,19 +1,10 @@
 impl Bot {
     /// The single non-streaming HTTP call site — every non-streaming request (chat fallback,
     /// all agent calls) goes through here.
-    /// Input: `&self`; `body: serde_json::Value` — the full request JSON (model, messages,
-    /// max_tokens, ...); `category: &'static str` — call-site tag for metrics/JSON-fallback
-    /// (see `JSON_CATEGORIES`, `provider_types.rs`).
-    /// Output: `Result<String, BotError>` — the reply content on success. Retries up to
-    /// `AI_RETRIES` times on a network error / retryable status (`status_retryable`) / a
-    /// reasoning-mandatory 400 (`reasoning_mandatory_error`) / an empty response after
-    /// reasoning may have eaten the budget; gives up with the last error otherwise.
-    /// Uses: `self.reasoning_mandatory_known`/`mark_reasoning_mandatory`,
-    /// `self.disable_reasoning`/`reasoning_low_effort`/`remove_reasoning_fields`,
-    /// `Self::grow_budget`, `self.http`, `trim_error`, `Response`/`response_content`/
-    /// `thought_length` (`provider_types.rs`), `self.add_metric`.
-    /// Used by: `Bot::ask`/`ask_split` (`provider_ask.rs`), `Bot::image_commenter`
-    /// (`agents.rs`), the fallback path in `Bot::reply` (`chat_reply.rs`).
+    /// `category` tags metrics and selects the JSON-in-thought fallback.
+    /// Retries up to `AI_RETRIES` times on network errors, retryable statuses,
+    /// reasoning-mandatory 400s, or empty replies after reasoning consumed the budget.
+    /// Otherwise returns the last error.
     async fn ask_raw(
         &self,
         mut body: serde_json::Value,
