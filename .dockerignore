@@ -1,0 +1,8 @@
+target/
+durum/
+.env
+bot.log
+photos/*
+graphify-out/
+.git/
+.github/

@@ -1,0 +1,11 @@
+services:
+  bot:
+    image: ghcr.io/krxi/discord-bot:latest
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - durum:/data/durum
+      - ./photos:/data/photos:ro
+volumes:
+  durum:
