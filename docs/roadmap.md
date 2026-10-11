@@ -2,6 +2,30 @@
 
 Open plan. As steps get completed they move to `docs/progress.md`, and drop from here.
 
+## v1.1.0 — self-host packaging and globalization (2026-10-11) — DONE
+
+- [x] Docker image for amd64/arm64 and root Compose configuration with persistent memory.
+- [x] Release workflow for Linux x86_64/arm64, macOS Apple Silicon, Windows x86_64, and GHCR.
+- [x] `discord-bot init` wizard, private Unix `.env` permissions, and first-run invite guidance.
+- [x] Configurable `OWNER_ID`, `TZ_OFFSET`, and `NEWS_RSS`; English default; Turkish-only travel.
+- [x] CI formatting, clippy, tests, and Docker build; MIT license and contributor/issue templates.
+- [x] Beginner setup guide, synchronized English/Turkish READMEs, and manual launch drafts.
+
+Release artifacts are produced by tagged CI; public download checks and the demo recording
+remain manual launch checklist items in `docs/launch.md`. Details and the 1.0 upgrade note
+are in `docs/progress.md`.
+
+### Good first issues — pending
+
+- [ ] **Custom emoji reactions:** validate server emoji and send `ReactionType::Custom`.
+- [ ] **English travel calendar:** add an appropriate English-mode calendar; today travel is
+  deliberately disabled with `BOT_LANG=en`.
+- [ ] **Localize `sleep.rs` weekday/mood keywords for English:** weekday names and tension
+  detection currently use Turkish words even when the bot runs in English.
+- [ ] **Obsession keyword hook:** add the topic-interest hook that can join on an obsession
+  keyword without the usual willingness call; it does not exist yet.
+
+
 ## Active plan — behavior redesign (7 steps)
 
 Solves the 6 root problems the user reported. Each step: commit + push + update of this file.

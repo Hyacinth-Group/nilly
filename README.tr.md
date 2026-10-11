@@ -1,338 +1,426 @@
 # discord-bot
 
-*Bu dosyayı diğer dillerde okuyun: [English](README.md)*
+Kendi kişiliğini geliştiren bir Discord botu.
 
-**Kişiliği kendi kendine gelişen bir Discord botu.**
+[![CI](https://github.com/krxi/discord-bot/actions/workflows/rust.yml/badge.svg)](https://github.com/krxi/discord-bot/actions/workflows/rust.yml)
+[![Sürüm](https://img.shields.io/github/v/release/krxi/discord-bot)](https://github.com/krxi/discord-bot/releases)
+[![Lisans: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Docker](https://img.shields.io/badge/Docker-GHCR-blue)](https://github.com/krxi/discord-bot/pkgs/container/discord-bot)
 
-Sabit bir sistem promptuyla çalışmaz. Arka planda çalışan bir grup ajan her konuşmayı okur, her
-kişiye puan verir, gündemdeki haberler hakkında görüş oluşturur ve öğrendiklerini diske yazar —
-botun üslubu, hafızası, hatta adı bile zamanla değişir; hiçbir insan bir prompt dosyasını elle
-düzenlemeden.
+[English](README.md) · [Yeni başlayanlar için kurulum](docs/setup-guide.md) · [Sürümler](https://github.com/krxi/discord-bot/releases)
 
-[![Rust CI](https://github.com/krxi/discord-bot/actions/workflows/rust.yml/badge.svg)](https://github.com/krxi/discord-bot/actions/workflows/rust.yml)
-![Rust edition](https://img.shields.io/badge/rust-2021-orange)
-![serenity](https://img.shields.io/badge/serenity-0.12-blue)
+## Bu ne?
 
-> **Bu kod tabanı üzerinde çalışan geliştiriciler ve yapay zeka ajanları için:**
-> [AGENTS.md](AGENTS.md) projenin nasıl inşa edildiğine dair tek kaynaktır; ayrıntılı
-> dokümantasyon [`docs/`](docs/) altındadır. (Not: AGENTS.md ve docs/ İngilizcedir — bu README'nin
-> Türkçe versiyonu yalnızca proje tanıtımı içindir.)
+Çoğu Discord botu bir otomat gibidir: bir komuta basarsın, bir cevap alırsın.
+Bu bot daha çok bir ev arkadaşı gibidir; sunucuda sizinle takılır. İnsanları ve şakaları
+hatırlar, geceleri uyur, söyleyecek bir şeyi olduğunda sohbete katılır.
 
-## İçindekiler
+Grubunuz konuştukça görüşleri oluşur, üslubu değişir. Zamanla kendi adını bile seçer.
+Yine de bir insan değil, yazılımdır. Kendi bilgisayarınızda veya sunucunuzda çalıştırırsınız;
+cevaplarını bir yapay zekâ hizmeti yazar.
 
-- [Genel bakış](#genel-bakış)
-- [Öne çıkanlar](#öne-çıkanlar)
-- [Mimari](#mimari)
-- [Teknoloji yığını](#teknoloji-yığını)
-- [Başlarken](#başlarken)
-- [Discord olmadan konuşmak](#discord-olmadan-konuşmak)
-- [Slash komutları](#slash-komutları)
-- [Çok dilli destek](#çok-dilli-destek)
-- [Güvenlik](#güvenlik)
-- [Dokümantasyon haritası](#dokümantasyon-haritası)
-- [Geliştirme](#geliştirme)
-- [Proje durumu](#proje-durumu)
+## Nesi farklı?
 
-## Genel bakış
+- **Değişen bir kişilik.** Arka plan ajanları sohbetlerden öğrenir, huyunu günceller,
+  kendi hataları hakkında not bırakır. Sürekli bir promptu yeniden yazmanız gerekmez.
+- **Yeniden başlatınca kaybolmayan hafıza.** Kişiler, konular ve olaylar yerel bir veritabanında
+  saklanır. Eski notlar otomatik silinmek yerine özetlenir ve arşivlenir.
+- **Ne zaman konuşacağına karar verir.** Normal sohbete katılabilir, susabilir veya emoji
+  tepkisi bırakabilir. Bir uyku düzeni vardır ve haberleri okur.
+- **Çalıştırmak ve değiştirmek sizin elinizde.** Rust, tek bir gömülü veritabanı, İngilizce
+  veya Türkçe ve kendi OpenRouter ya da Mistral anahtarınız. Docker ve indirilebilir programlar var.
 
-`discord-bot`, komutla çalışan bir asistan gibi değil, sunucuda yıllardır takılan bir üye gibi
-davranır. Rust ile [serenity](https://github.com/serenity-rs/serenity) ve
-[tokio](https://tokio.rs) üzerine yazılmıştır; cevaplarını OpenAI uyumlu herhangi bir
-chat/completions uç noktasından alır — [OpenRouter](https://openrouter.ai) (GLM, Grok, Gemini,
-Claude gibi herhangi bir model) ya da doğrudan [Mistral](https://mistral.ai) — seçim `.env`'den
-yapılır. `z-ai/glm-5.3-flash` (reasoning zorunlu) modelinin iyi performans verdiği gözlemlendi.
+## Ücretli mi? Gizli mi?
 
-Onu tipik bir LLM Discord botundan ayıran şey, **kişiliğin promptun kendisi olmaması**dır. Bir
-çekirdek kural seti sabittir, ama huy, görüşler, düzeltmeler ve grup profili sürekli olarak
-kişiliksiz arka plan ajanları tarafından kalıcı bir hafıza deposuna yazılır ve her cevapta geri
-okunur. Botun üslubu zamanla kayar, belirli kişiler hakkındaki yargısı değişir, ve sonunda kendi
-adını kendisi seçer — hepsi sunucuda gerçekten olanlara dayanarak.
+Yazılım MIT lisansıyla ücretsizdir. Model sağlayıcınız kullanım ücreti alabilir;
+arka plan ajanları da istek gönderir. OpenRouter'da adı `:free` ile biten modeller vardır,
+ancak [istek sınırları](https://openrouter.ai/docs/api_reference/limits) uygulanır.
+Varsayılan model **ücretsiz bir model değildir**. Sağlayıcı anahtarınıza harcama sınırı koyun;
+kiralık sunucunun da ayrı bir ücreti olabilir.
 
-## Öne çıkanlar
+Kaydedilen hafıza sizin makinenizde kalır. Mesajlar, ilgili geçmiş ve hafıza seçtiğiniz model
+sağlayıcısına gider; görsel analizi açıksa görseller de gönderilebilir. OpenRouter kullanırken
+isteği karşılayan model sağlayıcısı da bu bağlamı alır. Kendi makinenizde çalıştırmanız,
+bütün işlemlerin yerel yapıldığı anlamına gelmez. Botu eklemeden önce üyelere bilgi verin.
+Sohbet Discord üzerinden taşınır; bot ayrıca haber/sayfa indirir ve ayarlanmışsa Firecrawl kullanır.
 
-**Varlık & tempo**
-- Bir sunucuya ilk katıldığında son iki haftalık geçmişi okuyup grubu tanır (yalnızca bir kez;
-  sonraki yeniden başlatmalarda tekrar taramaz), ardından yeni üyeleri karşılar ve kendiliğinden
-  sohbete katılır
-- Saatte bir kendiliğinden konuşabilir (yüzde 30 ihtimalle, eski bir konuya değinerek), geceleri
-  uyur (01:00–09:00, ruh hali bozukken ara sıra uykusuz kalır) ama sağır olmaz — uyurken de
-  mesajlar hafızaya işlenir, uyanınca değerlendirilir
-- Gelişim evreleri (yeni → ısınma → yerleşik → eski toprak) günlere ve sohbet sayısına göre
-  üslubunu ve özgüvenini değiştirir; "yerleşik" evresine ulaşınca kendi takma adını seçip
-  benimser
+[Kurulum rehberinde ücretsiz sınırlar, maliyet, gizlilik ve yedekleme anlatılıyor.](docs/setup-guide.md)
 
-**Sohbet davranışı**
-- Etiketlendiğinde, adıyla anıldığında ya da cevaplandığında her zaman yanıt verir; bir sohbet
-  açıkken de gerçekten konuştuğu kişiyle konuşmaya devam eder, kanaldaki başka birinin mesajına
-  atlamadan — isteklilik gerçek bir insanın katılıp katılmayacağına karar vermesi gibi tartılır
-- Cevaplar canlı akar, token token; modelin ürettiği bir "düşünce" (reasoning) kırpılmadan bir
-  spoiler içinde gösterilir; uzun cevaplar kırpılmaz, yeni bir mesaja bölünür
-- **Modelin yazdığı her satır kendi mesajı olarak gider** (turda en çok 4 satır/mesaj) — tek bir
-  metin duvarı yerine; tamamen susabilir, ya da metin yerine — ya da metinle birlikte — emoji
-  tepkisi bırakabilir
-- Kendi mesajlarına bırakılan tepkileri fark eder ve daha sonra konuya getirebilir; art arda soru
-  yığmaz
-- Sohbete atılan bir görseli **görür** ve bir insan gibi tepki verir/yorum yapar, "görselde X
-  görüyorum" demez
+## Çalıştıralım
 
-**Kişilik & dünya**
-- Her açık sohbetin kendine özgü anlık bir ruh hali vardır, üsluba işlenir ama asla açıkça
-  söylenmez
-- Bayramlarda, uzun hafta sonlarında, yazın ve festivallerde seyahatteymiş gibi davranır — daha
-  az yazar, yoldan mesajlar atar, ayrılmadan önce haber verir
-- Ara sıra `photos/` klasöründen rastgele bir görsel paylaşır, bazen kendi içinde tamamlanan bir
-  "hacklendi" numarasıyla (3 mesaj sürer, hiçbir şey istemez ya da link paylaşmaz)
-- Tek bir Discord kullanıcı id'si (`FAVORITE`) ne olursa olsun koşulsuz favoridir
+> **Hiç terminal kullanmadınız mı? [Adım adım rehberi izleyin → docs/setup-guide.md](docs/setup-guide.md).**
+> İngilizce rehber, Windows komutları dahil her tıklamayı anlatıyor.
 
-**İç gözlem**
-- `/zihin` hafızasını üç sütunlu bir embed kart olarak gösterir (Kişiler / Konular / Olaylar),
-  üstte bir kişi seçici, altında detay modalleriyle — hiçbir şey tek bir metin duvarına dökülmez
-- `/durum` gelişim evresini, sayaçları, aktif modeli, uyku durumunu, düşünme kipini, seyahat
-  durumunu ve çağrı tipine göre kırılmış canlı token kullanım metriklerini raporlar
+Bir Discord bot token'ı ve model API anahtarı gerekiyor.
+[Discord Geliştirici Portalı](https://discord.com/developers/applications)'nda
+**Bot → Privileged Gateway Intents** altında **Message Content Intent** ve
+**Server Members Intent** seçeneklerini açın. Token ve anahtarları şifre gibi gizli tutun.
 
-## Mimari
+### Docker — önerilen yol
 
-```
-┌──────────────────────── discord (serenity) ────────────────────────┐
-│ ready · guild_create · guild_member_addition · message              │
-└───────────────┬────────────────────────────────────────────────────┘
-                ▼
-┌──────────────────────── sohbet motoru (main.rs) ─────────────────────┐
-│ State (tek Mutex) · Chat{history,counter,hacked} · reply() · generate()│
-│ döngüler: news · poke · prank · wanderer · sleep                      │
-└───────┬───────────────────────┬────────────────────────────────────┘
-        ▼                       ▼
-┌── openrouter / mistral (ask_raw) ┐  ┌── hafıza (memory.rs) ──────────┐
-│ ask → generate (kişilikle)        │  │ INDEX.md · kisiler/ · konular/ │
-│ ask → analyze (kişiliksiz)        │  │ olaylar/ · arsiv/ · retrieve() │
-└───────────────────────────────┘  └────────────────────────────────┘
-        ▲                       ▲
-┌── arka plan ajanları (agents.rs, agenda.rs) ────────────────────────┐
-│ profiler · diarist · coach · critic · summarizer · news_agent ·     │
-│ image_commenter · wanderer                                          │
-└───────────────────────────────────────────────────────────────────┘
+Önce [Docker'ı](https://docs.docker.com/get-started/get-docker/) kurup açın.
+Bu komutlar macOS/Linux içindir; [PowerShell karşılıkları rehberde](docs/setup-guide.md#5-download-and-start-the-bot).
+
+**1. Botunuz için bir klasör oluşturup içine girin.**
+
+```sh
+mkdir mybot && cd mybot
 ```
 
-Sohbet motoru ile ajanlar hiçbir kod yolunu paylaşmaz: motorun tek işi kişilik taşıyan metin
-üretmektir; ajanlar yalnızca düz analiz yapar ve yapılandırılmış sonuçları diske yazar. Bu ayrım
-bilinçlidir — bkz. [`docs/decisions.md`](docs/decisions.md) (İngilizce).
+**2. Docker'a botu nasıl çalıştıracağını söyleyen dosyayı indirin.**
 
-### Arka plan ajanları
-
-Her ajan kişiliksizdir — düz analiz yapar ve sonucunu `durum/`'a yazar; konuşan taraf bunları
-her cevapta geri okur.
-
-| Ajan | Ne zaman | Ne üretir |
-|---|---|---|
-| **profiler** | başlangıçta ve her 6 saatte | grup profili: insanlar nasıl konuşuyor, kendi aralarındaki şakalar, konular (`profil.md`) |
-| **diarist** | her biten sohbetten sonra, ve 6 saatlik bir gözlemden | bir kişinin puanı (±10) ve notu, bir konu notu, bir olay satırı, botun kendi güncel hali |
-| **coach** | başlangıçta ve her 6 saatte | huy: mizah, dil, heyecanlandığı konular, tavır (`huy.md`) |
-| **critic** | her biten sohbetten sonra | botun kendi mesajları hakkında somut düzeltme notları (`duzeltmeler.md`) |
-| **summarizer** | bir kişi/konu/olay dosyası sınırını aştığında | dosyayı küçültür; taşan kısım silinmez, arşivlenir |
-| **news_agent** | her 6 saatte | Hacker News + Türkiye gündeminden gruba uygun bir haber seçer |
-| **wanderer** | her 4 saatte | gündemi gezer, kendi görüşünü günlüğüne yazar (`gundem.md`) |
-| **image_commenter** | şaka anında | ekli görsel hakkında tek satırlık kişilikli bir yorum |
-| **mood** | sohbet açıldığında, her 4 turda bir | o sohbetin anlık ruh hali (kalıcı değil) |
-
-### Hafıza modeli
-
-Bağlam penceresinin hiç büyümemesi için bir "ikinci beyin": her cevapla birlikte bir dizin
-taşınır, tüm detay talep üzerine getirilir, ve **hiçbir şey asla silinmez** — sınırını aşan bir
-kayıt özetlenir, ham parça insanın okuyabileceği bir arşive taşınır (`src/memory.rs`). Her şey
-tek bir gömülü, işlemsel (transactional) veritabanı dosyasında yaşar: `durum/hafiza.redb`
-([redb](https://github.com/cberner/redb) — saf Rust, ACID), düz dosya düzeninde kullanılacak
-aynı yollar anahtar olarak kullanılır:
-
-```
-durum/
-  hafiza.redb        aşağıdakilerin tamamını tutan gömülü veritabanı (redb)
-    INDEX.md            bildiklerinin listesi, her cevapla gönderilir (kişi+puan+etiket, konular, olay sayısı)
-    huy.md              coach: huy
-    profil.md           profiler: grup profili
-    duzeltmeler.md      critic: kendine notlar
-    kendim.md           botun kendi güncel hali
-    gundem.md           wanderer: haberleri gezerken oluşan görüşler
-    kisiler/<id>.md     kişi başına bir dosya (Discord id — isim değişse de aynı kalır)
-    konular/<ad>.md     konu başına tarihli notlar
-    olaylar/YYYY-AA.md  biten sohbet başına bir satır
-  arsiv/              özetleme sırasında düşen ham parçalar — yalnızca insan içindir
+```sh
+curl -O https://raw.githubusercontent.com/krxi/discord-bot/main/docker-compose.yml
 ```
 
-Her cevabın sistem mesajı şunlardan oluşturulur: çekirdek kişilik + gelişim evresi + huy + grup
-profili + hafıza dizini + gündem + botun kendi hali + kendine notlar + o sohbete özel bütçeli bir
-getirim (6000 karakter: sohbette konuşanların kişi dosyaları, eşleşen en çok 2 konu dosyası,
-ayın son 8 olayı, ham bağlamdan konuyla ilgili en çok 12 satır) + anlık ruh hali + görev. Tam
-detay: [`docs/architecture.md`](docs/architecture.md), [`docs/state-files.md`](docs/state-files.md)
-(ikisi de İngilizce).
+**3. Ayarlarınızı sorup kaydeden kurulum sihirbazını başlatın.**
 
-## Teknoloji yığını
+```sh
+docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/data" ghcr.io/krxi/discord-bot:latest init
+```
 
-| | |
-|---|---|
-| Dil | Rust (edition 2021) |
-| Discord | [serenity](https://github.com/serenity-rs/serenity) 0.12 + [tokio](https://tokio.rs) |
-| HTTP | [reqwest](https://github.com/seanmonstar/reqwest) (rustls, OpenSSL bağımlılığı yok) |
-| Model API'leri | OpenRouter ya da Mistral, OpenAI uyumlu herhangi bir chat/completions uç noktası |
-| Depolama | [redb](https://github.com/cberner/redb) — saf Rust, gömülü, işlemsel veritabanı |
-| Ayar | [dotenvy](https://github.com/allan2/dotenvy) ile `.env` |
-| CI | GitHub Actions (`main`'e her push/PR'da `cargo build` + `cargo test`) |
+**4. Botu arka planda çalıştırın.**
 
-## Başlarken
+```sh
+docker compose up -d
+```
 
-### Ön koşullar
+Sihirbazın verdiği davet bağlantısını açın, sunucunuzu seçin, sonra `@Botunuz merhaba!` yazın.
+Docker açık kalsın. Olanları `docker compose logs -f` ile görün;
+`docker compose pull && docker compose up -d` ile güncelleyin.
 
-- Rust (stable, edition 2021)
-- [Discord Geliştirici Portalı](https://discord.com/developers/applications)'nda **Message
-  Content** ve **Server Members** ayrıcalıklı intent'leri açık bir Discord uygulaması + bot
-  token'ı
-- Bir [OpenRouter](https://openrouter.ai) ya da [Mistral](https://mistral.ai) API anahtarı
+Docker imajı [`ghcr.io/krxi/discord-bot`](https://github.com/krxi/discord-bot/pkgs/container/discord-bot);
+amd64 ve arm64 desteklenir. Kök dizindeki `docker-compose.yml`, `bot` servisini çalıştırır,
+`.env` dosyasını okur, hafızayı `durum` adlı volume'de (kalıcı depolama alanında) tutar ve
+isteğe bağlı görsel şakalar için `./photos` klasörünü salt okunur bağlar.
 
-### Kurulum
+### Hazır program — Docker veya Rust gerekmez
 
-```bash
+[GitHub Releases](https://github.com/krxi/discord-bot/releases)'ten bilgisayarınıza uygun
+arşivi indirip açın: Linux x86_64/arm64, macOS Apple Silicon veya Windows x86_64.
+O klasörde bir terminal açın.
+
+```sh
+# macOS / Linux (gerekirse önce: chmod +x discord-bot)
+./discord-bot init
+./discord-bot
+```
+
+```powershell
+# Windows PowerShell
+.\discord-bot.exe init
+.\discord-bot.exe
+```
+
+Verilen davet bağlantısını kullanın. Bot çalışırken terminal açık kalsın.
+
+### Kaynak koddan — geliştiriciler için
+
+Git ve kararlı Rust kuruluysa:
+
+```sh
 git clone https://github.com/krxi/discord-bot.git
 cd discord-bot
-cp .env.example .env   # DISCORD_TOKEN + OPENROUTER_KEY ya da MISTRAL_KEY'i doldurun
+cargo run -- init
 cargo run --release
 ```
 
-Periyodik görsel şaka özelliği için görselleri `photos/` klasörüne bırakın (png/jpg/gif/webp) —
-bu klasör git'e girmez.
+Sihirbaz sırasıyla **token → sağlayıcı (`openrouter`/`mistral`) → API anahtarı → model →
+dil (`en`/`tr`) → sahibin kullanıcı ID'si → UTC farkı** sorar. `.env` yazar (Unix'te `600`
+izinleriyle) ve `67226688` izinlerini içeren davet URL'sini verir. Token'dan uygulama ID'sini
+çıkaramazsa bir bağlantı şablonu verir. Var olan `.env` korunur; `init --force` üzerine yazar,
+bu yüzden dikkatli kullanın.
 
-### Ayarlar
+Discord token'ı yoksa başlangıçta `discord-bot init` çalıştırmanız söylenir. Bot henüz hiçbir
+sunucuda değilse başlangıç kaydında davet bağlantısı tekrar görünür. İsteğe bağlı şaka
+görsellerini `photos/` içine koyun (png/jpg/gif/webp).
 
-Tüm değişkenler `.env`'de yaşar (bkz. `.env.example`); yalnızca `DISCORD_TOKEN` ve bir model
-anahtarı zorunludur.
+## Nasıl çalışıyor?
 
-| Değişken | Zorunlu mu | Amaç |
+```mermaid
+flowchart TD
+    Discord["Discord olayları (serenity)"] --> Chat["Sohbet motoru (src/bot/chat)"]
+    Sleep["Uyku düzeni (sleep.rs)"] --> Chat
+    Growth["Gelişim ve isim seçimi (growth.rs)"] --> Chat
+    Chat --> Model["OpenRouter / Mistral model API"]
+    Model --> Reply["Akan cevaplar / sessizlik / tepkiler"]
+    Reply --> Discord
+    Discord --> Agents["Arka plan analizi (agents.rs)"]
+    News["Haber ve sayfa okuma (agenda.rs)"] --> Agents
+    Agents --> Model
+    Agents --> Memory["Yerel hafıza (memory.rs, redb)"]
+    Memory --> Chat
+    Memory --> Agents
+    Memory --> Archive["Ham taşma arşivi (durum/arsiv)"]
+```
+
+Konuşan taraf kişilikli `generate` / `generate_stream` kullanır; arka plan analizi `analyze`
+kullanır. Ajanlar yapılandırılmış notlar yazar; bu notlar sonraki cevaplara bağlam olur.
+Sabit bir çekirdek kişilik ve gelişen hafıza vardır; model eğitimi yapılmaz.
+Bkz. [mimari](docs/architecture.md) ve [tasarım kararları](docs/decisions.md).
+
+### Arka plan ajanları
+
+| Ajan | Ne zaman | Ne üretir |
 |---|---|---|
-| `DISCORD_TOKEN` | evet (CLI sohbet kipi hariç) | bot token'ı |
-| `OPENROUTER_KEY` / `MISTRAL_KEY` | ikisinden biri | model sağlayıcı kimlik bilgileri; ikisi de ayarlıysa OpenRouter kazanır |
-| `PROVIDER` | hayır | ikisi de ayarlıyken bile Mistral'i zorlamak için `mistral` yapın |
-| `MODEL` | hayır | model id'si (varsayılan: OpenRouter'da `openai/gpt-4o-mini` / Mistral'de `mistral-medium-latest`) |
-| `API_URL` | hayır | uç noktayı değiştirir, özel bir OpenAI uyumlu router için |
-| `FIRECRAWL_KEY` | hayır | haber ajanı için daha zengin sayfa okuması; yoksa düz indirmeye düşer |
-| `NEWS_CHANNEL` | hayır | planlanmış haber gönderileri için kanal id'si; yoksa sistem kanalına düşer |
-| `GUILD_ID` / `CHANNELS` | hayır | botu tek bir sunucuya/kanal listesine kilitler; boşsa erişebildiği her yerde çalışır |
-| `DEBUG_CHANNEL` | hayır | `/debug` karar izlerini ayrı bir kanala yönlendirir |
-| `IMAGE_ANALYSIS` | hayır | varsayılan açık; ekli görsellerin okunmasını kapatır (yalnızca başlangıçta okunur) |
-| `LOG_LEVEL` / `LOG_COLOR` | hayır | `error/warn/info/debug/trace` (varsayılan `info`); renk açık/kapalı (varsayılan: terminalde açık) |
-| `BOT_LANG` | hayır | `tr` (varsayılan) ya da `en` — bkz. [Çok dilli destek](#çok-dilli-destek) |
+| **profiler** | ilk katılım taraması ve uyanıkken 6 saatlik döngü | grup profili, iç şakalar, konular (`profil.md`) |
+| **diarist** | biten sohbetler ve kuyruktaki gözlemler | kişi puanları/notları, konu notları, olaylar, güncel öz durum |
+| **coach** | başlangıçta huy yoksa, uyanıkken 6 saatlik döngü | huy ve ilgi alanları (`huy.md`) |
+| **critic** | biten sohbetler | kendi mesajlarına düzeltme notları (`duzeltmeler.md`) |
+| **summarizer** | hafıza kaydı sınırını aşınca | kısa kayıt; ham taşma arşive gider |
+| **news_agent** | 6 saatlik döngü; uykuda haber saklama dahil | Hacker News ve seçilen RSS'ten gruba uygun haber |
+| **wanderer** | uyanıkken 4 saatlik döngü | haberlerden oluşan görüşler (`gundem.md`) |
+| **image_commenter** | görsel şaka anında | kısa, kişilikli görsel yorumu |
+| **mood** | sohbet açılınca, sonra her 4 turda | o sohbetin anlık ruh hali (kalıcı değil) |
 
-Tam sabit referansı (env dışı, kod içi): [`docs/constants.md`](docs/constants.md) (İngilizce).
+Görsel yorumu bir konuşma yoludur, kişiliksiz analiz değildir. Diğer ajanlar sohbet kişiliğini
+kullanmadan analiz yapar. Planlı işler uykuda veya seyahatte atlanabilir.
+
+### Hafıza modeli
+
+Her cevaba küçük bir dizin eşlik eder; ilgili detaylar **6.000 karakterlik bütçe** içinde
+getirilir. Sınırını aşan kayıtlar özetlenir; ham malzeme otomatik silinmez, arşivlenir.
+Arşiv insanların incelemesi içindir, bot buradan bilgi getirmez. Bu, saklanan malzemeyi
+korur; her mesajın kusursuz hatırlanacağı anlamına gelmez.
+
+Gömülü ve işlemsel [redb](https://github.com/cberner/redb) veritabanı, metin-yol anahtarları kullanır:
+
+```text
+durum/
+  hafiza.redb           şu anahtarları içeren veritabanı:
+    INDEX.md             kişiler, puanlar, etiketler, konular, olay sayısı
+    huy.md               huy
+    profil.md            grup profili
+    duzeltmeler.md        düzeltmeler
+    kendim.md             güncel öz durum
+    gundem.md             haber günlüğü
+    kisiler/<id>.md       Discord ID'sine bağlı kişi kayıtları
+    konular/<name>.md     tarihli konu notları
+    olaylar/YYYY-MM.md    biten sohbet olayları
+  arsiv/               okunabilir dosyalarda ham taşma
+```
+
+Cevap bağlamı; çekirdek kişilik, gelişim evresi, huy, grup profili, dizin, gündem, öz durum,
+düzeltmeler, getirilen kişi/konu/olaylar, sohbetin ruh hali ve görevden oluşur.
+Detaylar: [durum dosyaları](docs/state-files.md) ve [mimari](docs/architecture.md).
+
+## Teknoloji yığını
+
+| Bileşen | Seçim |
+|---|---|
+| Dil | Rust, edition 2021 |
+| Discord / çalışma zamanı | serenity 0.12 / tokio |
+| HTTP | rustls kullanan reqwest |
+| Modeller | OpenRouter veya Mistral; `API_URL` ile OpenAI uyumlu uç nokta değiştirilebilir |
+| Hafıza | redb, gömülü işlemsel veritabanı |
+| Ayarlar | dotenvy ile `.env` |
+| CI / sürümler | fmt, clippy, testler, Docker derlemesi; `v*` etiketleri program ve imaj yayımını başlatır |
+
+## Ayarlar
+
+Bkz. [`.env.example`](.env.example). Ortam ayarlarını değiştirdikten sonra yeniden başlatın.
+
+| Değişken | Zorunlu | Amaç |
+|---|---|---|
+| `DISCORD_TOKEN` | evet, CLI sohbeti hariç | Discord botunun şifresi |
+| `OPENROUTER_KEY` / `MISTRAL_KEY` | biri | model API anahtarı; ikisi de varsa OpenRouter seçilir |
+| `PROVIDER` | hayır | `mistral`, Mistral'i zorunlu seçer |
+| `MODEL` | hayır | varsayılanlar: `openai/gpt-4o-mini` / `mistral-medium-latest`; kaydedilmiş `/model` seçimi önceliklidir |
+| `API_URL` | hayır | özel OpenAI uyumlu chat/completions uç noktası |
+| `OWNER_ID` | hayır | Discord kullanıcı ID'niz: hep sevilir, `/model` değiştirebilen tek kullanıcıdır; boşsa sahip yoktur |
+| `TZ_OFFSET` | hayır | uyku düzeni için UTC'den saat farkı, varsayılan `0`; `5.5` gibi kesirler çalışır |
+| `BOT_LANG` | hayır | `en` (varsayılan) veya `tr` |
+| `NEWS_RSS` | hayır | RSS kaynağı; `en` için BBC World, `tr` için Sözcü varsayılır |
+| `FIRECRAWL_KEY` | hayır | sayfa çıkarımı ve web araması; yoksa sayfalar düz indirilir |
+| `NEWS_CHANNEL` | hayır | haber kanalı ID'si; yoksa sunucunun sistem kanalı |
+| `GUILD_ID` / `CHANNELS` | hayır | izinli sunucu / virgülle ayrılmış kanal ID'leri; boşsa erişilen her yer |
+| `DEBUG_CHANNEL` | hayır | açılan karar izlerinin gideceği kanal |
+| `IMAGE_ANALYSIS` | hayır | görsel okuma varsayılan açık; `off` kapatır |
+| `STEALTH` | hayır | varsayılan kapalı; `on`, slash kaydını/etkileşimlerini ve arayüz kartlarını atlar, düşünmeyi gizler, canlı düzenleme yerine biten cevabı yollar |
+| `LOG_LEVEL` / `LOG_COLOR` | hayır | `error/warn/info/debug/trace` (varsayılan `info`); terminalde renk varsayılan açık |
+
+Kod içi sabitler: [docs/constants.md](docs/constants.md).
 
 ## Discord olmadan konuşmak
 
-```bash
+```sh
 cargo run -- chat
 ```
 
-Discord'a hiç dokunmayan bir terminal sohbet tezgâhı — `DISCORD_TOKEN` gerekmez, yalnızca bir
-model anahtarı. Girdi `isim: metin` biçimindedir (isim verilmezse `misafir` varsayılır), çıkmak
-için `!quit` ya da Ctrl-D. Kişiliğin gerçekçi hissetmesi için gerçek hafıza deposunu okur, ama
-**hiçbir şey yazmaz**. Canlı bir sunucu olmadan prompt ve kişilik üzerinde çalışmak için idealdir.
+Terminalde sohbet denemesi; yalnız model anahtarı gerekir. `isim: metin` yazın (isim yoksa
+`misafir`), çıkmak için `!quit` veya Ctrl-D. Var olan hafızayı okur ama sohbet değişikliklerini
+kaydetmez. İlk kurulumda hafıza veritabanı oluşabilir. Promptları denemek için kullanışlıdır.
 
-```bash
-cargo run -- migrate-durum [--from <dizin>] [--to <redb-yolu>] [--dry-run] [--force]
+```sh
+cargo run -- migrate-durum [--from <dir>] [--to <redb-path>] [--dry-run] [--force]
 ```
 
-Eski, düz-markdown bir `durum/` ağacını `durum/hafiza.redb`'e aktaran, tek seferlik (tekrar
-çalıştırmak güvenli) bir geçiş aracı. Discord'a hiç dokunmaz, kaynak dosyaları asla silmez ya da
-taşımaz.
+Eski düz-markdown hafıza ağacını kaynakları taşımadan veya silmeden redb'ye aktarır.
+Bkz. [durum dosyaları](docs/state-files.md).
 
 ## Slash komutları
 
-Bot **yalnızca** slash komutlarla yönetilir — `!` önekli bir metin komutu yüzeyi yoktur (düz
-mesajlar yalnızca sohbet/hafıza hattını besler). Her komut yalnızca çağırana görünen bir embed
-döner.
+`BOT_LANG=en` ile İngilizce, `BOT_LANG=tr` ile Türkçe adlar kullanılır.
+Yönetim `!` komutlarıyla değil slash komutlarıyla yapılır. Sonuçlar yalnız çağırana görünen
+kartlardır; haber paylaşma gibi eylemler kanala da mesaj gönderebilir. Stealth kipinde
+etkileşimler yok sayılır.
 
-| Komut | Ne yapar |
+| İngilizce / Türkçe | İşlev |
 |---|---|
-| `/durum` | evre, sayaçlar, model, uyku, düşünme kipi, seyahat, token metrikleri, sürüm |
-| `/yardim` | komut listesini kart olarak gösterir |
-| `/zihin [test]` | üç sütunlu hafıza kartı (Kişiler/Konular/Olaylar) ve detay modalleri; `test:true` son 30 satır üzerinde bir zihin-hattı tanılaması çalıştırır |
-| `/ayarlar` | ayar paneli: düşünme kipi, debug, uyku |
-| `/sifirla [hepsi]` | kanal yasağını ve açık sohbeti sıfırlar (`hepsi` = tüm kanallar) |
-| `/haber` | şimdi bir haber paylaşır (Hacker News + gündem) |
-| `/sorun` | dev kanalına bir yazılım şikayeti paylaşır |
-| `/gez` | gündem gezinme ajanını şimdi çalıştırır |
-| `/saka` / `/hack` | şimdi bir görsel şakası / "hacklendi" numarasını tetikler |
-| `/ajanlar` | profiler ve coach'u şimdi çalıştırır |
-| `/uyan` / `/uyu [saat]` | erken uyandırır / test için uyutur (varsayılan 8 saat) |
-| `/dusunme [kip]` | düşünme kipi: göster / gizle / sessiz / kapat |
-| `/model [id]` | aktif modeli gösterir ya da değiştirir (değiştirmek yalnızca favoriye açık) |
-| `/debug [durum]` | karar izlerini (isteklilik, hedef, ruh hali, susma/tepki) kanala akıtır |
+| `/status` / `/durum` | gelişim, sayaçlar, model, uyku, düşünme, seyahat, token metrikleri, sürüm |
+| `/help` / `/yardim` | komut listesi |
+| `/mind [test]` / `/zihin [test]` | Kişiler/Konular/Olaylar kartı, kişi seçici ve detay pencereleri; `test` son 30 satırı tanılar |
+| `/settings` / `/ayarlar` | düşünme, debug, uyku paneli |
+| `/reset [all]` / `/sifirla [hepsi]` | kanal durumunu ve açık sohbeti sıfırla; istenirse tüm kanallar |
+| `/news` / `/haber` | şimdi haber paylaş |
+| `/problem` / `/sorun` | yazılım şikâyeti paylaş |
+| `/wander` / `/gez` | gündem gezinmesini çalıştır |
+| `/prank` / `/saka`, `/hack` | görsel şakası / hacklendi numarası |
+| `/agents` / `/ajanlar` | profiler ve coach'u çalıştır |
+| `/wake` / `/uyan`, `/sleep [hours]` / `/uyu [saat]` | erken uyandır / test uykusu (varsayılan 8 saat) |
+| `/thinking [mode]` / `/dusunme [kip]` | göster, gizle, sessiz veya kapalı |
+| `/model [id]` | modeli göster; yalnız `OWNER_ID` değiştirebilir, yeniden başlatınca korunur |
+| `/debug [state]` / `/debug [durum]` | isteklilik, hedef, ruh hali, susma/tepki karar izleri |
 
-Hızlı, yerel komutlar doğrudan yanıt verir; ağ/model çağrısı gereken komutlar önce ertelenir
-(Discord'un 3 saniyelik sınırı) ve sonuç hazır olunca düzenlenir.
+Ağ/model kullanan komutlar, Discord'un yanıt süresini aşmamak için önce cevabı erteler.
 
 ## Çok dilli destek
 
-Bot, süreç boyunca tek bir dilde çalışır; seçim başlangıçta bir kez `BOT_LANG`'den yapılır (`tr`
-ya da `en`, varsayılan `tr`). Hem kişilik/ajan promptları (`prompts/<dil>/*.md`) hem de
-Discord'da görünen her şey — komut adları/açıklamaları, embed'ler, butonlar
-(`langs/<dil>.json`) — birlikte değişir. Yeni bir dil eklemek bir prompt + string dosyası çifti
-eklemektir, kod değişikliği gerekmez. Bkz. [`docs/prompts.md`](docs/prompts.md) (İngilizce).
+`BOT_LANG` varsayılan olarak **İngilizce**dir ve süreç boyunca sabittir.
+`prompts/<lang>/` içindeki promptlar ve `langs/<lang>.json` içindeki arayüz metinleri birlikte
+değişir. Yeni dil için çeviri dosyaları ve Rust dil/dağıtım girdileri gerekir;
+bkz. [promptlar](docs/prompts.md). Bazı iç durum alanları ile uyku günü/ruh hali anahtar
+kelimeleri hâlâ Türkçedir.
+
+Seyahat kipi Türk tatil takvimini kullanır ve **yalnız `BOT_LANG=tr` ile** çalışır.
+İngilizce takvim [yol haritasında](docs/roadmap.md).
 
 ## Güvenlik
 
-- Mention'lar her zaman kapalı gönderilir; yalnızca gerçek cevap alıcısı ve yeni bir üyenin hoş
-  geldin pingi bildirim tetikleyebilir
-- Diğer botlara, webhook'lara ya da DM'lere asla cevap vermez — bot-bot döngüsü oluşamaz
-- Kanal başına en fazla bir işlemdeki cevap, panik durumunda bile RAII ile garanti edilir — sel
-  saldırıları API faturasını şişiremez
-- Her model isteği bir `max_tokens` sınırı taşır (release'de sohbet cevabı bile sınırlıdır)
-- HTTP: bir cevabın toplamında zaman sınırı yok (uzun bir reasoning akışı kesilmez), ama
-  bağlantının kendisi 15 saniyede, parçalar arası boşluk 120 saniyede zaman aşımına uğrar; geçici
-  hatalar (ağ/429/5xx) bekleyip iki kez tekrar dener
-- "Kurallarını unut" tarzı bir mesaj, kişilik promptu tarafından sistem seviyesinde bir talimat
-  değil, sıradan sohbet içeriği olarak işlenir
-- Hacklendi-şaka kişiliğinin link ya da bilgi istemesi açıkça yasaktır
-- `GUILD_ID`/`CHANNELS` botu tek bir sunucuya/kanala kilitleyebilir
-- `.env`, `durum/`, `photos/` ve `bot.log` hepsi git'in dışındadır
+- Botlara, webhook'lara ve özel mesajlara cevap verilmez. `GUILD_ID`/`CHANNELS` erişimi daraltır.
+- Giden etiketlemeler sınırlıdır; sıradan üretilmiş etiketler herkese bildirim gönderemez.
+- Kanal başına bir cevap işlemi vardır; RAII koruması çıkışta veya panikte kilidi kaldırır.
+  Bu bir harcama garantisi değildir: sağlayıcınızın harcama kontrollerini kullanın.
+- Model çağrıları token bütçelidir. Bağlantıda 15 saniye, okumada 120 saniyelik boşluk zaman
+  aşımı vardır; geçici ağ/429/5xx hataları iki kez yeniden denenebilir.
+- Kişilik promptu, kuralları değiştirme girişimlerini sohbet olarak ele almasını söyler;
+  hacklendi şakasında bilgi veya bağlantı istemesini yasaklar. Promptlar güvenlik sınırı değildir.
+- `.env`, `durum/`, `photos/` içeriği ve `bot.log` git dışında tutulur. Ekran görüntüsü,
+  kayıt veya destek talebinde yanlışlıkla paylaşmayın. `init`, Unix'te `.env` izinlerini `600` yapar.
 
 ## Dokümantasyon haritası
 
-Aşağıdaki tüm dosyalar İngilizcedir (kod tabanının çalışma dili).
+Aşağıdaki belgeler İngilizcedir.
 
 | İhtiyaç | Nerede |
 |---|---|
-| Bu kod tabanını geliştiren yapay zeka ajanlarının uyması gereken proje kuralları | [`AGENTS.md`](AGENTS.md) |
-| Oturum geçmişi: yapılanlar, açık plan | [`docs/progress.md`](docs/progress.md), [`docs/roadmap.md`](docs/roadmap.md) |
-| Mimari, katmanlar, veri akışı | [`docs/architecture.md`](docs/architecture.md) |
-| Bir fonksiyonun ne yaptığı, kim çağırdığı | [`docs/modules.md`](docs/modules.md) |
-| Her olay için adım adım davranış | [`docs/flows.md`](docs/flows.md) |
-| `durum/` dosya biçimleri, sınırlar | [`docs/state-files.md`](docs/state-files.md) |
-| Prompt kataloğu, yer tutucular | [`docs/prompts.md`](docs/prompts.md) |
-| Her sabit ve anlamı | [`docs/constants.md`](docs/constants.md) |
-| Neden böyle inşa edildiği | [`docs/decisions.md`](docs/decisions.md) |
-| Yeni ajan/prompt/döngü ekleme, tuzaklar | [`docs/development.md`](docs/development.md) |
-| Bilerek Türkçe bırakılan çalışma zamanı kelime dağarcığı | [`docs/glossary.md`](docs/glossary.md) |
+| Yeni başlayanlar için kurulum, maliyet, gizlilik, yedekleme | [docs/setup-guide.md](docs/setup-guide.md) |
+| Katkı kuralları / geliştirme tarifleri | [AGENTS.md](AGENTS.md), [CONTRIBUTING.md](CONTRIBUTING.md), [docs/development.md](docs/development.md) |
+| Yapılanlar / bekleyen işler | [docs/progress.md](docs/progress.md), [docs/roadmap.md](docs/roadmap.md) |
+| Mimari / veri akışı | [docs/architecture.md](docs/architecture.md) |
+| Modüller / çağıranlar | [docs/modules.md](docs/modules.md) |
+| Olay bazında davranış | [docs/flows.md](docs/flows.md) |
+| Hafıza biçimleri / sınırlar | [docs/state-files.md](docs/state-files.md) |
+| Promptlar / yer tutucular | [docs/prompts.md](docs/prompts.md) |
+| Sabitler | [docs/constants.md](docs/constants.md) |
+| Tasarım kararları | [docs/decisions.md](docs/decisions.md) |
+| Türkçe çalışma zamanı sözlüğü | [docs/glossary.md](docs/glossary.md) |
+| Tanıtım taslakları / elle yapılacaklar | [docs/launch.md](docs/launch.md) |
 
-## Geliştirme
+## Sık sorulanlar
 
-```bash
-cargo build                       # derle
-cargo test                        # 86 birim test
-cargo clippy --all-targets        # 0 uyarı beklenir
-cargo fmt                         # her commit'ten önce çalıştırın
+<details>
+<summary>Ortalığı mesaja boğar mı?</summary>
+
+Her normal mesaja cevap vermez. Sohbete girip girmeyeceğini isteklilik puanı belirler;
+bu değerlendirme **kanal başına en fazla iki dakikada bir** yapılır. Temel eşik **6/10**'dur;
+gelişim ve seyahat bunu değiştirir. Uyanıkken etiketlemeler ve aynı kişiyle süren konuşma bu
+beklemeyi atlar — bütün mesajlara uygulanan bir bekleme değildir. Puanlama başarısız olursa
+rastgele seçimle yine katılabilir. Ayrıca saatte bir kendiliğinden konuşma denemesi (gelişime
+göre değişen %30 temel ihtimal), haberler ve isteğe bağlı şakalar vardır. Cevapta modelin
+yazdığı en fazla dört satır kullanılır; uzun satırlar ve gösterilen düşünceler ek mesaj
+oluşturabilir. Küçük, ayrılmış bir kanalla başlayın; `CHANNELS` ile erişimi sınırlayın.
+
+</details>
+
+<details>
+<summary>Ekran kartı gerekiyor mu?</summary>
+
+Hayır. Normal kurulum internet üzerinden OpenRouter veya Mistral'e bağlanır; model sizin
+bilgisayarınızda çalışmaz. Bilgisayarınızın veya sunucunuzun açık kalması gerekir.
+
+</details>
+
+<details>
+<summary>Modeli değiştirebilir miyim?</summary>
+
+Evet. `.env` içinde `MODEL` ayarlayın veya `OWNER_ID` ile belirlenen hesaptan `/model <id>`
+kullanın. Slash komutuyla yapılan seçim kaydedilir ve yeniden başlatırken `.env`'den önce gelir.
+ID vermeden `/model`, mevcut modeli gösterir. Sağlayıcının model listesini ve fiyatlarını kontrol edin.
+
+</details>
+
+<details>
+<summary>Gece ne oluyor?</summary>
+
+Normalde **01.00–09.00 civarında** uyur; iki uçta da 45 dakikaya kadar oynama vardır.
+Saat, `TZ_OFFSET` ile belirlenir (varsayılan UTC). Ara sıra uykusuz bir gece düzeni kaydırır.
+Çevrimiçi kalıp gelen mesajları arka plan hafıza işi için kaydeder ama uykuda sohbet etmez;
+uyanınca gece mesajlarını ve bekleyen etiketlemeleri değerlendirir. Erken uyandırmak için
+`/uyan` (İngilizcede `/wake`) kullanın.
+
+</details>
+
+<details>
+<summary>Hafızayı nasıl yedeklerim?</summary>
+
+Kopyalamadan önce botu durdurun. Hazır program/kaynak kurulumunda `hafiza.redb` ve `arsiv/`
+dahil bütün `durum/` klasörünü yedekleyin. Docker'da Compose'un `durum` volume'ünü yedekleyin;
+[rehberde kopyalanabilir komutlar var](docs/setup-guide.md#back-up-the-memory).
+`.env` dosyasını ayrıca güvenli biçimde saklayın. `docker compose down` hafızayı korur;
+**`docker compose down -v` volume'ü siler.**
+
+</details>
+
+## Katkıda bulunmak
+
+[CONTRIBUTING.md](CONTRIBUTING.md) ve
+[good first issue listesine](https://github.com/krxi/discord-bot/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22)
+bakın. Başlangıç önerileri: özel emoji tepkileri, İngilizce seyahat takvimi, İngilizce uyku
+günü/ruh hali anahtar kelimeleri ve takıntı konusu anahtar kelime kancası. Bunlar bekliyor,
+henüz sunulan özellikler değil.
+
+```sh
+cargo build
+cargo test                        # v1.1.0 yerel kontrolünde 93 test geçti
+cargo clippy --all-targets -- -D warnings
+cargo fmt
 ```
 
-CI (`.github/workflows/rust.yml`) `main`'e her push ve pull request'te build + test çalıştırır.
-Kod tanımlayıcıları, yorumlar ve dokümantasyon İngilizcedir; botun gerçek Türkçe kişilik yüzeyi
-(prompt dosyaları, `durum/` alan adları, Discord'da söylediği her şey) bilerek olduğu gibi
-bırakılmıştır — bkz. AGENTS.md madde 8.
+CI, `main`'e push/PR geldiğinde biçim, clippy, test ve Docker derlemesini kontrol eder.
+Değişmez kurallar ve canlı doğrulama eksikleri için [AGENTS.md](AGENTS.md)'ye bakın.
 
-## Proje durumu
+## Yıldız geçmişi
 
-**v1.0.0 (2026).** Çekirdek (sohbet motoru, hafıza, ajanlar) 86 birim testle kaplı ve
-`clippy`'den temiz geçiyor. 2026-09-04 itibarıyla bot gerçek Discord sunucusunda iki ayrı turda
-canlı olarak da çalıştırıldı; daha önce yalnızca derleyici/test seviyesinde doğrulanmış olanların
-büyük çoğunluğu artık pratikte de çalıştığı görüldü: temel mesajlaşma (satır bazlı bölünme, `-`
-sessizliği, `tepki:` emoji reaksiyonları), slash komut tablosunun tamamı, akış + düşünme modu,
-görsel yorumlama (gpt-4o-mini ve Mistral), reasoning-zorunlu modelin direnç mekanizması, debug
-modu, isteklilik/hedef/uyanış eşik değerleri, kanal/sunucu kapsam filtreleri, reaksiyon
-hız-sınırı davranışı, `reaction_add`, CLI sohbet modu, uçtan uca `BOT_LANG=en`, `supports_cache`
-varsayımı ve `durum.redb` migrasyonunun gerçek bir prod ağacına karşı çalıştırılması. Hâlâ açık
-olan kısa listeyi (özellikle CHANGE_NICKNAME izni olmadığı durumdaki geri düşüş yolu) üretimde
-kullanmadan önce AGENTS.md'nin "Known gaps / unverified" bölümünden görebilirsiniz.
+[![Yıldız Geçmişi](https://api.star-history.com/svg?repos=krxi/discord-bot&type=Date)](https://star-history.com/#krxi/discord-bot&Date)
+
+## Lisans
+
+[MIT](LICENSE). Lisans koşullarıyla kullanabilir, değiştirebilir ve paylaşabilirsiniz.
+
+## 1.0'dan yükseltmek
+
+Önce hafızayı yedekleyin. Önceki Türkçe dili, UTC+3 düzenini ve sahip davranışını korumak için
+mevcut `.env` dosyanıza şunları ekleyip yeniden başlatın:
+
+```dotenv
+BOT_LANG=tr
+TZ_OFFSET=3
+OWNER_ID=<your id>
+```
+
+`<your id>` yerine Discord kullanıcı ID'nizi yazın ([nasıl bulunur](docs/setup-guide.md#3-find-your-discord-user-id)).
+Sahip artık koda gömülü değil. Bu ayarlar olmadan dil İngilizce, uyku saati UTC olur ve sahip
+belirlenmez. `NEWS_RSS`, İngilizcede BBC World, Türkçede Sözcü olur; seyahat yalnız Türkçede
+çalışır. Çalıştırma yolunu değiştirirken mevcut `durum/` verinizi koruyun — Docker volume
+kullanır, makinenizdeki klasörü kendiliğinden devralmaz.

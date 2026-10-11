@@ -998,3 +998,43 @@ cargo fmt && cargo clippy --all-targets && cargo test && cargo build --release
 reaches Discord) is exempt, see AGENTS.md item 8.
 
 - 2026-09-06: graphify knowledge graph added (`graphify-out/`, 965 nodes / 1713 edges, 75 communities). Tracked: graph.json, GRAPH_REPORT.md, manifest.json; cache/html/cost ignored. Usage in AGENTS.md "Knowledge graph" and docs/development.md.
+
+## 2026-10-11 · v1.1.0 — self-host packaging and globalization
+
+- **Self-host packaging:** Docker image `ghcr.io/krxi/discord-bot` for amd64/arm64, a root
+  Compose service with `.env`, persistent `durum` volume, and read-only `photos` mount.
+  The `v*` release workflow packages Linux x86_64/arm64, macOS Apple Silicon, and Windows
+  x86_64 binaries and publishes the multi-architecture image. CI checks fmt, clippy, tests,
+  and a Docker build. Publication is a release-workflow action, not a locally verified download.
+- **First-run setup:** `discord-bot init` asks for token, provider, key, model, language, owner,
+  and UTC offset; writes `.env` (mode `600` on Unix); and prints an invite link with permissions
+  `67226688`. Missing-token startup directs users to the wizard; startup without a server logs
+  an invite link.
+- **Globalization:** English is now the default. `OWNER_ID` replaces the hard-coded favorite,
+  keeps the owner liked, and gates model changes. `TZ_OFFSET` defaults to UTC and controls the
+  sleep schedule. `NEWS_RSS` overrides the RSS feed (BBC World for English, Sözcü for Turkish).
+  The Turkish holiday travel calendar is disabled in English mode.
+- **Upgrade from 1.0:** add `BOT_LANG=tr`, `TZ_OFFSET=3`, and `OWNER_ID=<your id>` to the existing
+  `.env` to retain the previous language, schedule, and owner behavior. Keep/back up the
+  existing memory; a new Docker volume does not automatically import a host `durum/` folder.
+- **Docs and launch preparation:** English and Turkish READMEs now lead with a plain-language
+  explanation, Docker/binary/source setup, honest cost/privacy notes, a Mermaid data-flow
+  diagram, and an FAQ. The beginner setup guide is linked prominently. `docs/launch.md`
+  contains manual-only HN, Reddit, and X drafts plus a launch checklist. MIT licensing,
+  contribution guidance, issue templates, and the VHS demo tape are repository additions;
+  there is no recorded demo GIF yet.
+- **Evidence boundary:** setup, defaults, scheduling, ownership, persistence, command names,
+  CI, and release targets were checked against repository code/configuration. OpenRouter's
+  published limits were fetched directly. No RAM benchmark, fixed monthly price, credit-card
+  requirement claim, or telemetry guarantee was adopted from market research.
+- **Requested README test-count check:** `cargo test --locked` reported 93 passed, 0 failed,
+  0 ignored on 2026-10-11. No unlocked fallback was needed and Cargo.lock was not edited by
+  the documentation task. This is local test evidence, not a live Discord or Docker smoke test.
+- **Integration evidence (reported by the integrator):** the BBC World RSS feed parsed into
+  32 items. This was not rerun by the documentation task.
+- **Market research applied:** both research inputs informed the social-first hook,
+  Docker-first setup, bounded-recall explanation, local-memory/Discord/provider distinction,
+  qualified setup-time language, real-demo checklist, and evidence-based follow-up guidance.
+  Competitor star counts and launch traction were not turned into product claims.
+- **Pending starter work:** custom emoji reactions, English travel calendar, English sleep
+  weekday/mood keywords, and the obsession keyword hook.
