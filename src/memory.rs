@@ -13,8 +13,8 @@
 // avoid a C dependency, see docs/decisions.md). The design deliberately doesn't reshape the
 // data: every value stored is the exact same text a file held before this migration, keyed
 // by the same relative path string the file used to have (`"kisiler/1.md"`, `"profil.md"`,
-// ...) — so `Person::parse`/`Person::text`, `retrieve`, `keywords`, `trim`, `slug`, and every
-// external caller of `read`/`write` (their signatures are unchanged) needed no changes.
+// ...). Domain identities are translated only by the explicit v1 boundary helpers below;
+// canonical storage keys arrive with the atomic schema cutover.
 // `arsiv/` stays real files on disk: write-mostly, human-inspection-only, never read back by
 // the bot — keeping it out of the transactional store avoids unbounded DB growth and keeps
 // its documented "for humans" purpose intact.
@@ -277,14 +277,49 @@ pub fn month() -> String {
 
 // ---------- person record ----------
 
-/// One `kisiler/<id>.md` record's parsed contents. Holds `id` (record key, Discord user
-/// id), `name`/`username`/`previous_names` (identity), `score` (-10..10), `tags`, `note`,
+// Step 1 retains numeric Discord records until the atomic storage migration.
+// Other platforms must never reuse these paths just because their IDs are numeric.
+fn v1_user_number(id: &UserKey) -> Result<u64, KeyError> {
+    id.as_str()
+        .strip_prefix("discord:user:")
+        .ok_or(KeyError)?
+        .parse()
+        .map_err(|_| KeyError)
+}
+
+pub fn v1_person_path(id: &UserKey) -> Result<String, KeyError> {
+    Ok(format!("kisiler/{}.md", v1_user_number(id)?))
+}
+
+pub fn v1_room_path(id: &RoomKey) -> Result<String, KeyError> {
+    let number: u64 = id
+        .as_str()
+        .strip_prefix("discord:room:")
+        .ok_or(KeyError)?
+        .parse()
+        .map_err(|_| KeyError)?;
+    Ok(format!("kanallar/{number}.md"))
+}
+
+fn v1_record_number(path: &str) -> Option<u64> {
+    stem(path).parse::<u64>().ok()
+}
+
+fn v1_person_id_text(id: &UserKey) -> &str {
+    id.as_str()
+        .strip_prefix("discord:user:")
+        .filter(|value| value.parse::<u64>().is_ok())
+        .unwrap_or(id.as_str())
+}
+
+/// One `kisiler/<id>.md` record's parsed contents. Holds `id` (domain user key),
+/// `name`/`username`/`previous_names` (identity), `score` (-10..10), `tags`, `note`,
 /// `facts`/`events` (the two bulleted lists). Round-trips through `parse`/`text` below.
 #[derive(Default, Clone)]
 pub struct Person {
-    pub id: u64,                     // record key; the discord user id
-    pub name: String,                // display name (global_name or username)
-    pub username: String,            // discord username
+    pub id: UserKey,      // authoritative domain identity, not the markdown id field
+    pub name: String,     // display name (global_name or username)
+    pub username: String, // discord username
     pub previous_names: Vec<String>, // earlier display names
     pub score: i32,
     pub tags: Vec<String>,
@@ -294,15 +329,15 @@ pub struct Person {
 }
 
 impl Person {
-    /// Input: `id: u64`; `text: &str` — a `kisiler/<id>.md` record's contents. Output:
+    /// Input: `id: &UserKey`; `text: &str` — a person record's contents. Output:
     /// `Person`. Unknown lines are ignored; the field prefixes it looks for
     /// (`kullanici_adi:`, `eski_adlar:`, `puan:`, `etiket:`, `not:`) are Turkish on purpose
     /// — they're the on-disk format (see `docs/state-files.md`), not translated so
     /// existing data keeps parsing. Used by: `read_person`/`person_summaries` below,
     /// `Bot::diarist` (`agents.rs`).
-    pub fn parse(id: u64, text: &str) -> Person {
+    pub fn parse(id: &UserKey, text: &str) -> Person {
         let mut p = Person {
-            id,
+            id: id.clone(),
             ..Default::default()
         };
         let mut section = "";
@@ -318,8 +353,8 @@ impl Person {
                 } else {
                     ""
                 };
-            } else if let Some(v) = s.strip_prefix("id:") {
-                p.id = v.trim().parse().unwrap_or(p.id);
+            } else if s.starts_with("id:") {
+                // The caller's record identity is authoritative, including for old numeric ids.
             } else if let Some(v) = s.strip_prefix("kullanici_adi:") {
                 p.username = v.trim().to_string();
             } else if let Some(v) = s.strip_prefix("eski_adlar:") {
@@ -352,10 +387,11 @@ impl Person {
     /// Input: `&self`. Output: `String` — the `kisiler/<id>.md` record format (inverse of
     /// `parse`). Used by: `write_person` below.
     pub fn text(&self) -> String {
+        let id = v1_person_id_text(&self.id);
         let mut s = format!(
             "# {}\nid: {}\nkullanici_adi: {}\neski_adlar: {}\npuan: {:+}\netiket: {}\nnot: {}\n\n## Bildiklerin\n",
             self.name,
-            self.id,
+            id,
             self.username,
             self.previous_names.join(", "),
             self.score,
@@ -373,26 +409,27 @@ impl Person {
     }
 }
 
-/// Input: `id: u64`. Output: `Person` — parsed from `kisiler/<id>.md`, or an empty
+/// Input: `id: &UserKey`. Output: `Person` — parsed from its v1 record, or an empty
 /// `Person{id, ..}` if there's no record. Uses: `read`, `Person::parse`. Used by:
 /// `Bot::diarist` (`agents.rs`), `modal::person_modal`, `retrieve` below (via `read`
 /// directly, not this — see that function).
-pub fn read_person(id: u64) -> Person {
-    let m = read(&format!("kisiler/{id}.md"));
-    if m.is_empty() {
-        Person {
-            id,
-            ..Default::default()
+pub fn read_person(id: &UserKey) -> Person {
+    let path = match v1_person_path(id) {
+        Ok(path) => path,
+        Err(error) => {
+            log::error!("can't read {id} from v1 person storage: {error}");
+            return Person::parse(id, "");
         }
-    } else {
-        Person::parse(id, &m)
-    }
+    };
+    Person::parse(id, &read(&path))
 }
 
-/// Input: `p: &Person`. Output: none (writes `kisiler/<p.id>.md`). Uses: `write`,
-/// `Person::text`. Used by: `Bot::diarist` (`agents.rs`), the only caller.
-pub fn write_person(p: &Person) {
-    write(&format!("kisiler/{}.md", p.id), &p.text());
+/// Input: `p: &Person`. Output: v1 identity validation result (writes its numeric Discord
+/// record). Uses: `write`, `Person::text`. Used by: `Bot::diarist` (`agents.rs`).
+pub fn write_person(p: &Person) -> Result<(), KeyError> {
+    let path = v1_person_path(&p.id)?;
+    write(&path, &p.text());
+    Ok(())
 }
 
 // ---------- topics and events ----------
@@ -447,10 +484,10 @@ pub fn person_summaries() -> Vec<Person> {
     let mut list = Vec::new();
     for key in files("kisiler") {
         // key tail is id-based; old slug-keyed records (id can't be parsed) are skipped
-        let Some(id) = stem(&key).parse::<u64>().ok() else {
+        let Some(id) = v1_record_number(&key).map(UserKey::discord) else {
             continue;
         };
-        let person = Person::parse(id, &read(&key));
+        let person = Person::parse(&id, &read(&key));
         if person.name.is_empty() {
             continue;
         }
@@ -505,13 +542,13 @@ pub fn event_months(month_count: usize) -> Vec<(String, Vec<String>)> {
 // ---------- channel history ----------
 
 // reads durum/kanallar/<id> records: (channel id, recent lines)
-/// Input: none. Output: `Vec<(u64, VecDeque<String>)>` — every channel history record as
-/// (channel id, non-empty lines). Uses: `files`, `stem`. Used by: `State::load`
+/// Input: none. Output: `Vec<(RoomKey, VecDeque<String>)>` — every v1 Discord history record
+/// as (domain room key, non-empty lines). Uses: `files`, `stem`. Used by: `State::load`
 /// (`types_chat_state.rs`), the only caller (once, at startup).
-pub fn load_channel_history() -> Vec<(u64, VecDeque<String>)> {
+pub fn load_channel_history() -> Vec<(RoomKey, VecDeque<String>)> {
     let mut list = Vec::new();
     for key in files("kanallar") {
-        let Some(id) = stem(&key).parse::<u64>().ok() else {
+        let Some(id) = v1_record_number(&key) else {
             continue;
         };
         let lines: VecDeque<String> = read(&key)
@@ -519,7 +556,7 @@ pub fn load_channel_history() -> Vec<(u64, VecDeque<String>)> {
             .filter(|l| !l.trim().is_empty())
             .map(|l| l.to_string())
             .collect();
-        list.push((id, lines));
+        list.push((RoomKey::discord(id), lines));
     }
     list
 }
@@ -635,7 +672,7 @@ pub fn refresh_index() -> String {
     let mut output = String::from("## Kişiler\n");
     for key in files("kisiler").into_iter().take(INDEX_PEOPLE) {
         // key tail is id-based; old slug-keyed records (id can't be parsed) are skipped
-        if stem(&key).parse::<u64>().is_err() {
+        if v1_record_number(&key).is_none() {
             continue;
         }
         let header = person_header(&read(&key));
@@ -741,7 +778,7 @@ pub fn trim(text: &str, limit: usize) -> String {
 // what to retrieve for this chat: the speakers' records, topic records touching the
 // subject, recent events, and old raw-memory lines matching a keyword. The budget is fixed.
 /// Input: `participants: &[String]` — names currently talking (up to 4 used);
-/// `name_to_id: &HashMap<String, u64>` — to resolve names to person records;
+/// `name_to_id: &HashMap<String, UserKey>` — to resolve names to person records;
 /// `keywords: &[String]` — from `keywords` above; `history: &VecDeque<String>` — the raw
 /// message buffer; `exclude_recent: usize` — how many of the most recent `history` lines
 /// to skip (they're already in the chat, no need to retrieve them again).
@@ -751,7 +788,7 @@ pub fn trim(text: &str, limit: usize) -> String {
 /// Used by: `Bot::chat_system` (`provider_generate.rs`), the only caller.
 pub fn retrieve(
     participants: &[String],
-    name_to_id: &std::collections::HashMap<String, u64>,
+    name_to_id: &std::collections::HashMap<String, UserKey>,
     keywords: &[String],
     history: &VecDeque<String>,
     exclude_recent: usize,
@@ -762,7 +799,14 @@ pub fn retrieve(
         let Some(id) = name_to_id.get(&name.to_lowercase()) else {
             continue;
         };
-        let content = read(&format!("kisiler/{id}.md"));
+        let path = match v1_person_path(id) {
+            Ok(path) => path,
+            Err(error) => {
+                log::error!("can't retrieve {id} from v1 person storage: {error}");
+                continue;
+            }
+        };
+        let content = read(&path);
         if !content.is_empty() {
             sections.push(trim(&content, 1200));
         }
@@ -911,7 +955,7 @@ pub(crate) mod test {
     #[test]
     fn person_round_trips() {
         let p = Person {
-            id: 259669117248864257,
+            id: UserKey::discord(259669117248864257),
             name: "Emin".into(),
             username: "kaju".into(),
             previous_names: vec!["eski ad".into()],
@@ -921,7 +965,7 @@ pub(crate) mod test {
             facts: vec!["yks'ye hazırlanıyor".into()],
             events: vec!["2026-09-01 14:03:22: tartıştık".into()],
         };
-        let parsed = Person::parse(p.id, &p.text());
+        let parsed = Person::parse(&p.id, &p.text());
         assert_eq!(parsed.id, p.id);
         assert_eq!(parsed.name, "Emin");
         assert_eq!(parsed.username, "kaju");
@@ -1011,7 +1055,7 @@ pub(crate) mod test {
         history.push_back("lng: bugün hava güzel".to_string());
         history.push_back("emin: son mesaj, sohbette zaten var".to_string());
         let mut name_to_id = std::collections::HashMap::new();
-        name_to_id.insert("emin".to_string(), 1u64);
+        name_to_id.insert("emin".to_string(), UserKey::discord(1));
         let result = retrieve(
             &[],
             &name_to_id,

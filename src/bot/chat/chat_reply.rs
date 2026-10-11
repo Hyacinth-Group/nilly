@@ -5,20 +5,20 @@ impl Bot {
     /// streams a reply (falling back to non-streaming on an empty stream), records it, and
     /// loops again if a new message arrived meanwhile. See `docs/flows.md`'s `reply` diagram
     /// for the full step-by-step.
-    /// Input: `&self`; `ctx: &Context`; `channel: ChannelId`. Output: none (sends messages as
+    /// Input: `&self`; `ctx: &Context`; `channel: &RoomKey`. Output: none (sends messages as
     /// a side effect; returns early on any hard failure). Uses: `self.state()`, `BusyGuard`,
     /// `self.determine_mood`, `self.research`, `self.pick_target`, `too_many_questions`,
     /// `self.generate_stream`, `self.send_stream`, `self.generate`, `strip_name`,
     /// `parse_reply`, `self.is_repeat`, `self.send_reply`, `assistant`, `new_message_arrived`,
     /// `self.debug_trace`. Used by: `Handler::message` (`handler_event.rs`), the only caller.
-    async fn reply(&self, ctx: &Context, channel: ChannelId) {
+    async fn reply(&self, ctx: &Context, channel: &RoomKey) {
         loop {
             let instruction = {
                 let mut state = self.state();
-                if state.busy.contains(&channel) {
+                if state.busy.contains(channel) {
                     return;
                 }
-                let Some(chat) = state.chats.get(&channel) else {
+                let Some(chat) = state.chats.get(channel) else {
                     return;
                 };
                 let instruction = if chat.hacked > 1 {
@@ -28,7 +28,7 @@ impl Bot {
                 } else {
                     ""
                 };
-                state.busy.insert(channel);
+                state.busy.insert(channel.clone());
                 (instruction, state.debug)
             };
             let (instruction, debug) = instruction;
@@ -37,7 +37,7 @@ impl Bot {
             // RAII: releases the flag on every exit from the function, panics included
             let _busy_guard = BusyGuard {
                 state: &self.state,
-                channel,
+                channel: channel.clone(),
             };
 
             // leave a short reading window so messages typed back-to-back land in one context
@@ -53,7 +53,7 @@ impl Bot {
                 old_mood,
             ) = {
                 let state = self.state();
-                let Some(chat) = state.chats.get(&channel) else {
+                let Some(chat) = state.chats.get(channel) else {
                     return;
                 };
                 let last_text = chat
@@ -71,7 +71,7 @@ impl Bot {
                     .to_string();
                 (
                     chat.history.clone(),
-                    chat.last_message,
+                    chat.last_message.clone(),
                     chat.last_was_tagged,
                     chat.incoming,
                     last_text,
@@ -88,7 +88,7 @@ impl Bot {
             // in between; otherwise a plain message (a real person doesn't "reply to" every
             // single message either)
             let mut reply_to = if last_was_tagged || waiting.len() > 1 {
-                last_message
+                last_message.as_ref()
             } else {
                 None
             };
@@ -96,7 +96,7 @@ impl Bot {
             // but still a call — don't burn one on every reply)
             let mood = if counter % 4 == 0 {
                 let new_mood = self.determine_mood(&history).await.unwrap_or_default();
-                if let Some(chat) = self.state().chats.get_mut(&channel) {
+                if let Some(chat) = self.state().chats.get_mut(channel) {
                     chat.mood = new_mood.clone();
                 }
                 if debug && !new_mood.is_empty() {
@@ -131,7 +131,7 @@ impl Bot {
                         .rev()
                         .find(|(i, _)| i.eq_ignore_ascii_case(&target))
                     {
-                        reply_to = Some(*id);
+                        reply_to = Some(id);
                         instruction = format!(
                             "{instruction}\n\nBirden çok kişi yazdı; sen {target} adlı kişiye dönmeyi seçtin. Cevabın doğrudan ona seslensin."
                         );
@@ -151,7 +151,10 @@ impl Bot {
                 }
             }
             // show the typing indicator while the model call is in flight; the stream message opens on the first delta
-            let _ = channel.broadcast_typing(&ctx.http).await;
+            match platform::discord::native_room(channel) {
+                Ok(native) => { let _ = native.broadcast_typing(&ctx.http).await; }
+                Err(e) => { log::error!("typing [{channel}]: {e}"); return; }
+            }
             let budget = reply_budget!();
             let (reader, bot_name) = match self.generate_stream(&history, &instruction, budget, "sohbet").await
             {
@@ -169,7 +172,7 @@ impl Bot {
                     StreamContext {
                         bot_name: &bot_name,
                         reply_to,
-                        reaction_target: last_message,
+                        reaction_target: last_message.as_ref(),
                         history: &history,
                         instruction: &instruction,
                         budget,
@@ -188,7 +191,7 @@ impl Bot {
                     }
                     // the hacked prank keeps advancing even on silence: otherwise the
                     // HACK_CONTINUE instruction would get stuck forever
-                    if let Some(chat) = self.state().chats.get_mut(&channel) {
+                    if let Some(chat) = self.state().chats.get_mut(channel) {
                         chat.hacked = chat.hacked.saturating_sub(1);
                     }
                     if new_message_arrived(&self.state(), channel, incoming) {
@@ -215,7 +218,7 @@ impl Bot {
                             let mut fallback = parse_reply(strip_name(&c, &bot_name));
                             fallback.lines.retain(|s| !self.is_repeat(channel, s));
                             match self
-                                .send_reply(ctx, channel, fallback, reply_to, last_message, None)
+                                .send_reply(ctx, channel, fallback, reply_to, last_message.as_ref(), None)
                                 .await
                             {
                                 Some(p) => p,
@@ -252,14 +255,14 @@ impl Bot {
             }
             {
                 let mut state = self.state();
-                if let Some(chat) = state.chats.get_mut(&channel) {
+                if let Some(chat) = state.chats.get_mut(channel) {
                     chat.history.push(assistant(reply));
                     chat.counter += 1;
                     chat.hacked = chat.hacked.saturating_sub(1);
                     // the reply went out: target selection starts over from scratch
                     chat.recent_arrivals.clear();
                 }
-                state.last_activity.insert(channel, Instant::now());
+                state.last_activity.insert(channel.clone(), Instant::now());
             }
 
             // no explicit chat close: staying quiet gets it closed by the timeout (in the

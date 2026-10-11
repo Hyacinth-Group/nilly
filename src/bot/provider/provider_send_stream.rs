@@ -1,7 +1,7 @@
 impl Bot {
     /// Drains a `StreamReader` to completion, live-editing Discord message(s) as text/thought
     /// arrive, then finalizes into sent messages, a reaction, and history/channel-note entries.
-    /// Input: `&self`; `ctx: &Context`; `channel: ChannelId`; `reader: StreamReader` (consumed
+    /// Input: `&self`; `ctx: &Context`; `channel: &RoomKey`; `reader: StreamReader` (consumed
     /// via repeated `reader.next()`); `context: StreamContext` (bot name, reply-to/reaction
     /// targets, history/instruction/budget for a fallback `generate` call).
     /// Output: `Result<StreamResult, BotError>` — `Sent(protocol_text)`, `Empty`, or `Silent`;
@@ -13,10 +13,12 @@ impl Bot {
     async fn send_stream(
         &self,
         ctx: &Context,
-        channel: ChannelId,
+        channel: &RoomKey,
         mut reader: StreamReader,
         context: StreamContext<'_>,
     ) -> Result<StreamResult, BotError> {
+        let native_channel = platform::discord::native_room(channel)?;
+        let native_target = context.reaction_target.map(platform::discord::native_message).transpose()?;
         let mut text = String::new();
         let mut thought = String::new();
         let mut sent: Vec<Message> = Vec::new();
@@ -138,10 +140,10 @@ impl Bot {
 
         // emoji reaction: instead of or alongside a line of text, lands on the message
         // being replied to. An error doesn't stop the flow — the reaction is a garnish
-        if let (Some(emoji), Some(target)) = (&reply.reaction, context.reaction_target) {
+        if let (Some(emoji), Some(target)) = (&reply.reaction, native_target) {
             if let Err(e) = ctx
                 .http
-                .create_reaction(channel, target, &ReactionType::Unicode(emoji.clone()))
+                .create_reaction(native_channel, target, &ReactionType::Unicode(emoji.clone()))
                 .await
             {
                 log::warn!("couldn't add reaction ({channel}): {e}");
@@ -154,7 +156,7 @@ impl Bot {
             let collapsed_thought = single_line(&thought);
             if !collapsed_thought.is_empty() {
                 if let Some(last) = sent.last_mut() {
-                    self.state().link_thought(last.id, collapsed_thought);
+                    self.state().link_thought(MessageKey::discord(last.id.get()), collapsed_thought);
                     let button_edit = thought_button_edit();
                     if let Err(e) = last.edit(&ctx.http, button_edit).await {
                         log::warn!("couldn't add thought button ({channel}): {e}");

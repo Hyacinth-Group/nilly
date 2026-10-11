@@ -1,4 +1,4 @@
-/// One open conversation in one Discord channel. Holds:
+/// One open conversation in one room. Holds:
 /// - `history`: the `ChatMessage` turns sent to/from the model (capped at `CHAT_SIZE`).
 /// - `counter`: how many replies the bot has sent in this chat.
 /// - `hacked`: nonzero while the "hacked" bit is running; ticks down by one per reply.
@@ -13,14 +13,15 @@
 #[derive(Default)]
 struct Chat {
     history: Vec<ChatMessage>,
+    participants: HashMap<String, UserKey>, // observed speaker labels alongside model turns
     counter: u32,
     hacked: u32, // nonzero while the "hacked" bit is running; ticks down by one per reply
-    last_message: Option<MessageId>, // the message to reply to (as a Discord reply-to)
+    last_message: Option<MessageKey>, // the message to reply to
     last_was_tagged: bool, // whether last_message came in via a mention/reply/name (drives whether we reply-to)
     incoming: u32, // count of user messages received; used to notice a new one arrived mid-reply
     // people (name, message id) heard since the bot's last reply; feeds target selection,
     // cleared once the bot replies
-    recent_arrivals: VecDeque<(String, MessageId)>,
+    recent_arrivals: VecDeque<(String, MessageKey)>,
     mood: String, // e.g. "confusion (6)"; empty means not yet determined or intensity too low
 }
 
@@ -94,7 +95,7 @@ impl ThinkingMode {
 }
 
 /// The single shared state, held behind `Bot.state: Mutex<State>`. Holds:
-/// - identity: `bot_name`, `favorite_name`, `username`, `model`, `thinking_mode`, `debug`.
+/// - identity: `bot_name`, `favorite_name`, `accounts`, `model`, `thinking_mode`, `debug`.
 /// - agent output (mirrored on disk under `durum/`): `profile` (profiler), `temperament`
 ///   (coach), `corrections` (critic), `myself` (diarist), `index` (memory index), `agenda`
 ///   (wanderer), `growth` (stage/counters/chosen name, see `growth::Growth`).
@@ -125,15 +126,15 @@ struct State {
     // what it has observed
     recent_messages: VecDeque<String>, // recent server messages, "name: text"
     own_messages: VecDeque<String>,    // the bot's own recent messages
-    last_channel: Option<ChannelId>,
+    last_channel: Option<RoomKey>,
     // chat tracking
-    chats: HashMap<ChannelId, Chat>,
-    busy: HashSet<ChannelId>, // channels currently generating a reply
-    last_activity: HashMap<ChannelId, Instant>, // when a chat last had activity (timeout closes it)
-    last_evaluation: HashMap<ChannelId, Instant>, // last willingness call per channel (rate limit)
-    awaiting_comment: HashMap<ChannelId, Instant>,
+    chats: HashMap<RoomKey, Chat>,
+    busy: HashSet<RoomKey>, // rooms currently generating a reply
+    last_activity: HashMap<RoomKey, Instant>, // when a chat last had activity
+    last_evaluation: HashMap<RoomKey, Instant>, // last willingness call per room
+    awaiting_comment: HashMap<RoomKey, Instant>,
     posted_news: HashSet<u64>,
-    scanned: HashSet<GuildId>,
+    scanned: HashSet<SpaceKey>,
     // sleep: start time + raw memory length at sleep onset, so waking up can evaluate
     // what was written overnight
     sleep_start: i64,
@@ -143,23 +144,23 @@ struct State {
     // agenda and sleep
     agenda: String, // wanderer: what it last read and thought
     // identity mappings: display name (lowercase) -> id, id -> username
-    name_to_id: HashMap<String, u64>,
-    usernames: HashMap<u64, String>,
+    name_to_id: HashMap<String, UserKey>,
+    usernames: HashMap<UserKey, String>,
     // queue the memory cycle works through: (transcript, source, channel name, also run the critic?)
     memory_queue: VecDeque<(String, String, String, bool)>,
     plans: Vec<sleep::Plan>,
     asleep: bool,
     forced_awake_until: i64, // after !wake, sleep plans are ignored until this unix time
-    channel_history: HashMap<ChannelId, VecDeque<String>>, // recent lines per channel, also kept on disk
-    pending_mentions: Vec<(ChannelId, String)>, // mentions received while asleep, answered on waking
-    growth: growth::Growth,                     // stage, counters, chosen name
-    username: String, // discord username; bot_name may be a chosen name instead
+    channel_history: HashMap<RoomKey, VecDeque<String>>, // recent lines per room, also kept on disk
+    pending_mentions: Vec<(RoomKey, String)>, // mentions received while asleep
+    growth: growth::Growth,
+    accounts: HashMap<ConnectionId, UserRef>, // identity belongs to a connection, not the brain
     model: String,     // model in use; changed with !model, persisted in durum/model.md
     thinking_mode: ThinkingMode, // thinking mode; changed with !thinking, persisted in durum/dusunme.md
     debug: bool, // !debug: decisions (willingness, target, silence/reaction) get posted to the channel; durum/debug.md
     // thought behind recent replies, for the button in hide mode to show (message id -> thought)
-    thought_store: HashMap<MessageId, String>,
-    thought_order: VecDeque<MessageId>,
+    thought_store: HashMap<MessageKey, String>,
+    thought_order: VecDeque<MessageKey>,
     metrics: Metrics,        // running total of model usage for the session
     last_road_message: i64,  // last day it posted an on-the-road message while traveling
     announced_trip: i64,     // start day of the trip it already announced as "leaving tomorrow"
@@ -182,10 +183,7 @@ impl State {
             index: memory::refresh_index(),
             agenda: agenda::latest_agenda(&memory::read("gundem.md")),
             growth: growth::load(),
-            channel_history: memory::load_channel_history()
-                .into_iter()
-                .map(|(id, v)| (ChannelId::new(id), v))
-                .collect(),
+            channel_history: memory::load_channel_history().into_iter().collect(),
             thinking_mode: ThinkingMode::read(),
             debug: memory::read("debug.md").trim() == "acik",
             // guilds already scanned before: persisted so a restart doesn't re-fetch 14
@@ -193,7 +191,7 @@ impl State {
             scanned: memory::read("taranan.md")
                 .lines()
                 .filter_map(|l| l.trim().parse::<u64>().ok())
-                .map(GuildId::new)
+                .map(SpaceKey::discord)
                 .collect(),
             ..State::default()
         }
@@ -202,12 +200,12 @@ impl State {
     // links a thought to its reply's message id, so the button in hide mode can find it;
     // the store is capped, oldest entries drop first
     /// Records a reply's thought so the "Show Thought Process" button can retrieve it later.
-    /// Input: `&mut self`; `message` — the Discord message id the thought belongs to;
+    /// Input: `&mut self`; `message` — the domain message key the thought belongs to;
     /// `thought` — the collapsed thought text. Output: none (mutates `self.thought_store`/
     /// `self.thought_order`, evicting the oldest entry once there are more than 50).
     /// Used by: `Bot::send_stream` (`provider_send_stream.rs`), when in `ThinkingMode::Hide`.
-    fn link_thought(&mut self, message: MessageId, thought: String) {
-        self.thought_store.insert(message, thought);
+    fn link_thought(&mut self, message: MessageKey, thought: String) {
+        self.thought_store.insert(message.clone(), thought);
         self.thought_order.push_back(message);
         while self.thought_order.len() > 50 {
             if let Some(oldest) = self.thought_order.pop_front() {

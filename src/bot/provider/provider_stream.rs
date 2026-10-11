@@ -149,9 +149,9 @@ enum StreamResult {
 /// `budget` (passed straight through to a fallback `generate` call on repeat/empty).
 struct StreamContext<'a> {
     bot_name: &'a str,
-    reply_to: Option<MessageId>,
+    reply_to: Option<&'a MessageKey>,
     // message the emoji reaction lands on; separate field since reply_to is conditional
-    reaction_target: Option<MessageId>,
+    reaction_target: Option<&'a MessageKey>,
     history: &'a [ChatMessage],
     instruction: &'a str,
     budget: Option<u32>,

@@ -2,17 +2,17 @@
     /// Verifies `new_message_arrived` compares against the chat's `incoming` counter to detect a newer message.
     #[test]
     fn new_message_invalidates_old_reply() {
-        let channel = ChannelId::new(7);
+        let channel = RoomKey::discord(7);
         let mut state = State::default();
         state.chats.insert(
-            channel,
+            channel.clone(),
             Chat {
                 incoming: 3,
                 ..Chat::default()
             },
         );
-        assert!(new_message_arrived(&state, channel, 2));
-        assert!(!new_message_arrived(&state, channel, 3));
+        assert!(new_message_arrived(&state, &channel, 2));
+        assert!(!new_message_arrived(&state, &channel, 3));
     }
 
     /// Verifies `split` prefers cutting at sentence boundaries and every part stays within the limit.

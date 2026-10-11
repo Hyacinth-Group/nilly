@@ -29,6 +29,7 @@ async fn cmd_settings(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
 async fn cmd_mind(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
     if option_bool(cmd, strings::t("cmd.zihin.opt.test.name")).unwrap_or(false) {
         defer(ctx, cmd).await;
+        let channel = RoomKey::discord(cmd.channel_id.get());
         // diagnostic: feed this channel's recent lines straight to the diarist, so
         // whether the mind pipeline works can be seen without waiting 40 minutes (it was
         // coming back empty on a reasoning model, and without a live log there was no way to tell)
@@ -36,7 +37,7 @@ async fn cmd_mind(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
             let state = bot.state();
             state
                 .channel_history
-                .get(&cmd.channel_id)
+                .get(&channel)
                 .map(|hist| hist.iter().rev().take(30).cloned().collect())
                 .unwrap_or_default()
         };

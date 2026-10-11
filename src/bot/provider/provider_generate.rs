@@ -199,8 +199,8 @@ impl Bot {
     // mentions always go out disabled: even if the model writes @everyone, nobody gets pinged.
     // everything sent lands in own_messages, which the coach and critic read from.
     /// Sends one plain Discord message and records it. Input: `&self`, `ctx: &Context`,
-    /// `channel: ChannelId`, `text: &str`, `ping: Option<UserId>` (the one user allowed to
-    /// be mentioned), `file: Option<&PathBuf>` (attachment), `reply_to: Option<MessageId>`
+    /// `channel: &RoomKey`, `text: &str`, `ping: Option<&UserKey>` (the one user allowed to
+    /// be mentioned), `file: Option<&PathBuf>` (attachment), `reply_to: Option<&MessageKey>`
     /// (Discord reply-to target). Output: none (logs and returns early on failure). Uses:
     /// `CreateAllowedMentions`/`CreateMessage`/`CreateAttachment`, `self.state()`,
     /// `channel_note`. Used by: `send_lines`/`send_reply` (`provider_send_line.rs`), and
@@ -208,20 +208,31 @@ impl Bot {
     async fn send(
         &self,
         ctx: &Context,
-        channel: ChannelId,
+        channel: &RoomKey,
         text: &str,
-        ping: Option<UserId>,
+        ping: Option<&UserKey>,
         file: Option<&PathBuf>,
-        reply_to: Option<MessageId>, // when set, becomes a Discord reply and mentions that person
+        reply_to: Option<&MessageKey>,
     ) {
-        let mut msg = discord_message(channel, text, ping, reply_to);
+        let native = (|| -> Result<_, platform::types::KeyError> {
+            Ok((
+                platform::discord::native_room(channel)?,
+                ping.map(platform::discord::native_user).transpose()?,
+                reply_to.map(platform::discord::native_message).transpose()?,
+            ))
+        })();
+        let (native_channel, native_ping, native_reply) = match native {
+            Ok(native) => native,
+            Err(e) => { log::error!("send failed ({channel}): {e}"); return; }
+        };
+        let mut msg = discord_message(native_channel, text, native_ping, native_reply);
         if let Some(path) = file {
             match CreateAttachment::path(path).await {
                 Ok(attachment) => msg = msg.add_file(attachment),
                 Err(e) => log::warn!("couldn't read image ({}): {e}", path.display()),
             }
         }
-        if let Err(e) = channel.send_message(&ctx.http, msg).await {
+        if let Err(e) = native_channel.send_message(&ctx.http, msg).await {
             log::error!("send failed ({channel}): {e}");
             return;
         }

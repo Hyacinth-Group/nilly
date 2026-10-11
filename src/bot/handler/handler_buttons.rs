@@ -45,7 +45,8 @@ impl Handler {
         if component.data.custom_id != THOUGHT_BUTTON {
             return;
         }
-        let thought = self.bot.state().thought_store.get(&component.message.id).cloned();
+        let message = MessageKey::discord(component.message.id.get());
+        let thought = self.bot.state().thought_store.get(&message).cloned();
         let Some(thought) = thought else {
             let _ = component
                 .create_response(

@@ -377,11 +377,16 @@ fn build_modal(title: &str, custom_id: &str, sections: Vec<Section>) -> CreateMo
 }
 
 // person card: identity / impression / tags / facts / recent events in separate fields
-/// Input: `id: u64` — a Discord user id. Output: `CreateModal`. Uses:
+/// Input: `id: &UserKey` — a platform user identity. Output: `CreateModal`. Uses:
 /// `memory::read_person`, `Section::new`, `build_modal`. Used by:
 /// `Handler::interaction_create` (`handler_event.rs`), for the `MIND_PERSON_PICK` select.
-pub fn person_modal(id: u64) -> CreateModal {
+pub fn person_modal(id: &UserKey) -> CreateModal {
     let p = memory::read_person(id);
+    // Keep Discord's visible ID and modal ID unchanged; selectors carry domain keys.
+    let display_id = match platform::discord::native_user(id) {
+        Ok(native) => native.to_string(),
+        Err(_) => id.to_string(),
+    };
     let title = if p.name.is_empty() {
         strings::t("person.unknown").to_string()
     } else {
@@ -389,7 +394,7 @@ pub fn person_modal(id: u64) -> CreateModal {
     };
     let mut sections: Vec<Section> = Vec::new();
 
-    let mut identity = format!("{}\nid: {}", p.name, p.id);
+    let mut identity = format!("{}\nid: {}", p.name, display_id);
     if !p.username.is_empty() {
         identity += &strings::t("person.username_line").replace("{username}", &p.username);
     }
@@ -448,7 +453,7 @@ pub fn person_modal(id: u64) -> CreateModal {
             list.join("\n"),
         ));
     }
-    build_modal(&title, &format!("mind_person_{id}"), sections)
+    build_modal(&title, &format!("mind_person_{display_id}"), sections)
 }
 
 // topics: most recently changed with their notes, the rest as a plain name list

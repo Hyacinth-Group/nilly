@@ -1,14 +1,14 @@
-/// Input: `bot: &Bot`. Output: `Option<(ChannelId, String)>` — the last-talked-in channel
+/// Input: `bot: &Bot`. Output: `Option<(RoomKey, String)>` — the last-talked-in room
 /// plus its last 40 lines, if it has no open chat and there's already a profile to work
 /// from; `None` otherwise. Uses: `bot.state()`, `recent_messages`. Used by: `poke_cycle`/
 /// `prank_cycle` below.
-fn idle_channel(bot: &Bot) -> Option<(ChannelId, String)> {
+fn idle_channel(bot: &Bot) -> Option<(RoomKey, String)> {
     let state = bot.state();
-    let channel = state.last_channel?;
-    if state.chats.contains_key(&channel) || state.profile.is_empty() {
+    let channel = state.last_channel.as_ref()?;
+    if state.chats.contains_key(channel) || state.profile.is_empty() {
         return None;
     }
-    Some((channel, recent_messages(&state, 40)))
+    Some((channel.clone(), recent_messages(&state, 40)))
 }
 
 // every so often, speaks up unprompted like a familiar face would
@@ -48,7 +48,7 @@ async fn poke_cycle(bot: Arc<Bot>, ctx: Context) {
                 // post a small code gripe to the dev channel
                 if let Some(channel) = default_channel(&bot, &ctx) {
                     if !bot.state().chats.contains_key(&channel) {
-                        bot.post_problem(&ctx, channel).await;
+                        bot.post_problem(&ctx, &channel).await;
                     }
                 }
                 continue;
@@ -67,11 +67,11 @@ async fn poke_cycle(bot: Arc<Bot>, ctx: Context) {
             }
         };
         match bot
-            .send_lines(&ctx, channel, &line, None, None, None)
+            .send_lines(&ctx, &channel, &line, None, None, None)
             .await
         {
             Some(p) => {
-                start_chat(&mut bot.state(), channel, Some(p));
+                start_chat(&mut bot.state(), &channel, Some(p));
             }
             None => log::debug!("poke: model stayed silent, skipped"),
         }
@@ -97,7 +97,7 @@ async fn prank_cycle(bot: Arc<Bot>, ctx: Context) {
         let Some((channel, _)) = idle_channel(&bot) else {
             continue;
         };
-        bot.run_prank(&ctx, channel, rand::random::<f64>() < HACK_SHARE)
+        bot.run_prank(&ctx, &channel, rand::random::<f64>() < HACK_SHARE)
             .await;
     }
 }

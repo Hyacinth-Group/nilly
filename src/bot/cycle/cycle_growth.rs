@@ -5,30 +5,30 @@ impl Bot {
     /// `transcript`, `self.debug_note`, `self.check_growth`. Used by: `sleep_cycle`
     /// (`cycle_background.rs`), the only caller (runs on the minute tick).
     async fn close_timed_out(&self, ctx: &Context) {
-        let closed: Vec<(ChannelId, Chat)> = {
+        let closed: Vec<(RoomKey, Chat)> = {
             let mut state = self.state();
             // drop activity records for chats that no longer exist
-            let open_channels: HashSet<ChannelId> = state.chats.keys().copied().collect();
+            let open_channels: HashSet<RoomKey> = state.chats.keys().cloned().collect();
             state.last_activity.retain(|channel, _| open_channels.contains(channel));
             let now = Instant::now();
-            let to_close: Vec<ChannelId> = state
+            let to_close: Vec<RoomKey> = state
                 .last_activity
                 .iter()
                 .filter(|(channel, t)| {
                     !state.busy.contains(channel) && now.duration_since(**t) >= CHAT_TIMEOUT
                 })
-                .map(|(channel, _)| *channel)
+                .map(|(channel, _)| channel.clone())
                 .collect();
             let mut closed = Vec::new();
             for channel in to_close {
-                if let Some(chat) = end_chat(&mut state, channel) {
+                if let Some(chat) = end_chat(&mut state, &channel) {
                     state.last_activity.remove(&channel);
                     closed.push((channel, chat));
                 }
             }
             // news chats past their window: if nobody commented (no activity for the whole
             // window, or the record already dropped), it closes silently and the map doesn't bloat
-            let news_expired: Vec<ChannelId> = state
+            let news_expired: Vec<RoomKey> = state
                 .awaiting_comment
                 .iter()
                 .filter(|(channel, t)| {
@@ -38,7 +38,7 @@ impl Bot {
                             .get(channel)
                             .is_none_or(|a| now.duration_since(*a) >= COMMENT_WINDOW)
                 })
-                .map(|(channel, _)| *channel)
+                .map(|(channel, _)| channel.clone())
                 .collect();
             for channel in news_expired {
                 state.awaiting_comment.remove(&channel);
@@ -51,7 +51,10 @@ impl Bot {
         for (channel, chat) in closed {
             let bot_name = self.state().bot_name.clone();
             let transcript_text = transcript(&chat.history, &bot_name);
-            let channel_name = channel.name(ctx).await.unwrap_or_else(|_| channel.to_string());
+            let channel_name = match platform::discord::native_room(&channel) {
+                Ok(native) => native.name(ctx).await.unwrap_or_else(|_| channel.to_string()),
+                Err(_) => channel.to_string(),
+            };
             // not handled inline, processed in the memory cycle instead (so the critic runs too)
             let queue_len = {
                 let mut state = self.state();
@@ -67,7 +70,7 @@ impl Bot {
             log::info!(
                 "mind: chat closed [{channel}] ({minutes} min quiet) → queued ({queue_len}), diarist within 10 min"
             );
-            self.debug_note(ctx, channel, format!("sohbet kapandı ({minutes} dk sessiz)"))
+            self.debug_note(ctx, &channel, format!("sohbet kapandı ({minutes} dk sessiz)"))
                 .await;
             self.state().growth.chats += 1;
             self.check_growth(ctx).await;
@@ -145,11 +148,11 @@ impl Bot {
             .await
         {
             Ok(announcement) => match self
-                .send_lines(ctx, channel, &announcement, None, None, None)
+                .send_lines(ctx, &channel, &announcement, None, None, None)
                 .await
             {
                 Some(p) => {
-                    start_chat(&mut self.state(), channel, Some(p));
+                    start_chat(&mut self.state(), &channel, Some(p));
                 }
                 None => log::debug!("name: model stayed silent for the announcement, skipped"),
             },

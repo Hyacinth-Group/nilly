@@ -67,13 +67,13 @@ fn parse_reply(text: &str) -> Reply {
 
 // if two of the last 4 bot lines (reaction lines don't count) ended in a question mark,
 // it's been asking questions back-to-back; `reply` turns this into an instruction
-/// Input: `state: &State`; `channel: ChannelId`. Output: `bool`. Uses: `reaction_body`
+/// Input: `state: &State`; `channel: &RoomKey`. Output: `bool`. Uses: `reaction_body`
 /// (to exclude reaction lines). Used by: `Bot::reply` (`chat_reply.rs`), `chat_cli.rs`.
-fn too_many_questions(state: &State, channel: ChannelId) -> bool {
+fn too_many_questions(state: &State, channel: &RoomKey) -> bool {
     let prefix = format!("{}: ", state.bot_name);
     state
         .channel_history
-        .get(&channel)
+        .get(channel)
         .map(|hist| {
             hist.iter()
                 .rev()

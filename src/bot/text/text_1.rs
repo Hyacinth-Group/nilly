@@ -91,26 +91,26 @@ fn spoiler(text: &str) -> String {
 }
 
 // appends a line to a channel's history and writes it to disk; survives a closed chat and a restart
-/// Input: `state: &mut State`; `channel: ChannelId`; `line: String`. Output: none.
+/// Input: `state: &mut State`; `channel: &RoomKey`; `line: String`. Output: none.
 /// Uses: `channel_notes` (single-element wrapper). Used by: `Handler::message`
 /// (`handler_event.rs`), `Bot::send_reply` (`provider_send_line.rs`).
-fn channel_note(state: &mut State, channel: ChannelId, line: String) {
+fn channel_note(state: &mut State, channel: &RoomKey, line: String) {
     channel_notes(state, channel, [line]);
 }
 
 // appends multiple lines with a SINGLE file write. Since a reply now goes out line by
 // line, writing on every single line used to rewrite the whole channel history 4-5 times
 // per turn.
-/// Input: `state: &mut State`; `channel: ChannelId`; `lines: impl IntoIterator<Item =
+/// Input: `state: &mut State`; `channel: &RoomKey`; `lines: impl IntoIterator<Item =
 /// String>`. Output: none (updates `state.channel_history`, capped at `CHANNEL_HISTORY`,
 /// and writes the whole history to `durum/kanallar/<id>.md`). Uses: `memory::write`. Used
 /// by: `channel_note` above, `Bot::send_stream` (`provider_send_stream.rs`).
-fn channel_notes(state: &mut State, channel: ChannelId, lines: impl IntoIterator<Item = String>) {
+fn channel_notes(state: &mut State, channel: &RoomKey, lines: impl IntoIterator<Item = String>) {
     let mut lines = lines.into_iter().peekable();
     if lines.peek().is_none() {
         return;
     }
-    let hist = state.channel_history.entry(channel).or_default();
+    let hist = state.channel_history.entry(channel.clone()).or_default();
     hist.extend(lines);
     while hist.len() > CHANNEL_HISTORY {
         hist.pop_front();
@@ -123,7 +123,10 @@ fn channel_notes(state: &mut State, channel: ChannelId, lines: impl IntoIterator
         }
         content.push_str(line);
     }
-    memory::write(&format!("kanallar/{}.md", channel.get()), &content);
+    // Step 2 migrates persisted room paths atomically; terminal rooms stay memory-only.
+    if let Ok(path) = memory::v1_room_path(channel) {
+        memory::write(&path, &content);
+    }
 }
 
 /// Input: `state: &State`; `n: usize`. Output: `String` — the last `n` lines of

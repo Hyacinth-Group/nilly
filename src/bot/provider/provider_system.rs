@@ -104,7 +104,7 @@ fn system_text(state: &State, instruction: &str, retrieved: &str) -> (String, St
 
 /// Opens (or returns the existing) `Chat` for a channel, seeding fresh history from the
 /// channel's recent lines and, if given, an already-sent opening message.
-/// Input: `state: &mut State`; `channel: ChannelId`; `opening: Option<String>` — an opening
+/// Input: `state: &mut State`; `channel: &RoomKey`; `opening: Option<String>` — an opening
 /// reply already sent line-by-line, to fold into history as one assistant turn without
 /// duplication (see comment below). Output: `&mut Chat` — the (new or existing) chat.
 /// Uses: `state.channel_history`, `assistant`/`user`. Used by: `Handler::message`
@@ -112,16 +112,24 @@ fn system_text(state: &State, instruction: &str, retrieved: &str) -> (String, St
 /// (`cycle_news.rs`), `poke_cycle` (`cycle_background.rs`), `guild_member_addition`,
 /// `sleep_transition`/`evaluate_waking` (`cycle_sleep.rs`), `pick_name` (`cycle_growth.rs`),
 /// `chat_cli.rs`.
-fn start_chat(state: &mut State, channel: ChannelId, opening: Option<String>) -> &mut Chat {
+fn start_chat<'a>(state: &'a mut State, channel: &RoomKey, opening: Option<String>) -> &'a mut Chat {
     let mut chat = Chat::default();
     // start from the channel's recent lines, so it knows what's already been discussed
     let prefix = format!("{}: ", state.bot_name);
-    if let Some(hist) = state.channel_history.get(&channel) {
+    if let Some(hist) = state.channel_history.get(channel) {
         let skip = hist.len().saturating_sub(CHAT_SEED);
         for line in hist.iter().skip(skip) {
             match line.strip_prefix(&prefix) {
                 Some(m) => chat.history.push(assistant(m)),
-                None => chat.history.push(user(line.clone())),
+                None => {
+                    if let Some((name, _)) = line.split_once(": ") {
+                        let label = name.to_lowercase();
+                        if let Some(id) = state.name_to_id.get(&label) {
+                            chat.participants.entry(label).or_insert_with(|| id.clone());
+                        }
+                    }
+                    chat.history.push(user(line.clone()));
+                }
             }
         }
     }
@@ -142,26 +150,26 @@ fn start_chat(state: &mut State, channel: ChannelId, opening: Option<String>) ->
         chat.history.push(assistant(a));
         chat.counter = 1;
     }
-    state.last_activity.insert(channel, Instant::now());
-    state.chats.entry(channel).or_insert(chat)
+    state.last_activity.insert(channel.clone(), Instant::now());
+    state.chats.entry(channel.clone()).or_insert(chat)
 }
 
-/// Input: `state: &mut State`; `channel: ChannelId`. Output: `Option<Chat>` — the removed
+/// Input: `state: &mut State`; `channel: &RoomKey`. Output: `Option<Chat>` — the removed
 /// chat, if one existed (also clears `state.awaiting_comment` for the channel). Used by:
 /// `Bot::close_timed_out` (`cycle_growth.rs`), `Handler::message`'s expired-news-window path
 /// (`handler_event.rs`).
-fn end_chat(state: &mut State, channel: ChannelId) -> Option<Chat> {
-    state.awaiting_comment.remove(&channel);
-    state.chats.remove(&channel)
+fn end_chat(state: &mut State, channel: &RoomKey) -> Option<Chat> {
+    state.awaiting_comment.remove(channel);
+    state.chats.remove(channel)
 }
 
-/// Input: `state: &State`; `channel: ChannelId`; `generated_incoming: u32` — the
+/// Input: `state: &State`; `channel: &RoomKey`; `generated_incoming: u32` — the
 /// `Chat.incoming` count captured when a reply started generating. Output: `bool` — whether
 /// a newer user message has arrived since then. Used by: `Bot::reply` (`chat_reply.rs`), to
 /// decide whether to loop for another turn instead of exiting.
-fn new_message_arrived(state: &State, channel: ChannelId, generated_incoming: u32) -> bool {
+fn new_message_arrived(state: &State, channel: &RoomKey, generated_incoming: u32) -> bool {
     state
         .chats
-        .get(&channel)
+        .get(channel)
         .is_some_and(|s| s.incoming > generated_incoming)
 }

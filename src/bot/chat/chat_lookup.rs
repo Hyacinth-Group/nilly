@@ -1,16 +1,16 @@
 impl Bot {
     // is this the same as one of the bot's last 5 messages?
-    /// Input: `&self`; `channel: ChannelId`; `reply: &str` — a candidate line. Output:
+    /// Input: `&self`; `channel: &RoomKey`; `reply: &str` — a candidate line. Output:
     /// `bool` — case-insensitive match against the channel's last 5 bot lines. Uses:
     /// `self.state().channel_history`. Used by: `Bot::send_stream` (`provider_send_stream.rs`,
     /// per line), `Bot::reply`'s fallback (`chat_reply.rs`).
-    fn is_repeat(&self, channel: ChannelId, reply: &str) -> bool {
+    fn is_repeat(&self, channel: &RoomKey, reply: &str) -> bool {
         let state = self.state();
         let prefix = format!("{}: ", state.bot_name);
         let target = reply.trim().to_lowercase();
         state
             .channel_history
-            .get(&channel)
+            .get(channel)
             .map(|hist| {
                 hist.iter()
                     .rev()

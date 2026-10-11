@@ -7,16 +7,13 @@
 use super::*;
 use std::io::Write;
 
-// the CLI's fake channel: not a real Discord channel, just the key for chat state
-const CLI_CHANNEL: u64 = 1;
-
 // appends to channel history in MEMORY ONLY; channel_note does the same thing but also
 // writes to disk — the bench shouldn't pollute the real durum/kanallar files
-/// Input: `state: &mut State`; `channel: ChannelId`; `line: String`. Output: none (updates
+/// Input: `state: &mut State`; `channel: &RoomKey`; `line: String`. Output: none (updates
 /// `state.channel_history` only, capped at `CHANNEL_HISTORY`). Used by: `Bot::chat_cli`
 /// below, the only caller.
-fn append_history(state: &mut State, channel: ChannelId, line: String) {
-    let hist = state.channel_history.entry(channel).or_default();
+fn append_history(state: &mut State, channel: &RoomKey, line: String) {
+    let hist = state.channel_history.entry(channel.clone()).or_default();
     hist.push_back(line);
     while hist.len() > CHANNEL_HISTORY {
         hist.pop_front();
@@ -42,7 +39,7 @@ impl Bot {
     /// `strip_name`, `parse_reply`. Used by: `main` (`main.rs`), when invoked as
     /// `cargo run -- chat`.
     pub async fn chat_cli(&self) {
-        let channel = ChannelId::new(CLI_CHANNEL);
+        let channel = RoomKey::terminal();
         {
             let mut state = self.state();
             // the ready event never fires, so the name stays empty: use the chosen name if
@@ -54,7 +51,7 @@ impl Bot {
                     .clone()
                     .unwrap_or_else(|| "bot".to_string());
             }
-            start_chat(&mut state, channel, None);
+            start_chat(&mut state, &channel, None);
         }
         println!("chat mode — type \"name: text\"; !quit to exit (or ctrl-d)");
         // stdin is read blocking: this mode has no background cycle, a separate reader isn't worth it
@@ -85,7 +82,7 @@ impl Bot {
             {
                 let mut state = self.state();
                 remember(&mut state, &name, &text);
-                append_history(&mut state, channel, format!("{name}: {text}"));
+                append_history(&mut state, &channel, format!("{name}: {text}"));
                 if let Some(chat) = state.chats.get_mut(&channel) {
                     chat.history.push(user(format!("{name}: {text}")));
                     if chat.history.len() > CHAT_SIZE {
@@ -101,7 +98,7 @@ impl Bot {
                     .map(|chat| chat.history.clone())
                     .unwrap_or_default();
                 // same question cap as live: code measures it, the model does the writing
-                let instruction = if too_many_questions(&state, channel) {
+                let instruction = if too_many_questions(&state, &channel) {
                     "Bu sefer soru sorma; düz laf et ya da sus."
                 } else {
                     ""
@@ -140,10 +137,10 @@ impl Bot {
                     chat.counter += 1;
                 }
                 for line in &reply.lines {
-                    append_history(&mut state, channel, format!("{bot_name}: {line}"));
+                    append_history(&mut state, &channel, format!("{bot_name}: {line}"));
                 }
                 if let Some(emoji) = &reply.reaction {
-                    append_history(&mut state, channel, format!("{bot_name}: tepki: {emoji}"));
+                    append_history(&mut state, &channel, format!("{bot_name}: tepki: {emoji}"));
                 }
             }
         }
@@ -172,10 +169,11 @@ mod test {
     /// Verifies `append_history` caps a channel's in-memory history at `CHANNEL_HISTORY`, dropping the oldest lines first.
     #[test]
     fn history_limited_in_memory() {
-        let channel = ChannelId::new(CLI_CHANNEL);
+        let channel = RoomKey::terminal();
         let mut state = State::default();
+        assert_eq!(channel.as_str(), "terminal:room:local:bench");
         for i in 0..CHANNEL_HISTORY + 5 {
-            append_history(&mut state, channel, format!("emin: {i}"));
+            append_history(&mut state, &channel, format!("emin: {i}"));
         }
         let hist = &state.channel_history[&channel];
         assert_eq!(hist.len(), CHANNEL_HISTORY);

@@ -2,6 +2,7 @@
 /// Output: none. Uses: `option_bool`, `bot.state()`, `reply_info`. Registered as `run` for
 /// `"sifirla"` in `registration_table.rs`.
 async fn cmd_reset(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
+    let channel = RoomKey::discord(cmd.channel_id.get());
     let all = option_bool(cmd, strings::t("cmd.sifirla.opt.hepsi.name")).unwrap_or(false);
     {
         let mut state = bot.state();
@@ -10,9 +11,9 @@ async fn cmd_reset(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
             state.awaiting_comment.clear();
             state.busy.clear();
         } else {
-            state.chats.remove(&cmd.channel_id);
-            state.awaiting_comment.remove(&cmd.channel_id);
-            state.busy.remove(&cmd.channel_id);
+            state.chats.remove(&channel);
+            state.awaiting_comment.remove(&channel);
+            state.busy.remove(&channel);
         }
     }
     reply_info(
@@ -33,8 +34,9 @@ async fn cmd_reset(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
 /// Registered as `run` for `"haber"` in `registration_table.rs`.
 async fn cmd_news(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
     defer(ctx, cmd).await;
-    bot.state().chats.remove(&cmd.channel_id);
-    let found = bot.post_news(ctx, cmd.channel_id).await;
+    let channel = RoomKey::discord(cmd.channel_id.get());
+    bot.state().chats.remove(&channel);
+    let found = bot.post_news(ctx, &channel).await;
     report_result(
         ctx,
         cmd,
@@ -53,8 +55,9 @@ async fn cmd_news(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
 /// Registered as `run` for `"sorun"` in `registration_table.rs`.
 async fn cmd_problem(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
     defer(ctx, cmd).await;
-    bot.state().chats.remove(&cmd.channel_id);
-    bot.post_problem(ctx, cmd.channel_id).await;
+    let channel = RoomKey::discord(cmd.channel_id.get());
+    bot.state().chats.remove(&channel);
+    bot.post_problem(ctx, &channel).await;
     report_result(ctx, cmd, strings::t("problem.title"), strings::t("common.sent")).await;
 }
 
@@ -86,8 +89,9 @@ async fn cmd_hack(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
 /// none. Uses: `defer`, `bot.state()`, `bot.run_prank` (`cycle_news.rs`), `report_result`.
 async fn prank_shared(bot: &Bot, ctx: &Context, cmd: &CommandInteraction, hack: bool) {
     defer(ctx, cmd).await;
-    bot.state().chats.remove(&cmd.channel_id);
-    bot.run_prank(ctx, cmd.channel_id, hack).await;
+    let channel = RoomKey::discord(cmd.channel_id.get());
+    bot.state().chats.remove(&channel);
+    bot.run_prank(ctx, &channel, hack).await;
     let title = if hack {
         strings::t("prank.title_hack")
     } else {

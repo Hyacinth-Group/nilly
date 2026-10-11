@@ -5,7 +5,7 @@
 /// actually does the work.
 struct BusyGuard<'a> {
     state: &'a Mutex<State>,
-    channel: ChannelId,
+    channel: RoomKey,
 }
 
 impl Drop for BusyGuard<'_> {
@@ -41,11 +41,11 @@ struct Bot {
     http: reqwest::Client,
     api_url: String, // chat/completions endpoint (openrouter or mistral)
     key: String,
-    news_channel: Option<ChannelId>,
+    news_channel: Option<RoomKey>,
     firecrawl: Option<String>, // without it, pages are downloaded plain instead
-    guild_id: Option<GuildId>, // .env GUILD_ID; when set, the bot only runs in this guild
-    allowed_channels: Option<HashSet<ChannelId>>, // .env CHANNELS; when set, only these channels
-    debug_channel: Option<ChannelId>, // .env DEBUG_CHANNEL; debug lines go here, else the same channel
+    guild_id: Option<SpaceKey>, // .env GUILD_ID; restricts the Discord connection
+    allowed_channels: Option<HashSet<RoomKey>>, // .env CHANNELS; approved rooms
+    debug_channel: Option<RoomKey>, // .env DEBUG_CHANNEL; otherwise the same room
     // .env IMAGE_ANALYSIS; read only at startup, no command/button can change it at runtime
     // (deliberate: an operator who turns it off shouldn't be able to turn it back on
     // without restarting the process)

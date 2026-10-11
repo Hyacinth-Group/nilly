@@ -1,3 +1,5 @@
+    use crate::platform::discord::events::{discord_message_input, display_name, reaction_label};
+
     /// Verifies `parse_reply`/`number_prefix` strip a list-item number prefix only across a real multi-line list, never on a lone line that's actually a Turkish ordinal ("3. sınıftayım").
     #[test]
     fn number_prefix_only_stripped_in_real_list() {
@@ -78,7 +80,7 @@
     /// Verifies `too_many_questions` counts only question-shaped bot lines (not reactions) against the channel's recent history, and returns false for a channel with no history.
     #[test]
     fn question_cap_fills() {
-        let channel = ChannelId::new(3);
+        let channel = RoomKey::discord(3);
         let mut state = State {
             bot_name: "kaju".into(),
             ..State::default()
@@ -92,17 +94,17 @@
         .iter()
         .map(|s| s.to_string())
         .collect();
-        state.channel_history.insert(channel, full);
-        assert!(too_many_questions(&state, channel));
+        state.channel_history.insert(channel.clone(), full);
+        assert!(too_many_questions(&state, &channel));
         // reaction lines don't count; plain talk mixed in keeps the cap from filling
         let sparse: VecDeque<String> = ["kaju: iyidir sen?", "kaju: tepki: 💀", "kaju: aynen"]
             .iter()
             .map(|s| s.to_string())
             .collect();
-        state.channel_history.insert(channel, sparse);
-        assert!(!too_many_questions(&state, channel));
+        state.channel_history.insert(channel.clone(), sparse);
+        assert!(!too_many_questions(&state, &channel));
         // a channel with no history
-        assert!(!too_many_questions(&state, ChannelId::new(99)));
+        assert!(!too_many_questions(&state, &RoomKey::discord(99)));
     }
 
     /// Verifies `message_json` emits plain string content for a text-only message, a text+image_url array when an image is attached, and that an assistant message never carries an image.

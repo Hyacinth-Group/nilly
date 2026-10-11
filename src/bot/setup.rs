@@ -60,12 +60,12 @@ impl Bot {
         );
         log::info!("stealth: {}", if stealth { "on" } else { "off" });
         let news_channel = match std::env::var("NEWS_CHANNEL") {
-            Ok(v) if !v.trim().is_empty() => Some(ChannelId::new(v.trim().parse()?)),
+            Ok(v) if !v.trim().is_empty() => Some(RoomKey::discord(v.trim().parse()?)),
             _ => None,
         };
         // both optional: if unset, the bot behaves as before and runs in every server/channel it can reach
         let guild_id = match std::env::var("GUILD_ID") {
-            Ok(v) if !v.trim().is_empty() => Some(GuildId::new(v.trim().parse()?)),
+            Ok(v) if !v.trim().is_empty() => Some(SpaceKey::discord(v.trim().parse()?)),
             _ => None,
         };
         let allowed_channels = match std::env::var("CHANNELS") {
@@ -76,7 +76,7 @@ impl Bot {
                     if part.is_empty() {
                         continue;
                     }
-                    s.insert(ChannelId::new(part.parse()?));
+                    s.insert(RoomKey::discord(part.parse()?));
                 }
                 Some(s)
             }
@@ -118,7 +118,7 @@ impl Bot {
             debug_channel: std::env::var("DEBUG_CHANNEL")
                 .ok()
                 .and_then(|v| v.trim().parse::<u64>().ok())
-                .map(ChannelId::new),
+                .map(RoomKey::discord),
             image_analysis,
             stealth,
             reasoning_mandatory_models: Mutex::new(HashSet::new()),
@@ -129,10 +129,10 @@ impl Bot {
     // caller only builds the format! while debug is on). Not written to memory or the
     // channel note — the bot shouldn't mistake it for its own words — and since it's a
     // bot message, it doesn't reach the message handler either
-    /// Input: `&self`; `ctx: &Context`; `channel: ChannelId`; `text: String`. Output: none
+    /// Input: `&self`; `ctx: &Context`; `channel: &RoomKey`; `text: String`. Output: none
     /// (no-op if `self.state().debug` is false). Uses: `self.debug_channel`,
     /// `modal::info_embed`. Used by: `debug_trace` below, the only caller.
-    async fn debug_note(&self, ctx: &Context, channel: ChannelId, text: String) {
+    async fn debug_note(&self, ctx: &Context, channel: &RoomKey, text: String) {
         if !self.state().debug {
             return;
         }
@@ -141,23 +141,27 @@ impl Bot {
         if self.stealth {
             return;
         }
-        let target = self.debug_channel.unwrap_or(channel);
+        let target = self.debug_channel.as_ref().unwrap_or(channel);
+        let native = match platform::discord::native_room(target) {
+            Ok(native) => native,
+            Err(e) => { log::warn!("debug [{target}]: {e}"); return; }
+        };
         let body: String = text.chars().take(300).collect();
         let msg =
             CreateMessage::new().embed(modal::info_embed(strings::t("debug.trace_title"), &body));
-        if let Err(e) = target.send_message(&ctx.http, msg).await {
+        if let Err(e) = native.send_message(&ctx.http, msg).await {
             log::warn!("couldn't send debug line ({target}): {e}");
         }
     }
 
     // sends several traces as a single line; silent if there's nothing to trace or debug is off
-    /// Input: `&self`; `ctx: &Context`; `channel: ChannelId`; `enabled: bool`; `trace:
+    /// Input: `&self`; `ctx: &Context`; `channel: &RoomKey`; `enabled: bool`; `trace:
     /// &[String]` — this turn's decision notes. Output: none. Uses: `debug_note` above.
     /// Used by: `Bot::reply` (`chat_reply.rs`), `Handler::message` (`handler_event.rs`).
     async fn debug_trace(
         &self,
         ctx: &Context,
-        channel: ChannelId,
+        channel: &RoomKey,
         enabled: bool,
         trace: &[String],
     ) {

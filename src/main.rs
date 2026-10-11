@@ -9,6 +9,7 @@ mod logging;
 mod memory;
 mod migrate;
 mod modal;
+pub mod platform;
 mod prompts;
 mod sleep;
 mod strings;
@@ -21,6 +22,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use agents::random_image;
+use platform::types::*;
+use platform::types::{Emoji, UserRef};
 use serde::{Deserialize, Serialize};
 use serenity::all::*;
 use serenity::async_trait;

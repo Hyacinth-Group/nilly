@@ -114,20 +114,28 @@ fn single_line(text: &str) -> String {
 // reconciles the layout with the messages already open: changed ones are edited, missing
 // ones are opened, and if the text got shorter (e.g. the name prefix got stripped) extra
 // messages are deleted
-/// Input: `ctx: &Context`; `channel: ChannelId`; `sent: &mut Vec<Message>` — the Discord
+/// Input: `ctx: &Context`; `channel: &RoomKey`; `sent: &mut Vec<Message>` — the Discord
 /// messages already open for this reply (mutated in place: edited/appended/truncated);
 /// `layout: &[String]` — the target message bodies from `stream_view`/`stream_layout`;
-/// `reply_to: Option<MessageId>` — attached only to the first message. Output: none (network
+/// `reply_to: Option<&MessageKey>` — attached only to the first message. Output: none (network
 /// errors are logged, not propagated). Uses: `EditMessage`/`CreateMessage`/
 /// `CreateAllowedMentions`. Used by: `Bot::send_stream` (`provider_send_stream.rs`), on every
 /// edit tick and for the final layout.
 async fn write_stream(
     ctx: &Context,
-    channel: ChannelId,
+    channel: &RoomKey,
     sent: &mut Vec<Message>,
     layout: &[String],
-    reply_to: Option<MessageId>,
+    reply_to: Option<&MessageKey>,
 ) {
+    let native = (|| -> Result<_, platform::types::KeyError> {
+        Ok((platform::discord::native_room(channel)?,
+            reply_to.map(platform::discord::native_message).transpose()?))
+    })();
+    let (native_channel, native_reply) = match native {
+        Ok(native) => native,
+        Err(e) => { log::error!("stream send failed ({channel}): {e}"); return; }
+    };
     // not repeated in the typing-edit loop: firing it every tick would hit Discord's rate
     // limit; the "typing" indicator is sent once by `reply`, before the model call
     for (i, content) in layout.iter().enumerate() {
@@ -142,8 +150,8 @@ async fn write_stream(
             }
             Some(_) => {}
             None => {
-                let msg = stream_message(channel, content, i, reply_to);
-                match channel.send_message(&ctx.http, msg).await {
+                let msg = stream_message(native_channel, content, i, native_reply);
+                match native_channel.send_message(&ctx.http, msg).await {
                     Ok(m) => sent.push(m),
                     Err(e) => {
                         log::error!("send failed ({channel}): {e}");

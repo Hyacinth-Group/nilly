@@ -1,7 +1,7 @@
 impl Bot {
     /// Parses raw model text and sends it via the non-streaming, line-by-line protocol.
-    /// Input: `&self`; `ctx: &Context`; `channel: ChannelId`; `raw: &str` — unparsed model
-    /// output; `reply_to`/`reaction_target: Option<MessageId>`; `ping: Option<UserId>`.
+    /// Input: `&self`; `ctx: &Context`; `channel: &RoomKey`; `raw: &str` — unparsed model
+    /// output; `reply_to`/`reaction_target: Option<&MessageKey>`; `ping: Option<&UserKey>`.
     /// Output: `Option<String>` — `Some(protocol_text)` if anything was sent, `None` if
     /// silent/empty. Uses: `strip_name`, `parse_reply`, `send_reply`. Used by: the
     /// stream-less fallback in `chat_reply.rs`, `Bot::post_problem`/`post_news`
@@ -11,11 +11,11 @@ impl Bot {
     async fn send_lines(
         &self,
         ctx: &Context,
-        channel: ChannelId,
+        channel: &RoomKey,
         raw: &str,
-        reply_to: Option<MessageId>,
-        reaction_target: Option<MessageId>,
-        ping: Option<UserId>,
+        reply_to: Option<&MessageKey>,
+        reaction_target: Option<&MessageKey>,
+        ping: Option<&UserKey>,
     ) -> Option<String> {
         let bot_name = self.state().bot_name.clone();
         let reply = parse_reply(strip_name(raw, &bot_name));
@@ -36,11 +36,11 @@ impl Bot {
     async fn send_reply(
         &self,
         ctx: &Context,
-        channel: ChannelId,
+        channel: &RoomKey,
         mut reply: Reply,
-        reply_to: Option<MessageId>,
-        reaction_target: Option<MessageId>,
-        ping: Option<UserId>,
+        reply_to: Option<&MessageKey>,
+        reaction_target: Option<&MessageKey>,
+        ping: Option<&UserKey>,
     ) -> Option<String> {
         let bot_name = self.state().bot_name.clone();
         // no message for the reaction to land on (the opening paths): the reaction is
@@ -56,18 +56,26 @@ impl Bot {
             );
             return None;
         }
+        let native_channel = match platform::discord::native_room(channel) {
+            Ok(native) => native,
+            Err(e) => { log::error!("send_lines [{channel}]: {e}"); return None; }
+        };
+        let native_ping = match ping.map(platform::discord::native_user).transpose() {
+            Ok(native) => native,
+            Err(e) => { log::error!("send_lines [{channel}]: {e}"); return None; }
+        };
         for (i, line) in reply.lines.iter().enumerate() {
             if i > 0 {
                 let wait_ms = (LINE_DELAY_BASE + LINE_DELAY_PER_CHAR * line.chars().count() as u64)
                     .min(LINE_DELAY_CAP);
-                let _ = channel.broadcast_typing(&ctx.http).await;
+                let _ = native_channel.broadcast_typing(&ctx.http).await;
                 sleep(Duration::from_millis(wait_ms)).await;
             }
             let (ping_i, reply_i) = if i == 0 { (ping, reply_to) } else { (None, None) };
             // the mention is attached AFTER the protocol is parsed: pasting it onto the
             // front of the text first made "<@id> -" stop being recognized as the silence
             // marker, and "<@id> tepki: 💀" stop counting as a reaction line
-            match ping_i {
+            match if i == 0 { native_ping } else { None } {
                 Some(u) => {
                     self.send(ctx, channel, &format!("<@{u}> {line}"), ping_i, None, reply_i)
                         .await
@@ -76,9 +84,13 @@ impl Bot {
             }
         }
         if let (Some(emoji), Some(target)) = (&reply.reaction, reaction_target) {
+            let native_target = match platform::discord::native_message(target) {
+                Ok(native) => native,
+                Err(e) => { log::warn!("reaction [{channel}]: {e}"); return Some(reply.protocol_text()); }
+            };
             if let Err(e) = ctx
                 .http
-                .create_reaction(channel, target, &ReactionType::Unicode(emoji.clone()))
+                .create_reaction(native_channel, native_target, &ReactionType::Unicode(emoji.clone()))
                 .await
             {
                 log::warn!("couldn't add reaction ({channel}): {e}");

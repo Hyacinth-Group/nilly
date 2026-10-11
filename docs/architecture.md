@@ -108,6 +108,32 @@ These fixtures are offline builder/decoder characterizations, not live Discord A
 The existing 93-test baseline is retained as an acceptance requirement; integration checks
 are recorded separately in the progress log.
 
+### Domain ingress (step 1)
+
+`platform::types` owns opaque, case-sensitive, shared `Arc<str>` identities:
+`UserKey`, `SpaceKey`, `RoomKey`, `MessageKey`, `ThreadKey`, and `EventKey`.
+Each durable key carries the platform and native scope, not credentials or a display
+name. `ConnectionId` selects a configured session and is deliberately separate.
+Typed constructors escape UTF-8 components reversibly; parsers reject unsafe or
+noncanonical representations. A Slack timestamp stays text, and a Telegram group
+ID can remain negative. The CLI bench uses `terminal:room:local:bench`.
+
+Discord decoding lives in `platform::discord::events`: native authors, safe text,
+mentions, replies, first-image descriptors and enriched reactions become domain
+payloads before personality decisions. `IncomingMessage`, `ReactionEvent`,
+`UserRef`, `RoomRef`, `MessageRef`, `ChatEvent`, and `EventEnvelope` are the shared
+ingress contract. `ConversationKey` includes optional topic/thread identity for
+future adapters; ordinary Discord routes retain their existing room behavior.
+Account identity is tracked per `ConnectionId`. Temporary native conversion
+helpers are restricted to Discord-facing transport/UI and v1 storage edges during
+the staged cutover; no other transport is enabled by this extraction.
+
+`platform::capabilities::Capabilities` describes room-visible permissions and
+features, including history/decryption, text count units and limits, edit cadence,
+nickname scope, commands/components, private result delivery and uploads.
+Unknown permissions use `Capabilities::unavailable()`, not optimistic success.
+`OutputLimits::DISCORD` retains the 1900-Unicode-scalar protocol budget.
+
 
 ## Shared state
 A single `Mutex<State>` (`Bot::state()` is poison-resilient). Inside it: bot name, favorite's

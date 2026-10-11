@@ -34,7 +34,7 @@ impl Bot {
 
         if !pending.is_empty() {
             // a mention while asleep always gets a reply: the list is put back on failure
-            let Some(&(channel, _)) = pending.last() else {
+            let Some((channel, _)) = pending.last() else {
                 return;
             };
             let list = pending
@@ -116,7 +116,7 @@ impl Bot {
         if parsed.ilgi < 5 {
             return;
         }
-        let Some(channel) = self.state().last_channel else {
+        let Some(channel) = self.state().last_channel.clone() else {
             return;
         };
         if self.state().chats.contains_key(&channel) {
@@ -138,9 +138,9 @@ impl Bot {
             )
             .await
         {
-            Ok(c) => match self.send_lines(ctx, channel, &c, None, None, None).await {
+            Ok(c) => match self.send_lines(ctx, &channel, &c, None, None, None).await {
                 Some(p) => {
-                    start_chat(&mut self.state(), channel, Some(p));
+                    start_chat(&mut self.state(), &channel, Some(p));
                 }
                 None => log::debug!("waking_reply: model stayed silent, skipped"),
             },

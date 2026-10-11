@@ -1068,3 +1068,19 @@ reaches Discord) is exempt, see AGENTS.md item 8.
   all binaries, downloads their archives, and generates release notes once.
 - `actionlint` passed. This publication path will be exercised by the next release;
   v1.1.0 was not retagged.
+
+## 2026-10-11 · multi-platform extraction, domain ingress (step 1)
+
+- Step 0 committed as `27a80ba`: all 93 baseline tests retained; 116 tests passed
+  with `cargo fmt --check`, locked clippy with warnings denied, and locked tests.
+  Existing vendored Serenity deprecation warnings remain dependency warnings.
+- Shared Arc-backed typed identities and reversible per-component canonical
+  encoding now distinguish platform/native scope from configured connections.
+  Domain ingress carries structured users, rooms, replies, mentions, attachments
+  and reactions; Discord SDK decoding is separate from personality decisions.
+- Chat bookkeeping uses borrowed/shared domain keys. The terminal bench no longer
+  pretends to be a Discord room. v1 numeric storage remains confined to the memory
+  boundary until the next atomic migration; other platforms are not enabled here.
+- Native Discord renderer fixtures additionally capture reply-user pings, thought
+  output, off-mode settings button's persisted `kapali` value (distinct from slash
+  option `kapat`), and stealth final-only output. These existing quirks are retained.

@@ -151,7 +151,7 @@
     /// Verifies `start_chat` doesn't duplicate an opening message that's already present in the channel history.
     #[test]
     fn opening_not_seeded_twice() {
-        let channel = ChannelId::new(7);
+        let channel = RoomKey::discord(7);
         let mut state = State {
             bot_name: "kaju".into(),
             ..State::default()
@@ -161,8 +161,8 @@
             .iter()
             .map(|s| s.to_string())
             .collect();
-        state.channel_history.insert(channel, hist);
-        let chat = start_chat(&mut state, channel, Some("bir\niki".to_string()));
+        state.channel_history.insert(channel.clone(), hist);
+        let chat = start_chat(&mut state, &channel, Some("bir\niki".to_string()));
         let contents: Vec<&str> = chat.history.iter().map(|m| m.content.as_str()).collect();
         assert_eq!(contents, vec!["emin: selam", "https://a.b", "bir\niki"]);
     }

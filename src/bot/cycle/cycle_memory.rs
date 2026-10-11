@@ -21,12 +21,12 @@ async fn read_history(bot: &Bot, ctx: &Context, guild: &Guild) {
         .collect();
     channels.sort_by_key(|k| k.position);
 
-    let mut collected: Vec<(i64, String, u64, String)> = Vec::new();
+    let mut collected: Vec<(i64, String, UserKey, String)> = Vec::new();
     for ch in channels {
         if bot
             .allowed_channels
             .as_ref()
-            .is_some_and(|s| !s.contains(&ch.id))
+            .is_some_and(|s| !s.contains(&RoomKey::discord(ch.id.get())))
         {
             continue;
         }
@@ -54,7 +54,7 @@ async fn read_history(bot: &Bot, ctx: &Context, guild: &Guild) {
                     collected.push((
                         m.timestamp.unix_timestamp(),
                         display_name(&m.author),
-                        m.author.id.get(),
+                        UserKey::discord(m.author.id.get()),
                         m.content_safe(&ctx.cache),
                     ));
                 }
@@ -71,11 +71,11 @@ async fn read_history(bot: &Bot, ctx: &Context, guild: &Guild) {
     let skip = collected.len().saturating_sub(MEMORY_SIZE);
     let mut state = bot.state();
     for (_, name, id, _) in collected.iter().skip(skip) {
-        if is_owner(*id) {
+        if is_owner(id) {
             state.favorite_name = Some(name.clone());
         }
         // live mappings take priority: the scan shouldn't overwrite them with stale info
-        state.name_to_id.entry(name.to_lowercase()).or_insert(*id);
+        state.name_to_id.entry(name.to_lowercase()).or_insert_with(|| id.clone());
     }
     // live messages may have entered memory while the scan was running: history is
     // prepended, not appended — appending would break chronological order and get
@@ -91,29 +91,29 @@ async fn read_history(bot: &Bot, ctx: &Context, guild: &Guild) {
 
 // channel used for news and welcome messages: the configured one if set, else the
 // server's system channel, else the topmost text channel
-/// Input: `bot: &Bot`; `ctx: &Context`. Output: `Option<ChannelId>` — see comment above;
+/// Input: `bot: &Bot`; `ctx: &Context`. Output: `Option<RoomKey>` — see comment above;
 /// `None` if nothing qualifies. Uses: `bot.news_channel`/`allowed_channels`/`guild_id`,
 /// `ctx.cache`. Used by: `news_cycle`/`post_problem` callers (`cycle_news.rs`), `poke_cycle`
 /// (`cycle_background.rs`), `Handler::guild_member_addition`/`guild_create`
 /// (`handler_event.rs`), `Bot::pick_name` (`cycle_growth.rs`).
-fn default_channel(bot: &Bot, ctx: &Context) -> Option<ChannelId> {
-    if let Some(k) = bot.news_channel {
-        return Some(k);
+fn default_channel(bot: &Bot, ctx: &Context) -> Option<RoomKey> {
+    if let Some(k) = &bot.news_channel {
+        return Some(k.clone());
     }
     let allowed = |id: ChannelId| {
         bot.allowed_channels
             .as_ref()
-            .is_none_or(|s| s.contains(&id))
+            .is_none_or(|s| s.contains(&RoomKey::discord(id.get())))
     };
     for guild_id in ctx.cache.guilds() {
-        if bot.guild_id.is_some_and(|g| g != guild_id) {
+        if bot.guild_id.as_ref().is_some_and(|g| *g != SpaceKey::discord(guild_id.get())) {
             continue;
         }
         let Some(guild) = ctx.cache.guild(guild_id) else {
             continue;
         };
         if let Some(k) = guild.system_channel_id.filter(|id| allowed(*id)) {
-            return Some(k);
+            return Some(RoomKey::discord(k.get()));
         }
         if let Some(k) = guild
             .channels
@@ -121,7 +121,7 @@ fn default_channel(bot: &Bot, ctx: &Context) -> Option<ChannelId> {
             .filter(|k| k.kind == ChannelType::Text && allowed(k.id))
             .min_by_key(|k| k.position)
         {
-            return Some(k.id);
+            return Some(RoomKey::discord(k.id.get()));
         }
     }
     None

@@ -30,7 +30,7 @@ async fn cmd_model(bot: &Bot, ctx: &Context, cmd: &CommandInteraction) {
             let description = strings::t("model_cmd.current").replace("{model}", &m);
             reply_info(ctx, cmd, strings::t("model_cmd.title"), &description).await;
         }
-        Some(id) if !is_owner(cmd.user.id.get()) => {
+        Some(id) if !is_owner(&UserKey::discord(cmd.user.id.get())) => {
             let _ = id;
             reply_info(
                 ctx,

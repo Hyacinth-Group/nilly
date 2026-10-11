@@ -172,7 +172,7 @@ impl Bot {
                 continue;
             }
             // the mind is id-based: if the name can't be resolved, this record is skipped this round
-            let Some(&id) = name_to_id.get(&pr.isim.to_lowercase()) else {
+            let Some(id) = name_to_id.get(&pr.isim.to_lowercase()) else {
                 log::warn!("diarist: couldn't resolve '{}' to an id, skipped", pr.isim);
                 continue;
             };
@@ -192,7 +192,7 @@ impl Bot {
                 person.name = pr.isim.clone();
             }
             if person.username.is_empty() {
-                if let Some(username) = usernames.get(&id) {
+                if let Some(username) = usernames.get(id) {
                     person.username = username.clone();
                 }
             }
@@ -223,7 +223,7 @@ impl Bot {
                 person.score = 10;
                 person.note = memory::FAVORITE_NOTE.to_string();
             }
-            memory::write_person(&person);
+            memory::write_person(&person)?;
             summary.people += 1;
         }
         for tr in record.konular {

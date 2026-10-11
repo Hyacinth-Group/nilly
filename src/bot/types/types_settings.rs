@@ -80,21 +80,21 @@ const REASONING_MANDATORY_BASE: u32 = 500;
 const REASONING_BUDGET_BASE: u32 = 1500;
 /// OWNER_ID from .env: always liked and the only user who can switch /model.
 /// Unset or invalid means no owner.
-fn owner_id() -> Option<u64> {
-    static OWNER: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
-    *OWNER.get_or_init(|| match std::env::var("OWNER_ID") {
-        Ok(v) if !v.trim().is_empty() => match v.trim().parse() {
-            Ok(id) => Some(id),
+fn owner_id() -> Option<&'static UserKey> {
+    static OWNER: std::sync::LazyLock<Option<UserKey>> = std::sync::LazyLock::new(|| match std::env::var("OWNER_ID") {
+        Ok(v) if !v.trim().is_empty() => match v.trim().parse::<u64>() {
+            Ok(id) => Some(UserKey::discord(id)),
             Err(_) => {
                 log::warn!("invalid OWNER_ID '{}', running without an owner", v.trim());
                 None
             }
         },
         _ => None,
-    })
+    });
+    OWNER.as_ref()
 }
 
-fn is_owner(id: u64) -> bool {
+fn is_owner(id: &UserKey) -> bool {
     owner_id() == Some(id)
 }
 const WANDERER_INTERVAL: Duration = Duration::from_secs(4 * 60 * 60); // how often it browses the news
