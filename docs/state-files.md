@@ -53,7 +53,7 @@ not: rust'ı övdüm diye üç mesaj laf soktu
 ## Son olaylar
 - 2026-09-01 22:14:03: rust vs go tartışması, bot kaçtı
 ```
-`puan` ranges -10..10 (`OWNER_ID`, if configured, is fixed at +10). `etiket` ≤6, lowercase.
+`puan` ranges -10..10 (the qualified `OWNER_KEY`, or legacy Discord `OWNER_ID` if configured, is fixed at +10). `etiket` ≤6, lowercase.
 `not` is a single sentence, an opinion. `eski_adlar` ≤5. `Bildiklerin` is non-repeating
 durable facts. `Son olaylar` is one line per finished chat, with second-precision
 timestamps (`date_time`). Parsing uses the record key as authoritative identity;
@@ -135,3 +135,26 @@ written in a single transaction. Legacy history without metadata remains
 unattributed; current display-name collisions never reinterpret its authors.
 The companion preserves captured UserRef source, automation and identity
 stability across restart and supports transcript-local name disambiguation.
+
+## Telegram polling metadata
+
+Telegram stores its next `getUpdates` offset as a `u64` in redb's
+`memory_metadata` table under `platform/telegram/<bot-account-id>/offset`.
+This is metadata, not a Markdown memory record, a filesystem cursor file or
+remote group history. The native bot account ID scopes it independently of
+token rotation and connection labels; the token is never part of the key.
+
+The runner checkpoints after normalized events are accepted by bounded ingress
+and administrative commands are queued, **not** after model work completes.
+Restart resumes from the checkpoint. A crash before checkpoint can replay an
+update; a crash after checkpoint can leave accepted/queued work unfinished.
+This is not an exactly-once processing guarantee. Local conversation and
+captured identity records remain separately persisted as described above.
+
+Back up metadata with the database. Do not delete or manually increase the
+offset to “fetch history”: the Bot API cannot fetch old group history, and its
+pending update queue expires after at most 24 hours. Telegram records use the
+same canonical identities, for example `kisiler/telegram:user:42.md` and
+`kanallar/telegram:room:-100123.md`, and only explicitly approved rooms may feed
+the shared brain.
+

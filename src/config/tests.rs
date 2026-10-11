@@ -50,6 +50,180 @@ fn registry_covers_every_example_and_panel_setting() {
 }
 
 #[test]
+fn telegram_rooms_use_runner_parser_and_blank_is_default_deny() {
+    let (_directory, config) = fixture("TELEGRAM_TOKEN=telegram-secret\nOPENROUTER_KEY=key\n");
+    assert_eq!(config.get("TELEGRAM_ROOMS"), "");
+    assert!(
+        crate::platform::telegram::runner::parse_rooms(config.get("TELEGRAM_ROOMS"))
+            .unwrap()
+            .is_empty()
+    );
+    config.validate_runtime().unwrap();
+    assert_eq!(
+        validate_value("TELEGRAM_ROOMS", "-100123, telegram:room:-77, -100123,42").unwrap(),
+        "telegram:room:-100123,telegram:room:-77,telegram:room:42"
+    );
+    for value in [
+        "0",
+        "+42",
+        "042",
+        "-0",
+        "telegram:room:0",
+        "discord:room:42",
+        "telegram:user:42",
+        "telegram:room:01",
+        "telegram:room:%2D42",
+        "-42,,77",
+        "9223372036854775808",
+    ] {
+        let error = validate_value("TELEGRAM_ROOMS", value).unwrap_err();
+        assert_eq!(error.code(), "panel.config.invalid_telegram_rooms");
+        assert!(!error.to_string().contains(value));
+    }
+    assert_eq!(validate_value("TELEGRAM_ROOMS", "  ").unwrap(), "");
+}
+
+#[test]
+fn runtime_accepts_either_or_both_transports_and_preserves_provider_requirements() {
+    for credentials in [
+        "DISCORD_TOKEN=discord-secret\n",
+        "TELEGRAM_TOKEN=telegram-secret\n",
+        "DISCORD_TOKEN=discord-secret\nTELEGRAM_TOKEN=telegram-secret\n",
+    ] {
+        let (_directory, config) = fixture(&format!("{credentials}OPENROUTER_KEY=key\n"));
+        config.validate_runtime().unwrap();
+        let (_directory, config) = fixture(&format!("{credentials}MISTRAL_KEY=key\n"));
+        config.validate_runtime().unwrap();
+        let (_directory, config) = fixture(credentials);
+        assert!(
+            matches!(config.validate_runtime(), Err(ConfigError::Field { key, code }) if key == "OPENROUTER_KEY" && code == "panel.config.required")
+        );
+    }
+    let (_directory, config) = fixture("OPENROUTER_KEY=key\n");
+    assert!(
+        matches!(config.validate_runtime(), Err(ConfigError::Field { key, code }) if key == "DISCORD_TOKEN" && code == "panel.config.platform_required")
+    );
+    let (_directory, config) =
+        fixture("TELEGRAM_TOKEN=telegram-secret\nPROVIDER=mistral\nOPENROUTER_KEY=key\n");
+    assert!(
+        matches!(config.validate_runtime(), Err(ConfigError::Field { key, code }) if key == "MISTRAL_KEY" && code == "panel.config.required")
+    );
+}
+
+#[test]
+fn telegram_token_is_write_only_and_rooms_and_credentials_require_restart() {
+    let (_directory, mut config) = fixture(
+        "TELEGRAM_TOKEN=telegram-private-token\nTELEGRAM_ROOMS=-100123\nOPENROUTER_KEY=key\n",
+    );
+    let fields = config.fields();
+    let token = fields
+        .iter()
+        .find(|field| field.spec.key == "TELEGRAM_TOKEN")
+        .unwrap();
+    assert!(token.spec.secret);
+    assert!(matches!(token.spec.kind, FieldKind::Secret));
+    assert_eq!(token.spec.application, "restart");
+    assert!(token.effective.configured);
+    assert!(token.effective.value.is_none());
+    assert!(token.saved.value.is_none());
+    assert!(token.default.value.is_none());
+    assert!(!serde_json::to_string(&fields)
+        .unwrap()
+        .contains("telegram-private-token"));
+    let rooms = fields
+        .iter()
+        .find(|field| field.spec.key == "TELEGRAM_ROOMS")
+        .unwrap();
+    assert!(matches!(rooms.spec.kind, FieldKind::TelegramRooms));
+    assert_eq!(rooms.spec.application, "restart");
+    assert_eq!(
+        rooms.effective.value.as_deref(),
+        Some("telegram:room:-100123")
+    );
+    save(&mut config, &replace("TELEGRAM_TOKEN", "")).unwrap();
+    assert_eq!(
+        config.reload().unwrap().get("TELEGRAM_TOKEN"),
+        "telegram-private-token"
+    );
+    save(
+        &mut config,
+        &replace("TELEGRAM_TOKEN", "replacement-private-token"),
+    )
+    .unwrap();
+    assert_eq!(config.get("TELEGRAM_TOKEN"), "telegram-private-token");
+    assert_eq!(
+        config.reload().unwrap().get("TELEGRAM_TOKEN"),
+        "replacement-private-token"
+    );
+    assert!(config
+        .fields()
+        .iter()
+        .any(|field| field.spec.key == "TELEGRAM_TOKEN" && field.pending_restart));
+    save(&mut config, &replace("TELEGRAM_ROOMS", "")).unwrap();
+    assert_eq!(config.get("TELEGRAM_ROOMS"), "telegram:room:-100123");
+    assert_eq!(config.reload().unwrap().get("TELEGRAM_ROOMS"), "");
+    assert!(config
+        .fields()
+        .iter()
+        .any(|field| field.spec.key == "TELEGRAM_ROOMS" && field.pending_restart));
+    assert!(
+        matches!(save(&mut config, &HashMap::from([("TELEGRAM_TOKEN".into(), PatchValue::Clear)])), Err(ConfigError::Field { key, .. }) if key == "DISCORD_TOKEN")
+    );
+    save(
+        &mut config,
+        &replace("DISCORD_TOKEN", "discord-private-token"),
+    )
+    .unwrap();
+    save(
+        &mut config,
+        &HashMap::from([("TELEGRAM_TOKEN".into(), PatchValue::Clear)]),
+    )
+    .unwrap();
+    assert_eq!(config.reload().unwrap().get("TELEGRAM_TOKEN"), "");
+    assert!(!serde_json::to_string(&config.fields())
+        .unwrap()
+        .contains("private-token"));
+}
+
+#[test]
+fn telegram_environment_is_read_only_and_secrets_stay_absent_from_views() {
+    let (directory, _) = fixture(
+        "DISCORD_TOKEN=discord-secret\nTELEGRAM_TOKEN=file-telegram-private-token\nTELEGRAM_ROOMS=-77\nOPENROUTER_KEY=key\n",
+    );
+    let env = HashMap::from([
+        (
+            "TELEGRAM_TOKEN".into(),
+            "environment-telegram-private-token".into(),
+        ),
+        ("TELEGRAM_ROOMS".into(), String::new()),
+    ]);
+    let mut config = Config::load(directory.path().join(".env"), &env).unwrap();
+    assert_eq!(
+        config.get("TELEGRAM_TOKEN"),
+        "environment-telegram-private-token"
+    );
+    assert_eq!(config.get("TELEGRAM_ROOMS"), "");
+    config.validate_runtime().unwrap();
+    let fields = config.fields();
+    for key in ["TELEGRAM_TOKEN", "TELEGRAM_ROOMS"] {
+        let view = fields.iter().find(|view| view.spec.key == key).unwrap();
+        assert!(view.read_only);
+        assert!(matches!(view.source, Source::Environment));
+        assert!(
+            matches!(save(&mut config, &replace(key, "replacement")), Err(ConfigError::Field { key: rejected, code }) if rejected == key && code == "panel.config.read_only")
+        );
+    }
+    assert!(!serde_json::to_string(&fields)
+        .unwrap()
+        .contains("private-token"));
+    for value in ["secret\nSTEALTH=on", "secret\rtext", "secret\0text"] {
+        let error = validate_value("TELEGRAM_TOKEN", value).unwrap_err();
+        assert_eq!(error.code(), "panel.config.invalid_value");
+        assert!(!error.to_string().contains(value));
+    }
+}
+
+#[test]
 fn qualified_owner_is_optional_and_uses_the_canonical_user_key_parser() {
     let field = registry::spec("OWNER_KEY").unwrap();
     assert!(matches!(field.kind, FieldKind::UserKey));

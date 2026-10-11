@@ -257,8 +257,11 @@ impl Config {
         for field in REGISTRY {
             registry::normalize(field, self.get(field.key))?;
         }
-        if self.get("DISCORD_TOKEN").is_empty() {
-            return Err(field_error("DISCORD_TOKEN", "panel.config.required"));
+        if self.get("DISCORD_TOKEN").is_empty() && self.get("TELEGRAM_TOKEN").is_empty() {
+            return Err(field_error(
+                "DISCORD_TOKEN",
+                "panel.config.platform_required",
+            ));
         }
         self.validate_provider()
     }

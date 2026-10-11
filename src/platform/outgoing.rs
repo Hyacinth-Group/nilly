@@ -126,4 +126,12 @@ pub struct ConnectionSnapshot {
     pub status: ConnectionStatus,
     pub account: Option<UserRef>,
     pub rooms: Vec<RoomSnapshot>,
+    #[serde(default)]
+    pub warnings: Vec<ConnectionWarning>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionWarning {
+    TelegramPrivacyLimited,
 }

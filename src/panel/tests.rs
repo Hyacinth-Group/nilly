@@ -527,7 +527,7 @@ fn both_panel_languages_have_the_same_complete_key_set() {
 
 fn settings_fixture(app: &App) {
     let path = app.config.lock().path().to_owned();
-    std::fs::write(&path,"# keep this comment\nDISCORD_TOKEN=settings-private-discord-credential\nOPENROUTER_KEY=settings-private-provider-credential\nBOT_LANG=en\nSTEALTH=false\nCUSTOM_SETTING='untouched # value'\n").unwrap();
+    std::fs::write(&path,"# keep this comment\nDISCORD_TOKEN=settings-private-discord-credential\nTELEGRAM_TOKEN=settings-private-telegram-credential\nTELEGRAM_ROOMS=-100123\nOPENROUTER_KEY=settings-private-provider-credential\nBOT_LANG=en\nSTEALTH=false\nCUSTOM_SETTING='untouched # value'\n").unwrap();
     *app.config.lock() = config::Config::load(path, &HashMap::new()).unwrap();
 }
 
@@ -554,6 +554,12 @@ async fn settings_forms_preserve_unposted_groups_and_never_echo_credentials() {
     assert!(html.contains("value=\"off\" selected"));
     assert!(html.contains("/ui/settings/test-platform"));
     assert!(html.contains("Other configuration entries"));
+    assert!(html.contains("name=\"DISCORD_TOKEN\" type=\"password\""));
+    assert!(html.contains("name=\"TELEGRAM_TOKEN\" type=\"password\""));
+    assert!(html.contains("name=\"clear_TELEGRAM_TOKEN\""));
+    assert!(html.contains("name=\"TELEGRAM_ROOMS\" type=\"text\" value=\"telegram:room:-100123\""));
+    assert!(html.contains("Approved Telegram rooms"));
+    assert!(html.contains("Blank denies all Telegram rooms"));
     let revision = app.config.lock().revision().to_owned();
     let body = format!("csrf={}&revision={revision}&BOT_LANG=tr", admin.info.csrf);
     let response = router
@@ -576,6 +582,8 @@ async fn settings_forms_preserve_unposted_groups_and_never_echo_credentials() {
     assert!(saved.contains("CUSTOM_SETTING='untouched # value'"));
     assert!(saved.contains("DISCORD_TOKEN=settings-private-discord-credential"));
     assert!(saved.contains("OPENROUTER_KEY=settings-private-provider-credential"));
+    assert!(saved.contains("TELEGRAM_TOKEN=settings-private-telegram-credential"));
+    assert!(saved.contains("TELEGRAM_ROOMS=-100123"));
     assert_eq!(app.config.lock().get("BOT_LANG"), "en");
     assert!(
         app.config
@@ -601,6 +609,27 @@ async fn settings_forms_preserve_unposted_groups_and_never_echo_credentials() {
         .unwrap();
     assert!(secret["saved"]["configured"].as_bool().unwrap());
     assert!(secret["saved"]["value"].is_null());
+    let telegram = value["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|view| view["spec"]["key"] == "TELEGRAM_TOKEN")
+        .unwrap();
+    assert_eq!(telegram["spec"]["kind"], "secret");
+    assert_eq!(telegram["spec"]["application"], "restart");
+    assert_eq!(telegram["effective"]["configured"], true);
+    assert_eq!(telegram["saved"]["configured"], true);
+    assert!(telegram["effective"]["value"].is_null());
+    assert!(telegram["saved"]["value"].is_null());
+    assert!(telegram["default"]["value"].is_null());
+    let rooms = value["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|view| view["spec"]["key"] == "TELEGRAM_ROOMS")
+        .unwrap();
+    assert_eq!(rooms["spec"]["kind"], "telegram_rooms");
+    assert_eq!(rooms["effective"]["value"], "telegram:room:-100123");
 }
 
 #[tokio::test]
@@ -635,6 +664,50 @@ async fn settings_validation_returns_localized_field_errors_with_matching_reques
         std::fs::read(directory.path().join(".env")).unwrap(),
         original
     );
+}
+
+#[tokio::test]
+async fn telegram_room_validation_is_localized_and_does_not_save_invalid_approval() {
+    let (app, directory) = fixture().await;
+    settings_fixture(&app);
+    let admin = owner(&app).await;
+    let original = std::fs::read(directory.path().join(".env")).unwrap();
+    let router = routes::router(app.clone());
+    for language in ["en", "tr"] {
+        let body = serde_json::json!({
+            "csrf": admin.info.csrf,
+            "revision": app.config.lock().revision(),
+            "patch": {"TELEGRAM_ROOMS": {"operation": "replace", "value": "discord:room:42"}}
+        })
+        .to_string();
+        let mut request = request(
+            "POST",
+            &format!("/api/v1/settings/validate?lang={language}"),
+            Some(&admin.token),
+            &body,
+        );
+        request
+            .headers_mut()
+            .insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let identifier = response.headers()["x-request-id"]
+            .to_str()
+            .unwrap()
+            .to_owned();
+        let value: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 64 * 1024).await.unwrap())
+                .unwrap();
+        assert_eq!(value["request_id"], identifier);
+        assert!(value["field_errors"]["TELEGRAM_ROOMS"]
+            .as_str()
+            .is_some_and(|message| !message.is_empty() && !message.starts_with("panel.")));
+        assert!(!value.to_string().contains("settings-private"));
+        assert_eq!(
+            std::fs::read(directory.path().join(".env")).unwrap(),
+            original
+        );
+    }
 }
 
 #[tokio::test]
@@ -799,7 +872,7 @@ async fn login_explains_existing_ownership_and_nonsecret_settings_have_no_secret
             .to_vec(),
     )
     .unwrap();
-    assert_eq!(html.matches("Secret configured:").count(), 4);
+    assert_eq!(html.matches("Secret configured:").count(), 5);
     let response = router
         .oneshot(request("GET", "/setup?step=2", Some(&owner.token), ""))
         .await
@@ -826,4 +899,73 @@ async fn numeric_loopback_health_needs_no_auth_or_host_override() {
     let body: serde_json::Value =
         serde_json::from_slice(&to_bytes(response.into_body(), 1024).await.unwrap()).unwrap();
     assert_eq!(body, serde_json::json!({"status":"ok"}));
+}
+
+#[tokio::test]
+async fn protected_settings_can_save_telegram_only_with_default_deny_without_starting_runtime() {
+    let (app, directory) = fixture().await;
+    let admin = owner(&app).await;
+    let revision = app.config.lock().revision().to_owned();
+    let body = format!(
+        "csrf={}&revision={revision}&TELEGRAM_TOKEN=telegram-settings-private-credential&TELEGRAM_ROOMS=&OPENROUTER_KEY=provider-settings-private-credential",
+        admin.info.csrf,
+    );
+    let router = routes::router(app.clone());
+    let response = router
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/ui/settings?lang=tr",
+            Some(&admin.token),
+            &body,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response.headers()[header::LOCATION],
+        "/settings?saved=1&lang=tr"
+    );
+    let saved = app.config.lock().reload().unwrap();
+    saved.validate_runtime().unwrap();
+    assert_eq!(saved.get("DISCORD_TOKEN"), "");
+    assert_eq!(
+        saved.get("TELEGRAM_TOKEN"),
+        "telegram-settings-private-credential"
+    );
+    assert_eq!(saved.get("TELEGRAM_ROOMS"), "");
+    assert!(
+        crate::platform::telegram::runner::parse_rooms(saved.get("TELEGRAM_ROOMS"))
+            .unwrap()
+            .is_empty()
+    );
+    assert!(directory.path().join(".env").exists());
+    assert_eq!(app.config.lock().get("TELEGRAM_TOKEN"), "");
+    assert!(app
+        .config
+        .lock()
+        .fields()
+        .iter()
+        .any(|view| view.spec.key == "TELEGRAM_TOKEN" && view.pending_restart));
+    assert!(matches!(
+        app.runtime.lock().lifecycle,
+        Lifecycle::Unconfigured
+    ));
+    assert!(app.runtime.lock().bot.is_none());
+    assert!(app.drafts.lock().is_empty());
+    let response = router
+        .oneshot(request("GET", "/settings?lang=tr", Some(&admin.token), ""))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 256 * 1024)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(!html.contains("settings-private-credential"));
+    assert!(html.contains("Onaylı Telegram odaları"));
+    assert!(!html.contains("panel.settings.TELEGRAM"));
 }

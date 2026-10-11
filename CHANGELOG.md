@@ -4,6 +4,11 @@ Notable changes are recorded here in [Keep a Changelog](https://keepachangelog.c
 
 ## [Unreleased]
 
+### Added
+- Telegram Bot API adapter with NAT-friendly long polling, explicit default-deny room approval, qualified owner administration and private administrative results.
+- Discord/Telegram setup selection, bilingual Telegram onboarding and honest visibility/history/nickname notices.
+- Telegram safe media resolution/local uploads, native topic/reply routing, chat-allowed emoji reactions and a durable redb polling cursor; offline coverage and an ignored opt-in `getMe` probe.
+
 ### Changed
 - Default prompts identify the bot honestly and omit a fictional university biography and fixed political identity.
 - Shorter bilingual READMEs explain the memory mechanism, collection scope, external processing, and unmeasured running cost.

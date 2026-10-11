@@ -186,11 +186,10 @@ pub fn parse_text(text: &str, prefix: &CommandPrefix) -> Result<Option<ActionArg
                 return Ok(None);
             };
             let command = rest.split_whitespace().next().unwrap_or("");
-            let Some((_, addressed)) = command.split_once('@') else {
-                return Ok(None);
-            };
-            if !addressed.eq_ignore_ascii_case(bot_name) {
-                return Ok(None);
+            if let Some((_, addressed)) = command.split_once('@') {
+                if !addressed.eq_ignore_ascii_case(bot_name) {
+                    return Ok(None);
+                }
             }
             rest
         }
@@ -364,7 +363,10 @@ mod tests {
         let telegram = CommandPrefix::Telegram {
             bot_name: "BotName".into(),
         };
-        assert_eq!(parse_text("/status", &telegram).unwrap(), None);
+        assert_eq!(
+            parse_text("/status", &telegram).unwrap(),
+            Some(ActionArgs::Status {})
+        );
         assert_eq!(parse_text("/status@Other", &telegram).unwrap(), None);
         assert_eq!(
             parse_text("/status@BotName", &telegram).unwrap(),

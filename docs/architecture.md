@@ -1,17 +1,20 @@
 # Architecture
 
-Discord events enter the chat engine. Replies combine the core persona, evolving notes, retrieved memory, and the current task. Finished chats are queued for background memory analysis. This changes reply context, not model weights; there is no fixed 12-message conversation limit.
+Discord and Telegram events enter the chat engine through platform adapters. Replies combine the core persona, evolving notes, retrieved memory, and the current task. Finished chats are queued for background memory analysis. This changes reply context, not model weights; there is no fixed 12-message conversation limit.
 
 ## Data boundaries
 
 ```mermaid
 flowchart TD
     Discord[Discord events / accessible history] --> Chat[Chat engine]
+    Telegram[Telegram long-poll updates / local history] --> Chat
     Clock[Sleep and growth stages] --> Chat
     Chat --> Model[OpenRouter / Mistral / configured endpoint]
     Model --> Reply[Replies / silence / reactions]
     Reply --> Discord
+    Reply --> Telegram
     Discord --> Agents[Background analysis]
+    Telegram --> Agents
     Web[News / page reading] --> Agents
     Agents --> Model
     Agents --> Memory[Local redb records]
@@ -20,7 +23,7 @@ flowchart TD
     Memory --> Archive[Local overflow archive]
 ```
 
-Selected messages, saved notes, and optionally images leave the host for model processing. A first scan reads up to 14 days of accessible text history, subject to configured scope and permissions. Observation continues while asleep. Firecrawl receives URLs/search queries when configured. [Privacy and retention](setup-guide.md#privacy) are deployment concerns, not properties supplied by redb.
+Selected messages, saved notes, and optionally images leave the host for model processing. Discord's first scan reads up to 14 days of accessible text history, subject to configured scope and permissions. Telegram has no old group-history fetch and learns live updates plus locally retained text from explicitly approved rooms. Observation continues while asleep. Firecrawl receives URLs/search queries when configured. [Privacy and retention](setup-guide.md#privacy) are deployment concerns, not properties supplied by redb.
 
 ## Embedded panel and startup
 
@@ -79,6 +82,7 @@ Compose mounts `./config` for private settings, `./photos` read-only, and the fi
 | `src/bot/cycle/` | background loops, memory queues and actions |
 | `src/command.rs`, `src/command/` | shared typed actions, validation and administrative read models |
 | `src/platform/discord/` | native gateway, SDK transport, slash registration, UI cards/modals and renderer |
+| `src/platform/telegram/` | thin Bot API client, long-poll runner, normalization, plain rendering and transport |
 | `src/agents.rs`, `src/agenda.rs` | analysis and web/news work |
 | `src/memory.rs`, `src/migrate.rs` | redb records, retrieval, summarization/archive support and legacy import |
 | `src/growth.rs`, `src/sleep.rs`, `src/travel.rs` | growth stages, clock/sleep, Turkish calendar |
@@ -137,8 +141,8 @@ personality decisions. Shared ingress types are `IncomingMessage`, `ReactionEven
 `ChatEvent`, and `EventEnvelope`; account identity is connection-local.
 `ConversationKey` includes optional topic/thread scope for adapter routing.
 Explicit native conversions remain inside Discord transport/UI boundaries.
-Memory has completed its canonical schema-v2 cutover. Discord is the only enabled
-runtime transport; the interface does not advertise unimplemented networks.
+Memory has completed its canonical schema-v2 cutover. Discord and Telegram are
+enabled runtime transports; capabilities do not advertise unsupported operations.
 
 Capabilities describe usable room permissions: ordinary-message visibility,
 history/decryption, replies/threads, sending/reactions/edits/deletes/typing,
@@ -235,9 +239,13 @@ explicit qualified administrator set is supplied through
 
 ### Generic lifecycle and adapter registration
 
-`platform::runtime::ConnectionConfig::Discord { connection: ConnectionId, token: String }`
-is the current startup configuration; credentials remain runner-local. Startup
-calls `platform::runtime::run(Arc<Bot>, Vec<ConnectionConfig>) -> Result<(), BotError>`.
+`platform::runtime::ConnectionConfig` configures Discord with
+`Discord { connection: ConnectionId, token: String }` and Telegram with
+`Telegram { connection: ConnectionId, token: String, rooms: HashSet<RoomKey>,
+owner: Option<UserKey> }`; credentials remain runner-local.
+The common `configured_connections` selector reads the immutable active settings
+for both headless startup and the panel's first runtime, allowing either or both.
+Startup calls `platform::runtime::run(Arc<Bot>, Vec<ConnectionConfig>) -> Result<(), BotError>`.
 The panel forwards its `ShutdownReceiver` to `run_with_shutdown(Arc<Bot>, Vec<ConnectionConfig>, ShutdownReceiver)`; this owns the same adapter tasks/brain and does not expose native shard managers or caches. A cancellation already requested before startup prevents credential activation and SDK construction.
 Adding a concrete network means extending this configuration enum and `Adapter`,
 implementing the complete `Platform` interface, and providing an adapter-local
@@ -310,3 +318,50 @@ Runtime additionally limits concurrent ingress model jobs to 32. Its separate
 64-slot lifecycle/control queue remains serviceable while the 256-slot message
 queue applies backpressure; SDK native private-command acknowledgment is not
 queued behind model work.
+
+### Telegram adapter contract
+
+Telegram uses the existing reqwest 0.12 client family, not an SDK dispatcher or a
+second brain. Outbound HTTPS `getUpdates` long polling is NAT-friendly; webhook
+delivery and multiple pollers for one token are incompatible with this runner.
+`getMe` establishes the connection-local bot account. Durable user/room keys use
+`PlatformKind::Telegram` and native numeric components; message/thread identities
+include their native chat scope. Native negative group IDs remain negative.
+
+`TELEGRAM_ROOMS` explicitly approves rooms and defaults to deny all; membership
+and discovery never grant access. `OWNER_KEY=telegram:user:<id>` supplies a
+qualified administrator, independently of approval. Incoming ordinary group
+visibility requires disabled privacy (remove/re-add after `/setprivacy` →
+Disable) or group-administrator status. Reaction updates require administrator
+status and explicit update subscriptions. Administrative results stay private;
+users must first start the bot's private chat.
+
+The adapter reports no remote group history and no per-group nickname operation.
+History context is live/local only, not a fabricated fourteen-day scan. Plain
+messages have a 4096-Unicode-scalar output budget; topic/reply IDs remain
+transport-local. Reactions are restricted to chat-allowed emoji, never arbitrary
+Unicode, paid reactions or custom emoji. Unsupported capabilities remain honest
+rather than silently claiming success.
+
+Media references retain Telegram file IDs, not token-bearing download URLs.
+`getFile` resolves enabled images to a validated Telegram download; image-off
+skips that network work. Local outgoing attachments use multipart upload, not
+arbitrary remote URLs or path disclosure. Tokens are neither identity components
+nor model/log/storage content. The next-update cursor lives in redb's
+`memory_metadata` table under `platform/telegram/<bot-account-id>/offset`,
+separate from conversation records. It checkpoints accepted ingress/queued
+commands, not completed model work; crash replay/in-flight windows are not
+exactly-once delivery. Telegram's pending queue is not history and expires after
+at most 24 hours.
+
+Offline fixtures/identity checks need no token; a separate fake-token startup
+smoke contacts Telegram and is not offline or a successful authentication claim.
+The ignored
+`telegram_live_get_me` test is an explicit authenticated probe, not evidence of
+group delivery or model behavior. Current sources checked 11 October 2026:
+[Bot API](https://core.telegram.org/bots/api), [privacy mode](https://core.telegram.org/bots/features#privacy-mode),
+[teloxide 0.17.0](https://crates.io/crates/teloxide),
+[reqwest 0.13.5 / 0.12.28](https://crates.io/crates/reqwest).
+The newest reqwest major is not required for these HTTP endpoints; retaining the
+existing 0.12 dependency avoids unrelated transport/dependency migration.
+

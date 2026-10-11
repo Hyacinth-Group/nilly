@@ -317,6 +317,11 @@ impl ConnectionRegistry {
                         .as_ref()
                         .map(|adapter| adapter.self_user().clone()),
                     rooms,
+                    warnings: entry
+                        .adapter
+                        .as_ref()
+                        .map(|adapter| adapter.connection_warnings())
+                        .unwrap_or_default(),
                 }
             })
             .collect();

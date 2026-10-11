@@ -30,6 +30,7 @@ const CONTENT: TableDefinition<&str, &str> = TableDefinition::new("content");
 // path -> unix seconds of last write; replaces filesystem mtime for "most recently changed" ordering
 const MODIFIED: TableDefinition<&str, u64> = TableDefinition::new("modified");
 const PANEL_ADMIN: TableDefinition<&str, &str> = TableDefinition::new("panel_admin");
+const METADATA: TableDefinition<&str, u64> = TableDefinition::new("memory_metadata");
 
 static DB: OnceLock<Database> = OnceLock::new();
 static INIT_LOCK: Mutex<()> = Mutex::new(());
@@ -126,6 +127,19 @@ fn read_database(database: &Database, rel: &str) -> Result<Option<String>, BotEr
 /// Distinguishes a missing record from a database access failure.
 pub fn read_result(rel: &str) -> Result<Option<String>, BotError> {
     read_database(db_result()?, rel)
+}
+
+/// Adapter cursors are metadata, not personality records or indexed transcripts.
+pub(crate) fn read_metadata(key: &str) -> Result<Option<u64>, BotError> {
+    let txn = db_result()?.begin_read()?;
+    let table = txn.open_table(METADATA)?;
+    Ok(table.get(key)?.map(|value| value.value()))
+}
+pub(crate) fn write_metadata(key: &str, value: u64) -> Result<(), BotError> {
+    let txn = db_result()?.begin_write()?;
+    txn.open_table(METADATA)?.insert(key, value)?;
+    txn.commit()?;
+    Ok(())
 }
 
 /// Runtime convenience read; missing records are empty and access failures are logged.

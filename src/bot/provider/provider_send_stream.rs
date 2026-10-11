@@ -141,6 +141,12 @@ impl Bot {
                 };
                 if let Err(e) = transport.react(&target, &platform::types::Emoji::Unicode(emoji.clone())).await {
                     log::warn!("couldn't add reaction ({channel}): {e}");
+                    if matches!(e, platform::PlatformError::Unsupported(_)) {
+                        let body = platform::outgoing::OutgoingMessage::text(emoji);
+                        if let Err(error) = transport.send(&room, &body).await {
+                            log::warn!("couldn't send reaction fallback ({channel}): {error}");
+                        }
+                    }
                 }
             } else {
                 let body = platform::outgoing::OutgoingMessage::text(emoji);

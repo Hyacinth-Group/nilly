@@ -67,7 +67,7 @@ fn input(language: Language, view: &FieldView) -> Field {
         FieldKind::LogColor => &["auto", "on", "off"],
         _ => &[],
     };
-    if !choices.is_empty() {
+    if !choices.is_empty() || matches!(view.spec.kind, FieldKind::TelegramRooms) {
         input.value =
             crate::config::validate_value(view.spec.key, &input.value).unwrap_or(input.value);
     }
@@ -157,7 +157,11 @@ pub(super) async fn view(
         page.notice = t(language, "panel.settings.pending");
     }
     for (group, keys, advanced) in [
-        ("platform", &["DISCORD_TOKEN"][..], false),
+        (
+            "platform",
+            &["DISCORD_TOKEN", "TELEGRAM_TOKEN", "TELEGRAM_ROOMS"][..],
+            false,
+        ),
         (
             "provider",
             &["PROVIDER", "OPENROUTER_KEY", "MISTRAL_KEY", "MODEL"][..],
@@ -524,4 +528,47 @@ pub(super) async fn provider_api(
 ) -> WebResult<Json<Value>> {
     check_provider(app, &headers, peer, &input).await?;
     Ok(Json(json!({"verified":true,"completion_test":false})))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn telegram_inputs_are_localized_write_only_and_typed_without_changing_discord() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(".env");
+        std::fs::write(
+            &path,
+            "DISCORD_TOKEN=discord-private-token\nTELEGRAM_TOKEN=telegram-private-token\nTELEGRAM_ROOMS=-100123\nOPENROUTER_KEY=key\n",
+        )
+        .unwrap();
+        let config = Config::load(path, &HashMap::new()).unwrap();
+        let fields = config.fields();
+        for language in [Language::En, Language::Tr] {
+            for key in ["DISCORD_TOKEN", "TELEGRAM_TOKEN"] {
+                let view = fields.iter().find(|view| view.spec.key == key).unwrap();
+                let input = input(language, view);
+                assert_eq!(input.kind, "password");
+                assert!(input.value.is_empty());
+                assert_eq!(input.configured, t(language, "panel.settings.configured"));
+                assert_eq!(input.effective, input.configured);
+                assert_eq!(input.saved, input.configured);
+                assert!(input.default.is_empty());
+                assert!(!input.label.starts_with("panel."));
+                assert!(!input.help.starts_with("panel."));
+                assert!(!input.help.contains("private-token"));
+            }
+            let view = fields
+                .iter()
+                .find(|view| view.spec.key == "TELEGRAM_ROOMS")
+                .unwrap();
+            let input = input(language, view);
+            assert_eq!(input.kind, "text");
+            assert_eq!(input.value, "telegram:room:-100123");
+            assert!(input.configured.is_empty());
+            assert!(!input.label.starts_with("panel."));
+            assert!(!input.help.starts_with("panel."));
+        }
+    }
 }

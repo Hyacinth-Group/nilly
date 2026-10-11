@@ -1,8 +1,80 @@
-# Your first Discord bot
+# Your first Discord or Telegram bot
 
 This bot keeps conversation notes and uses them alongside a fixed persona in later replies. You do not need to write code. Start the package from Terminal or PowerShell, then connect your accounts and configure the bot in your browser.
 
-## What you need
+Choose **Discord** or **Telegram** for the connection you want. The numbered
+Discord walkthrough below retains Discord's intents and invitation steps;
+Telegram users follow the short path here, then the same installation/start commands.
+
+## Telegram setup
+
+1. Open the official [@BotFather](https://t.me/botfather) in Telegram and send
+   `/newbot`. Choose a name and a username ending in `bot`; save its token
+   privately. The token is a password, not your personal Telegram login.
+2. Send `/setprivacy` to BotFather, choose the bot and select **Disable** so it
+   can observe ordinary group conversation. **Remove and re-add it to existing
+   groups** after changing privacy. Alternatively add it as a group
+   administrator, which receives ordinary messages regardless of privacy.
+3. Add the bot to a group you administer and give it permission to **send
+   messages**. Tell members that selected messages/notes may leave the host for
+   model processing. Administrator status is also required to receive human
+   reaction updates; sending reactions is limited to the chat's allowed emoji.
+4. Obtain a model key (step 2 below), install Docker or a release binary, and
+   start the package as described in step 5. The panel opens on port **8787**
+   before credentials are required. Open the printed setup link and complete
+   **Claim and protect**, then visit **Settings** instead of the Discord wizard.
+   In **Platform**, save the BotFather token and approved Telegram rooms; also
+   configure the provider/model credentials and language. Telegram Settings do
+   not run a `getMe` credential test. For terminal-only setup, use
+   [Headless CLI setup](#headless-cli-setup), select `telegram` at the first
+   prompt and paste the BotFather token when requested. No Discord account or
+   token is needed for Telegram alone.
+5. Set `OWNER_KEY` in **Settings → Privacy** as
+   `telegram:user:<your numeric user ID>`, for example `telegram:user:42`; this
+   is not `@username` or the group's ID. You can skip it, in which case Telegram
+   administration is denied. Set approved `TELEGRAM_ROOMS` in
+   **Settings → Platform** (or answer the CLI prompt) as comma-separated native
+   **negative** group IDs or canonical keys, such as
+   `-100123,telegram:room:-456`. **Blank denies every room**; merely adding the
+   bot does not approve it.
+6. Save Settings and **restart the process** to activate the configuration
+   (`docker compose restart bot` for Docker, or stop and restart the binary).
+   Telegram alone starts without a Discord token; both tokens can be configured
+   to run both platforms together. CLI users launch with the same commands
+   below. Open a private chat with the bot and press **Start** before requesting
+   administrative results, which are delivered privately. In an approved group
+   send `/status` (`/durum` for Turkish). Check the privacy/history/nickname
+   notices in that result and any limited-visibility warning on Overview.
+
+To find IDs without forwarding conversations to a third-party ID bot, inspect a
+Bot API `getUpdates` response privately before starting this runner (`from.id`
+for the sender, `chat.id` for the group). Treat the response as private member
+data, never publish it, and do not run a second poller while the bot is running.
+Keep the minus sign on group IDs. Canonical private-chat RoomKeys can also be
+explicitly approved; approval does not automatically grant administrative rights.
+
+Telegram uses outbound HTTPS long polling, so **NAT is fine** and no public
+webhook port is needed. An existing webhook or second process using the same
+token conflicts with polling. There is **no old group-history fetch**: it learns
+future updates and locally retained conversation. Telegram's pending update
+queue lasts at most 24 hours, not fourteen days. Personality name selection
+cannot change a per-group nickname. Forum topic IDs are retained for reply routing,
+but approval is at the **chat** level: approving a group approves its topics;
+`TELEGRAM_ROOMS` cannot grant or deny individual topics. Topic creation, closure
+and other topic administration are not offered.
+
+Replies are plain text split at 4096 Unicode scalars. Reactions use only allowed
+emoji, not paid/custom emoji. Images follow `IMAGE_ANALYSIS=off` (no download);
+enabled images use a validated `getFile` download without exposing token-bearing
+URLs to the model. Local outgoing files are uploaded directly. For limits,
+tokenless offline authorization smoke and the explicitly ignored live `getMe`
+probe, see [Telegram configuration](configuration.md#telegram).
+
+Official references: [creating a bot](https://core.telegram.org/bots/features#creating-a-new-bot),
+[privacy mode](https://core.telegram.org/bots/features#privacy-mode),
+[Bot API polling](https://core.telegram.org/bots/api#getupdates).
+
+## What you need for Discord
 
 - [ ] A Discord account.
 - [ ] A Discord server where you are an administrator.
@@ -17,7 +89,7 @@ Keep the computer on for the bot to stay online.
 > - **Sent to your model service:** selected chat text and saved notes for replies and background analysis. OpenRouter also routes to the serving model provider. Images may be sent; image analysis defaults on (`IMAGE_ANALYSIS=off` disables it).
 > - **Other services:** Firecrawl receives page URLs and search queries when configured.
 >
-> Tell members which channels the bot can read. It reads ordinary messages, not only mentions; its first scan reads up to **14 days** of accessible text history, and it observes messages while asleep. Set `CHANNELS` before first launch. **Blank `GUILD_ID` / `CHANNELS` means every accessible server / channel.** Selective member deletion is not supported, and `/reset` does not erase stored records. [Retention details](#privacy).
+Tell members which rooms the bot can read. It reads ordinary messages, not only mentions, and observes messages while asleep. Discord's first scan reads up to **14 days** of accessible text history; set `CHANNELS` before first launch. **Blank Discord `GUILD_ID` / `CHANNELS` means every accessible server / channel.** Telegram has no group-history scan and **blank `TELEGRAM_ROOMS` denies all rooms**. Selective member deletion is not supported, and `/reset` does not erase stored records. [Retention details](#privacy).
 
 ## What does it cost?
 
@@ -149,9 +221,9 @@ docker compose logs bot
 
 The panel starts before checking the bot's credentials, so a new installation does not need an existing `.env`. Open the printed `http://localhost:8787/setup#token=...` link within **15 minutes**. Treat it as a password: do not share it or the log containing it. The claim token is consumed when claimed, before you save a password. If it expires, or you lose that setup session before saving a password, run `docker compose restart bot` and use the new link. Once the password is saved, use it to log in; restarts no longer print a claim link.
 
-### The five browser steps
+### The five browser steps for Discord
 
-1. **Claim and protect.** Use the one-use link and set an administrator password of at least **12 characters**. Save it in a password manager. The panel administrator password is separate from your Discord token and optional Discord owner ID.
+1. **Claim and protect.** Use the one-use link and set an administrator password of at least **12 characters**. Save it in a password manager. The panel administrator password is separate from your platform token and optional bot owner identity.
 2. **Connect Discord.** Paste the token from step 1 and test it. Setup checks Discord's API for the actual application identity; the invite is generated from that verified ID, not decoded from the token. A successful test is not yet a gateway connection.
 3. **Choose AI.** Select `openrouter` or `mistral`, paste its key, and enter a model ID. To start free on OpenRouter, explicitly choose a current `:free` model; leaving **Model** blank uses a paid default. The key test makes authenticated **GET** requests only, not a paid completion. It does not prove that the model can produce a reply or that you have sufficient credit.
 4. **Make it fit.** Choose `en` (English) or `tr` (Turkish), your UTC offset (for example `3` or `5.5`), optional Discord owner ID, and news settings. **Set access before starting:** fill `GUILD_ID` with your server ID and `CHANNELS` with channel IDs, comma-separated for several channels. With Developer Mode enabled, right-click a server or channel to copy its ID. Blank values mean **all accessible servers/channels**, including the first history scan.
@@ -159,13 +231,14 @@ The panel starts before checking the bot's credentials, so a new installation do
 
 Credential tests do not save your keys to disk. Finish saves the private `config/.env` and starts the Discord runtime **without restarting the process**. Once its password has been saved, the administrator account survives an interrupted setup; log in to resume, rather than trying to reclaim it. Unfinished credential drafts are session-local, expire 15 minutes after creation or the latest successful credential test, and do not survive logout or process restart.
 
-Keep `config/.env` private: it contains plaintext tokens and keys. Browser saves replace the file atomically and preserve unrelated settings/comments; they do not encrypt it. Never upload it or share it in a screenshot. On Windows restrict folder access in **Properties → Security**. Rotate a leaked Discord token in Developer Portal and a leaked model key in its provider account.
+Keep `config/.env` private: it contains plaintext tokens and keys. Browser saves replace the file atomically and preserve unrelated settings/comments; they do not encrypt it. Never upload it or share it in a screenshot. On Windows restrict folder access in **Properties → Security**. Rotate a leaked Discord token in Developer Portal, a leaked Telegram token with BotFather, and a leaked model key in its provider account.
 
-Keep Docker Desktop running. Panel health is separate from Discord connection health:
-a successful token test is not proof that privileged intents, channel permissions or gateway
-connection work.
+Keep Docker Desktop running. Panel health is separate from platform connection
+health: a successful Discord token test is not proof that privileged intents,
+channel permissions or the gateway connection work. Telegram's Settings path
+requires a restart and does not offer the Discord wizard's credential test.
 
-For a release binary, run it from its private data folder and open the printed browser link; it writes `.env` there. Keep the terminal open. An existing valid configuration starts the Discord runtime automatically alongside the panel. [Headless CLI setup](#headless-cli-setup) remains available if you do not want browser administration.
+For a release binary, run it from its private data folder and open the printed browser link; it writes `.env` there. Keep the terminal open. An existing valid configuration starts its configured platform connections automatically alongside the panel. [Headless CLI setup](#headless-cli-setup) remains available if you do not want browser administration.
 
 ### Migrating an existing Docker `.env`
 
@@ -189,7 +262,7 @@ over the file; a browser save cannot override Compose injection.
 
 ### Panel safety and everyday settings
 
-Open `http://localhost:8787` after setup and log in. **Overview** distinguishes panel availability from Discord gateway connection and shows mood per active conversation, not a fabricated global mood. Its model-call/token counters cover only this process, not durable usage history or measured cost. **Settings** validates supported fields without revealing stored keys. A blank secret field keeps its saved value. **Logs** is a bounded recent, redacted in-memory buffer; entries are lost on restart and it is not a permanent audit trail. Redaction is not a guarantee that logs contain no member data.
+Open `http://localhost:8787` after setup and log in. **Overview** distinguishes panel availability from platform connections and shows mood per active conversation, not a fabricated global mood. Its model-call/token counters cover only this process, not durable usage history or measured cost. **Settings** validates supported fields without revealing stored keys. Token/key fields are write-only: a blank secret field keeps its saved value, and the explicit clear control removes it. **Settings → Platform** provides Telegram's token and approved rooms alongside Discord's token; blank Telegram approval denies all rooms. Save the model credentials as well when configuring Telegram alone, and restart to apply settings. **Logs** is a bounded recent, redacted in-memory buffer; entries are lost on restart and it is not a permanent audit trail. Redaction is not a guarantee that logs contain no member data.
 
 Memory/personality editors, action buttons, and the dedicated usage page are intentionally disabled pending core APIs. Use existing supported Discord commands for bot operations; do not assume the panel supplies member erasure, durable usage history, or provider cost accounting.
 
@@ -259,9 +332,23 @@ First, check **Bot → Privileged Gateway Intents** in the Developer Portal. Bot
 
 If an intent is off, Discord may reject the connection entirely. Check channel read/write permissions, `config/.env` scope filters (or the binary's `.env`), and that `STEALTH` is off; retry `/status`. If status works but chat does not, check logs for provider errors/exhausted limits and consider the sleep schedule. Ordinary chat is not a deterministic health check.
 
+### Telegram is silent. What should I check?
+
+Check `TELEGRAM_ROOMS` first: blank denies all rooms, and discovery is not
+approval. Verify the group's negative ID, the bot's send permission and ordinary
+message visibility (`/setprivacy` → Disable plus remove/re-add, or administrator
+status). A successful `getMe` response from a separate API probe alone does not
+prove a particular group's visibility or permissions; unknown visibility must
+not be treated as ordinary message access. Start the bot's private chat before
+expecting administrative results, and use your source-qualified `OWNER_KEY`,
+not `OWNER_ID`. Check for an existing webhook or another process polling the
+same token. If commands work but
+chat does not, check provider errors/limits and the sleep schedule; normal chat
+is not a deterministic health check.
+
 ### Configuration is missing or invalid. What does that mean?
 
-The panel remains available for missing or invalid bot credentials, so log in to finish setup or repair Settings. After saving changes to an existing configuration, restart the bot. Panel availability does not mean the Discord connection is healthy.
+The panel remains available for missing or invalid bot credentials, so log in to finish setup or repair Settings. Configure `DISCORD_TOKEN`, `TELEGRAM_TOKEN`, or both; Telegram alone does not need a Discord token. After saving changes to an existing configuration, restart the bot. Panel availability does not mean either platform connection is healthy.
 
 For Compose, check `config/.env` and the writable directory mount's ownership. Process environment values (including retained `env_file` settings) take precedence and are read-only in the panel; a file save cannot override them. A panel bind/config-file/database failure can prevent the panel itself from opening—check the console rather than assuming every failure is recoverable in the browser.
 
@@ -335,7 +422,7 @@ For a binary or source build, memory lives in the local `durum/` folder. Stop th
 
 ## Privacy
 
-Tell members before inviting it: accessible ordinary messages and up to 14 days of first-scan history may be processed, subject to `CHANNELS` and Discord permissions. Observation continues while asleep. Replies and background analysis send selected chat text and saved notes to the chosen model service (including OpenRouter's serving provider). Attached images can be sent because image analysis defaults on. Configured Firecrawl receives page URLs and search queries.
+Tell members before inviting it: Discord's accessible ordinary messages and up to 14 days of first-scan history may be processed, subject to `CHANNELS` and Discord permissions. Telegram processes new updates from explicitly approved `TELEGRAM_ROOMS` and retained local text, not old group history; blank approval denies all rooms. Observation continues while asleep. Replies and background analysis send selected chat text and saved notes to the chosen model service (including OpenRouter's serving provider). Attached images can be sent because image analysis defaults on. Configured Firecrawl receives page URLs and search queries.
 
 Saved data stays on your machine, but processing is **not** local. Channel histories are bounded; derived person/topic notes, summaries and archived raw text can remain after a conversation. **Selective member deletion is not supported.** `/reset` resets channel/chat state, not stored member records or archives. Do not promise members an erasure capability the bot does not have.
 
@@ -343,7 +430,7 @@ For a complete local reset, stop the bot, delete its entire saved-data volume (o
 
 ## Prefer not to use Docker?
 
-These routes use the same token, key, and intent settings from steps 1–3.
+These routes use the same platform token and model key settings described above; Discord also needs the intent settings from steps 1–3.
 
 ### Download a release
 
@@ -359,7 +446,7 @@ On Mac or Linux, if the file is not executable, run `chmod +x discord-bot` first
 .\discord-bot.exe
 ```
 
-Keep this terminal open while the bot runs. Open the printed one-use browser link, complete the five setup steps above, and verify `/status` as in step 7.
+Keep this terminal open while the bot runs. Open the printed one-use browser link; complete the five Discord steps above or the [Telegram Settings path](#telegram-setup), then verify `/status` for that platform.
 
 ### Build from source
 
@@ -371,13 +458,25 @@ cd discord-bot
 cargo run --release
 ```
 
-The first build takes longer. Keep the terminal open, use the printed browser link, restrict access in setup before starting Discord, and verify `/status` as in step 7.
+The first build takes longer. Keep the terminal open, use the printed browser link, and restrict access before starting either platform. Follow the five Discord steps or the [Telegram Settings path](#telegram-setup), then verify `/status`.
 
 ### Headless CLI setup
 
-Browser setup is the default, but `discord-bot init` (or `cargo run -- init`) remains available for headless installations. It prompts for your Discord token, provider, API key, model, language, optional owner ID, and UTC offset. **Token and key input are hidden when run interactively in a terminal**; piped input is not a hidden terminal prompt. Do not place secrets in shell command arguments or share `.env`.
+Browser setup is the default, but `discord-bot init` (or `cargo run -- init`) remains available for headless installations. It first asks for `discord` (Enter) or `telegram`, then the platform token, provider, API key, model, language, owner, and UTC offset. Telegram asks for a qualified `OWNER_KEY` and approved rooms instead of a Discord owner ID. **Token and key input are hidden when run interactively in a terminal**; piped input is not a hidden terminal prompt. Do not place secrets in shell command arguments or share `.env`.
 
-The CLI writes `.env` in the current folder and refuses an existing file unless `--force` is explicit. Back up any existing file privately before replacing it. Before launching, add `PANEL_ENABLED=off`, set `GUILD_ID`/`CHANNELS` to limit access, and keep the file private (mode `600` on Unix). Blank scope means every accessible server/channel, and a blank model uses the provider's paid default. The CLI prints an invite link and intent reminders; unlike browser setup, it does not verify the token's application identity with Discord's API.
+| Question | What to enter |
+| --- | --- |
+| Platform | Press Enter for `discord`, or type `telegram`. |
+| Bot token | Discord's token from step 1, or Telegram's BotFather token. |
+| Provider | Press Enter for `openrouter`, or type `mistral`. |
+| API key | Your chosen provider's key from step 2. |
+| Model ID | Choose a current `:free` OpenRouter model explicitly if wanted; Enter uses the provider's **paid** default. |
+| Language | Press Enter for `en` (English), or type `tr` (Turkish). |
+| Owner | Discord: your numeric user ID, or skip. Telegram: `telegram:user:<numeric ID>`, or skip administration. |
+| Approved rooms (Telegram only) | Negative group IDs or canonical Telegram RoomKeys, comma-separated; blank denies all rooms. |
+| UTC offset hours | Your local time difference from UTC, or Enter for `0`; for example `3` means UTC+3. |
+
+The CLI saves `.env` through the same typed configuration validation and atomic save path as the panel, and refuses an existing file unless `--force` is explicit. Back up any existing file privately before replacing it. Before launching, add `PANEL_ENABLED=off`, set Discord `GUILD_ID`/`CHANNELS` to limit Discord access, or explicitly approve `TELEGRAM_ROOMS`, and keep the file private (mode `600` on Unix). Blank Discord scope means every accessible server/channel; blank Telegram rooms deny all. A blank model uses the provider's paid default. Discord prints an invite link and intent reminders; unlike browser setup, CLI init does not verify the token's application identity with Discord's API. Telegram instead prints BotFather privacy, approved-room and private-command reminders; it does not perform live authentication.
 
 For Docker, first create the private `config`/`photos` directories and complete any existing-volume migration above. Run `docker compose run --rm -it --workdir /data/config bot init` to write `config/.env` as container UID `10001`, then add `PANEL_ENABLED=off` and your access scope to that file before `docker compose up -d`. Do not reintroduce `env_file` if you want the file to remain browser-editable later. To re-enable the panel, remove or change `PANEL_ENABLED=off` and restart.
 

@@ -130,7 +130,7 @@ async fn run(config: config::Config) -> Result<(), BotError> {
     let valid = config.validate_runtime().is_ok();
     let initial = if valid {
         Lifecycle::ConfiguredStarting
-    } else if config.get("DISCORD_TOKEN").is_empty()
+    } else if (config.get("DISCORD_TOKEN").is_empty() && config.get("TELEGRAM_TOKEN").is_empty())
         || (config.get("OPENROUTER_KEY").is_empty() && config.get("MISTRAL_KEY").is_empty())
     {
         Lifecycle::Unconfigured
@@ -194,6 +194,7 @@ async fn runtime_owner(
     }
     app.runtime.lock().attempted = true;
     config::activate(config.clone())?;
+    let connections = platform::runtime::configured_connections()?;
     let bot = match Bot::setup() {
         Ok(bot) => bot,
         Err(_) => {
@@ -212,10 +213,6 @@ async fn runtime_owner(
         runtime.bot = Some(bot.clone());
         runtime.lifecycle = Lifecycle::Running;
     }
-    let connections = vec![platform::runtime::ConnectionConfig::Discord {
-        connection: platform::types::ConnectionId::new("discord-default"),
-        token: config.get("DISCORD_TOKEN").to_owned(),
-    }];
     if let Err(error) = platform::runtime::run_with_shutdown(bot, connections, stop.clone()).await {
         log::error!("platform runtime: {error}");
         let mut runtime = app.runtime.lock();

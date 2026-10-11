@@ -16,6 +16,7 @@ pub enum FieldKind {
     Id,
     UserKey,
     IdList,
+    TelegramRooms,
     TimezoneOffset,
     Language,
     Bool,
@@ -58,6 +59,8 @@ macro_rules! field {
 
 pub static REGISTRY: &[FieldSpec] = &[
     field!("DISCORD_TOKEN", Secret, ""),
+    field!("TELEGRAM_TOKEN", Secret, ""),
+    field!("TELEGRAM_ROOMS", TelegramRooms, ""),
     field!("OWNER_KEY", UserKey, ""),
     field!("OWNER_ID", Id, ""),
     field!("TZ_OFFSET", TimezoneOffset, "0"),
@@ -155,6 +158,13 @@ pub fn normalize(field: &FieldSpec, raw: &str) -> Result<String, ConfigError> {
                 }
             }
             ids.iter().map(u64::to_string).collect::<Vec<_>>().join(",")
+        }
+        FieldKind::TelegramRooms => {
+            let rooms = crate::platform::telegram::runner::parse_rooms(value)
+                .map_err(|_| invalid(field, "panel.config.invalid_telegram_rooms"))?;
+            let mut rooms: Vec<_> = rooms.into_iter().map(|room| room.to_string()).collect();
+            rooms.sort_unstable();
+            rooms.join(",")
         }
         FieldKind::TimezoneOffset => {
             let hours: f64 = value

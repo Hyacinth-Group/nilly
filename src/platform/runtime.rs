@@ -51,6 +51,39 @@ pub enum ConnectionConfig {
         connection: ConnectionId,
         token: String,
     },
+    Telegram {
+        connection: ConnectionId,
+        token: String,
+        rooms: HashSet<RoomKey>,
+        owner: Option<UserKey>,
+    },
+}
+
+/// A single selector serves headless startup and the panel's activated first runtime.
+pub(crate) fn configured_connections() -> Result<Vec<ConnectionConfig>, BotError> {
+    let mut configs = Vec::new();
+    if let Ok(token) = crate::setting("DISCORD_TOKEN") {
+        configs.push(ConnectionConfig::Discord {
+            connection: ConnectionId::new("discord-default"),
+            token,
+        });
+    }
+    if let Ok(token) = crate::setting("TELEGRAM_TOKEN") {
+        configs.push(ConnectionConfig::Telegram {
+            connection: ConnectionId::new("telegram-default"),
+            token,
+            rooms: super::telegram::runner::parse_rooms(
+                &crate::config::runtime_value("TELEGRAM_ROOMS").unwrap_or_default(),
+            )?,
+            owner: crate::owner_id()
+                .filter(|user| user.platform() == PlatformKind::Telegram)
+                .cloned(),
+        });
+    }
+    if configs.is_empty() {
+        return Err(crate::strings::t("telegram.startup.missing").into());
+    }
+    Ok(configs)
 }
 struct SeenEvents {
     set: HashSet<(ConnectionId, EventKey)>,
@@ -107,24 +140,50 @@ pub(crate) async fn run_with_shutdown(
     let mut runners = JoinSet::new();
     let mut ids = HashSet::new();
     for config in &configs {
-        let ConnectionConfig::Discord { connection, .. } = config;
+        let (connection, platform) = match config {
+            ConnectionConfig::Discord { connection, .. } => (connection, PlatformKind::Discord),
+            ConnectionConfig::Telegram { connection, .. } => (connection, PlatformKind::Telegram),
+        };
         if !ids.insert(connection.clone()) {
             return Err(PlatformError::Transport("duplicate configured connection".into()).into());
         }
         bot.adapters
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .configure(connection, PlatformKind::Discord)?;
+            .configure(connection, platform)?;
     }
     for config in configs {
-        let ConnectionConfig::Discord { connection, token } = config;
+        let connection = match &config {
+            ConnectionConfig::Discord { connection, .. }
+            | ConnectionConfig::Telegram { connection, .. } => connection.clone(),
+        };
         let bot = bot.clone();
         let ingress = ingress.clone();
         let shutdown = shutdown_rx.clone();
         runners.spawn(async move {
-            let result =
-                super::discord::runner::run(bot, connection.clone(), token, ingress, shutdown)
-                    .await;
+            let result = match config {
+                ConnectionConfig::Discord { token, .. } => {
+                    super::discord::runner::run(bot, connection.clone(), token, ingress, shutdown)
+                        .await
+                }
+                ConnectionConfig::Telegram {
+                    token,
+                    rooms,
+                    owner,
+                    ..
+                } => {
+                    super::telegram::runner::run(
+                        bot,
+                        connection.clone(),
+                        token,
+                        rooms,
+                        owner,
+                        ingress,
+                        shutdown,
+                    )
+                    .await
+                }
+            };
             (connection, result)
         });
     }

@@ -73,6 +73,9 @@ impl Bot {
                 };
                 if let Err(e) = transport.react(&target, &platform::types::Emoji::Unicode(emoji.clone())).await {
                     log::warn!("couldn't add reaction ({channel}): {e}");
+                    if matches!(e, platform::PlatformError::Unsupported(_)) {
+                        self.send(channel, emoji, None, None, None).await;
+                    }
                 }
             } else {
                 self.send(channel, emoji, None, None, None).await;

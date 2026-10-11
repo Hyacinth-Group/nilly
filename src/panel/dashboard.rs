@@ -1,7 +1,9 @@
 use super::routes::{admin, html, item, lang, page, section, t, token, WebResult};
 use super::views::{Item, Language};
 use super::App;
-use crate::platform::outgoing::{ConnectionSnapshot, ConnectionStatus};
+use crate::platform::capabilities::MessageVisibility;
+use crate::platform::outgoing::{ConnectionSnapshot, ConnectionStatus, ConnectionWarning};
+use crate::platform::types::PlatformKind;
 use axum::extract::{Query, State};
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect, Response};
@@ -164,6 +166,17 @@ pub(super) fn transport_snapshot(connections: &[ConnectionSnapshot]) -> Value {
     json!({"connection":connection,"spaces":spaces.len(),"rooms":rooms.len(),"connections":connections})
 }
 
+fn telegram_privacy_limited(connection: &ConnectionSnapshot) -> bool {
+    connection.platform == PlatformKind::Telegram
+        && (connection
+            .warnings
+            .contains(&ConnectionWarning::TelegramPrivacyLimited)
+            || connection
+                .rooms
+                .iter()
+                .any(|room| room.capabilities.visibility == MessageVisibility::MentionsOnly))
+}
+
 fn connection_details(connections: &[ConnectionSnapshot], language: Language) -> String {
     if connections.is_empty() {
         return t(language, "panel.overview.no_connections");
@@ -201,6 +214,15 @@ fn connection_details(connections: &[ConnectionSnapshot], language: Language) ->
                 json!(room.room),
                 t(language, "panel.label.capabilities"),
                 json!(room.capabilities),
+            )
+            .expect("writing to a String cannot fail");
+        }
+        if telegram_privacy_limited(connection) {
+            write!(
+                details,
+                " · {}: {}",
+                t(language, "panel.label.telegram_privacy"),
+                t(language, "panel.overview.telegram_privacy_warning"),
             )
             .expect("writing to a String cannot fail");
         }
@@ -435,6 +457,7 @@ mod tests {
                 stability: IdentityStability::Persistent,
             }),
             rooms: vec![RoomSnapshot { room, capabilities }],
+            warnings: Vec::new(),
         }
     }
 
@@ -545,5 +568,54 @@ mod tests {
             assert!(details.contains(&json!(reported.rooms[0].capabilities).to_string()));
             assert!(!details.contains("discord"));
         }
+    }
+
+    #[test]
+    fn telegram_privacy_warning_uses_reported_visibility_and_account_metadata_only() {
+        let mut connection = matrix_snapshot(ConnectionStatus::Ready);
+        connection.connection = ConnectionId::new("telegram");
+        connection.platform = PlatformKind::Telegram;
+        connection.account.as_mut().unwrap().id =
+            UserKey::new(PlatformKind::Telegram, &["99"]).unwrap();
+        connection.rooms[0].room =
+            RoomRef::from_key(RoomKey::new(PlatformKind::Telegram, &["-100123"]).unwrap());
+        assert!(telegram_privacy_limited(&connection));
+        for language in [Language::En, Language::Tr] {
+            let warning = t(language, "panel.overview.telegram_privacy_warning");
+            assert!(!warning.starts_with("panel."));
+            let details = connection_details(std::slice::from_ref(&connection), language);
+            assert!(details.contains(&warning));
+            assert!(details.contains(&t(language, "panel.label.telegram_privacy")));
+            assert!(details.contains("telegram:room:-100123"));
+        }
+        connection.rooms[0].capabilities.visibility = MessageVisibility::Ordinary;
+        assert!(!telegram_privacy_limited(&connection));
+        assert!(
+            !connection_details(std::slice::from_ref(&connection), Language::En)
+                .contains(&t(Language::En, "panel.overview.telegram_privacy_warning"))
+        );
+        connection
+            .warnings
+            .push(ConnectionWarning::TelegramPrivacyLimited);
+        assert!(telegram_privacy_limited(&connection));
+        connection.rooms.clear();
+        assert!(telegram_privacy_limited(&connection));
+        let snapshot = transport_snapshot(std::slice::from_ref(&connection));
+        assert_eq!(
+            snapshot["connections"][0]["warnings"],
+            json!([ConnectionWarning::TelegramPrivacyLimited])
+        );
+        for language in [Language::En, Language::Tr] {
+            assert!(
+                connection_details(std::slice::from_ref(&connection), language)
+                    .contains(&t(language, "panel.overview.telegram_privacy_warning"))
+            );
+        }
+        connection.platform = PlatformKind::Discord;
+        assert!(!telegram_privacy_limited(&connection));
+        assert!(
+            !connection_details(std::slice::from_ref(&connection), Language::En)
+                .contains(&t(Language::En, "panel.overview.telegram_privacy_warning"))
+        );
     }
 }
