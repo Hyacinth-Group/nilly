@@ -4,7 +4,7 @@ Set Width 1100
 Set Height 600
 Output demo/demo.gif
 
-Type "BOT_LANG=en ./target/release/discord-bot chat"
+Type "BOT_LANG=en ./target/release/nibby chat"
 Enter
 Sleep 2s
 

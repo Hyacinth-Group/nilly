@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping. You can contribute without Rust: improve docs, translate prompts/UI, or report a reproducible bug. Start with [issue #7](https://github.com/krxi/discord-bot/issues/7) for a bounded code task, or browse [open issues](https://github.com/krxi/discord-bot/issues). Comment before taking a task so others know it is being worked on. Issues labeled `needs design` need agreement on behavior before implementation.
+Thanks for helping. You can contribute without Rust: improve docs, translate prompts/UI, or report a reproducible bug. Start with [issue #7](https://github.com/krxi/nibby/issues/7) for a bounded code task, or browse [open issues](https://github.com/krxi/nibby/issues). Comment before taking a task so others know it is being worked on. Issues labeled `needs design` need agreement on behavior before implementation.
 
 ## Fork, branch, pull request
 

@@ -186,7 +186,7 @@ mod test {
     #[test]
     fn collect_walks_and_excludes_top_level_arsiv() {
         let root = std::env::temp_dir().join(format!(
-            "discord-bot-test-migrate-{}-{}",
+            "nibby-test-migrate-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -283,7 +283,7 @@ mod test {
     #[test]
     fn unreadable_source_fails_instead_of_importing_empty_content() {
         let root = std::env::temp_dir().join(format!(
-            "discord-bot-invalid-import-{}-{}",
+            "nibby-invalid-import-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

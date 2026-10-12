@@ -37,13 +37,13 @@ impl Bot {
         {
             let mut state = self.state();
             // the ready event never fires, so the name stays empty: use the chosen name if
-            // there is one, otherwise plain "bot" (strip_name and the output both depend on a name)
+            // there is one, otherwise "Nibby" (strip_name and the output both depend on a name)
             if state.bot_name.is_empty() {
                 state.bot_name = state
                     .growth
                     .name
                     .clone()
-                    .unwrap_or_else(|| "bot".to_string());
+                    .unwrap_or_else(|| "Nibby".to_string());
             }
             start_chat(&mut state, &channel, None);
         }

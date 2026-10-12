@@ -1,6 +1,6 @@
 services:
   bot:
-    image: ghcr.io/krxi/discord-bot:latest
+    image: ghcr.io/krxi/nibby:latest
     build: .
     restart: unless-stopped
     environment:
@@ -11,10 +11,10 @@ services:
       - "127.0.0.1:8787:8787"
     volumes:
       - durum:/data/durum
-      - discord-bot-config:/data/config
+      - nibby-config:/data/config
       - ./photos:/data/photos:ro
 volumes:
   durum:
-    name: discord-bot-data
-  discord-bot-config:
-    name: discord-bot-config
+    name: nibby-data
+  nibby-config:
+    name: nibby-config

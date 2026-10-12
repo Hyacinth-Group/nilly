@@ -1,6 +1,8 @@
-# discord-bot
+# Nibby
 
 An AI character you add to your Discord, Telegram, Slack or Matrix group chat that remembers people, has moods and a sleep schedule, joins in on its own, and runs on your computer.
+
+Formerly `discord-bot`.
 
 - Set it up and control it in your browser.
 - See and correct what it remembers about people.
@@ -38,7 +40,7 @@ Install and open [Docker](https://docs.docker.com/get-started/get-docker/) first
 **1. Create a folder and download the launch file.**
 
 ```sh
-mkdir mybot && cd mybot && curl -O https://raw.githubusercontent.com/krxi/discord-bot/main/docker-compose.yml
+mkdir mybot && cd mybot && curl -O https://raw.githubusercontent.com/krxi/nibby/main/docker-compose.yml
 ```
 
 **2. Start it.**
@@ -59,11 +61,11 @@ After setup, return to **http://localhost:8787** to view connections, edit memor
 
 Docker keeps settings and memory in persistent volumes; there is no host `.env` to prepare. [Private backups and advanced host-file editing](docs/setup-guide.md#where-your-memories-live) are covered in the guide.
 
-Terminal alternative: `discord-bot init` still provides [CLI setup](docs/setup-guide.md#headless-cli-setup).
+Terminal alternative: `nibby init` still provides [CLI setup](docs/setup-guide.md#headless-cli-setup).
 
 Without Docker: download a [release binary](docs/setup-guide.md#download-a-release), start it from a terminal, and open its setup link; Rust is not needed.
 
-**Already running v1 or an older Compose file?** [Read the upgrade instructions first](docs/setup-guide.md#existing-compose-installations). Memory migrates automatically with a backup; Docker now keeps settings in the private `discord-bot-config` volume, not a host `.env` file. [Back up both volumes](docs/setup-guide.md#back-up-the-memory).
+**Already running v1 or an older Compose file?** [Read the upgrade instructions first](docs/setup-guide.md#existing-compose-installations). Memory migrates automatically with a backup; Docker now keeps settings in the private `nibby-config` volume, not a host `.env` file. Existing volumes must be copied to the new names before starting. [Back up both volumes](docs/setup-guide.md#back-up-the-memory).
 
 ## Choose your chat app
 

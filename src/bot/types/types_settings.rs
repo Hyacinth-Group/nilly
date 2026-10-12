@@ -166,7 +166,7 @@ mod owner_identity_tests {
 
     #[test]
     fn owner_reads_active_snapshot_not_later_process_environment() {
-        const CASE: &str = "DB_CORE_OWNER_SNAPSHOT_TEST";
+        const CASE: &str = "NIBBY_OWNER_SNAPSHOT_TEST";
         if let Ok(case) = std::env::var(CASE) {
             let directory = tempfile::tempdir().unwrap();
             let path = directory.path().join(".env");

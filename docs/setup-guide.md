@@ -20,7 +20,7 @@ This guide starts with a **new installation**. Already running an older version?
 Open a terminal and paste:
 
 ```sh
-mkdir mybot && cd mybot && curl -O https://raw.githubusercontent.com/krxi/discord-bot/main/docker-compose.yml
+mkdir mybot && cd mybot && curl -O https://raw.githubusercontent.com/krxi/nibby/main/docker-compose.yml
 ```
 
 This creates your private working folder and downloads the file that tells Docker how to run the package. Stay in this folder for the remaining Docker commands.
@@ -30,7 +30,7 @@ In Windows PowerShell, use these separate lines (also works in older PowerShell)
 ```powershell
 mkdir mybot
 cd mybot
-curl.exe -O https://raw.githubusercontent.com/krxi/discord-bot/main/docker-compose.yml
+curl.exe -O https://raw.githubusercontent.com/krxi/nibby/main/docker-compose.yml
 ```
 
 Docker keeps settings and memory in its own persistent volumes; **do not create a host `config` folder or `.env` file** for a new installation. No Linux config-permission preparation is needed. If Docker itself reports `permission denied` on Linux, follow [Docker's Linux post-installation instructions](https://docs.docker.com/engine/install/linux-postinstall/).
@@ -68,7 +68,7 @@ The browser walks you through five steps:
 
 After saving your administrator password, ownership survives interrupted setup: log in to resume. Unsaved credential drafts expire 15 minutes after creation or the latest successful credential test; logout and process restart discard them.
 
-Docker saves tokens and model keys in **`/data/config/.env` inside the `discord-bot-config` volume**, not in your working folder. They are plaintext because the bot needs to use them. Never upload them, put them in Git or include them in a screenshot. Browser saves use private file permissions, not encryption; protect Docker access and [back up both volumes privately](#back-up-the-memory). Rotate leaked tokens/keys with their issuer.
+Docker saves tokens and model keys in **`/data/config/.env` inside the `nibby-config` volume**, not in your working folder. They are plaintext because the bot needs to use them. Never upload them, put them in Git or include them in a screenshot. Browser saves use private file permissions, not encryption; protect Docker access and [back up both volumes privately](#back-up-the-memory). Rotate leaked tokens/keys with their issuer.
 
 ### Model keys and cost
 
@@ -251,7 +251,7 @@ Credential authentication alone does not prove a room is readable. If commands w
 
 The panel normally remains available when chat credentials are missing/invalid; finish setup or repair **Settings**, save and restart. A partial Slack token pair is rejected; a build without Matrix explicitly rejects its settings. Other platforms alone do not need a Discord token.
 
-For Docker, settings are `/data/config/.env` inside the **`discord-bot-config`** volume; there is no default host `config/.env`. Check the volume mount and local save errors. External environment values, including old `env_file` injection, override the file and appear read-only in Settings. A file save cannot override them. [Migrate old configuration](#migrating-an-existing-docker-env) rather than injecting browser-editable fields.
+For Docker, settings are `/data/config/.env` inside the **`nibby-config`** volume; there is no default host `config/.env`. Check the volume mount and local save errors. External environment values, including old `env_file` injection, override the file and appear read-only in Settings. A file save cannot override them. [Migrate old configuration](#migrating-an-existing-docker-env) rather than injecting browser-editable fields.
 
 A bind, configuration-file or database failure can prevent the panel itself opening: inspect local logs. With `PANEL_ENABLED=off`, startup requires valid chat/model settings. For binaries, keep `.env` in the usual launch folder, not `.env.txt`; `init` refuses an existing file unless `--force` is explicit. Back up before overwriting.
 
@@ -281,7 +281,7 @@ docker compose run --rm bot panel reset-password
 docker compose up -d
 ```
 
-Save the random replacement password printed **once**, then log in. Recovery preserves the administrator account and memory, and invalidates old sessions. For a binary, stop it, run `./discord-bot panel reset-password` (Windows: `.\discord-bot.exe panel reset-password`) in the same data folder, then restart.
+Save the random replacement password printed **once**, then log in. Recovery preserves the administrator account and memory, and invalidates old sessions. For a binary, stop it, run `./nibby panel reset-password` (Windows: `.\nibby.exe panel reset-password`) in the same data folder, then restart.
 
 The password's Argon2id hash lives in the **same `durum/hafiza.redb` database** as memory. Database errors fail closed, not into anonymous setup or empty replacement memory. This hash does not encrypt the plaintext keys in your configuration. State backups include the administrator account: **never delete memory as password recovery**.
 
@@ -291,10 +291,10 @@ Docker uses two persistent named volumes:
 
 | Volume | Container path | Private contents |
 |---|---|---|
-| `discord-bot-data` | `/data/durum` | Memory, retained versions/archives, platform session tokens/sync state, and the panel administrator account/password hash |
-| `discord-bot-config` | `/data/config` | `.env` with plaintext chat/model credentials and access/settings choices |
+| `nibby-data` | `/data/durum` | Memory, retained versions/archives, platform session tokens/sync state, and the panel administrator account/password hash |
+| `nibby-config` | `/data/config` | `.env` with plaintext chat/model credentials and access/settings choices |
 
-The data volume keeps Compose key `durum`; the config key and explicit name are both `discord-bot-config`. Fresh config volumes inherit the image directory's ownership for the bot account, UID/GID `10001`. Panel browser sessions and unsaved drafts are in memory and are lost on restart; they are not platform session files or backup contents.
+The data volume keeps Compose key `durum`; the config key and explicit name are both `nibby-config`. Fresh config volumes inherit the image directory's ownership for the bot account, UID/GID `10001`. Panel browser sessions and unsaved drafts are in memory and are lost on restart; they are not platform session files or backup contents.
 
 Stopping/replacing containers or `docker compose down` keeps **both** volumes. **Do not use `docker compose down -v`** unless you intend to delete both settings and saved data. Multiple installations using this Compose file share these names; deliberately choose distinct names for **both** volumes for separate bots. Old project-prefixed data volumes and host config files are **not** automatically copied. [Existing Compose installations](#existing-compose-installations) explains migration.
 
@@ -306,12 +306,12 @@ Back up **both volumes as a matching pair** while the bot is stopped. From `mybo
 
 ```sh
 docker compose stop bot
-docker volume inspect discord-bot-data
-docker volume inspect discord-bot-config
-docker run --rm -v discord-bot-data:/data:ro ubuntu test -s /data/hafiza.redb
-docker run --rm -v discord-bot-config:/config:ro ubuntu test -s /config/.env
-docker run --rm -v discord-bot-data:/data:ro -v "$PWD:/backup" ubuntu sh -c 'umask 077; test ! -e /backup/durum-backup.tar.gz && tar czf /backup/durum-backup.tar.gz -C /data .'
-docker run --rm -v discord-bot-config:/config:ro -v "$PWD:/backup" ubuntu sh -c 'umask 077; test ! -e /backup/config-backup.tar.gz && tar czf /backup/config-backup.tar.gz -C /config .'
+docker volume inspect nibby-data
+docker volume inspect nibby-config
+docker run --rm -v nibby-data:/data:ro ubuntu test -s /data/hafiza.redb
+docker run --rm -v nibby-config:/config:ro ubuntu test -s /config/.env
+docker run --rm -v nibby-data:/data:ro -v "$PWD:/backup" ubuntu sh -c 'umask 077; test ! -e /backup/durum-backup.tar.gz && tar czf /backup/durum-backup.tar.gz -C /data .'
+docker run --rm -v nibby-config:/config:ro -v "$PWD:/backup" ubuntu sh -c 'umask 077; test ! -e /backup/config-backup.tar.gz && tar czf /backup/config-backup.tar.gz -C /config .'
 docker compose up -d
 ```
 
@@ -329,12 +329,12 @@ Stop the bot and privately back up the destination's current contents first. **R
 
 ```sh
 docker compose stop bot
-docker volume create discord-bot-data
-docker volume create discord-bot-config
-docker volume inspect discord-bot-data
-docker volume inspect discord-bot-config
-docker run --rm -v discord-bot-data:/data -v discord-bot-config:/config -v "$PWD:/backup:ro" ubuntu sh -c 'test -z "$(find /data -mindepth 1 -print -quit)" && test -z "$(find /config -mindepth 1 -print -quit)" && test -s /backup/durum-backup.tar.gz && test -s /backup/config-backup.tar.gz'
-docker run --rm -v discord-bot-data:/data -v discord-bot-config:/config -v "$PWD:/backup:ro" ubuntu sh -c 'test -z "$(find /data -mindepth 1 -print -quit)" && test -z "$(find /config -mindepth 1 -print -quit)" && tar xzf /backup/durum-backup.tar.gz -C /data && tar xzf /backup/config-backup.tar.gz -C /config && test -s /data/hafiza.redb && test -s /config/.env && chown -R 10001:10001 /data /config && chmod 700 /config && chmod 600 /config/.env'
+docker volume create nibby-data
+docker volume create nibby-config
+docker volume inspect nibby-data
+docker volume inspect nibby-config
+docker run --rm -v nibby-data:/data -v nibby-config:/config -v "$PWD:/backup:ro" ubuntu sh -c 'test -z "$(find /data -mindepth 1 -print -quit)" && test -z "$(find /config -mindepth 1 -print -quit)" && test -s /backup/durum-backup.tar.gz && test -s /backup/config-backup.tar.gz'
+docker run --rm -v nibby-data:/data -v nibby-config:/config -v "$PWD:/backup:ro" ubuntu sh -c 'test -z "$(find /data -mindepth 1 -print -quit)" && test -z "$(find /config -mindepth 1 -print -quit)" && tar xzf /backup/durum-backup.tar.gz -C /data && tar xzf /backup/config-backup.tar.gz -C /config && test -s /data/hafiza.redb && test -s /config/.env && chown -R 10001:10001 /data /config && chmod 700 /config && chmod 600 /config/.env'
 docker compose up -d
 ```
 
@@ -367,14 +367,14 @@ The example source is the existing **`config/.env`**. The read-only `--mount` re
 ```sh
 docker compose stop bot
 docker run --rm --mount type=bind,src="$PWD/config",dst=/old-config,readonly -v "$PWD:/backup" ubuntu sh -c 'umask 077; test -s /old-config/.env && test ! -e /backup/config-before-volume.env && cp /old-config/.env /backup/config-before-volume.env && chmod 600 /backup/config-before-volume.env'
-docker volume create discord-bot-config
-docker volume inspect discord-bot-config
-docker run --rm --mount type=bind,src="$PWD/config",dst=/old-config,readonly -v discord-bot-config:/config ubuntu sh -c 'test -s /old-config/.env && test -z "$(find /config -mindepth 1 -print -quit)" && cp -p /old-config/.env /config/.env && chown -R 10001:10001 /config && chmod 700 /config && chmod 600 /config/.env'
+docker volume create nibby-config
+docker volume inspect nibby-config
+docker run --rm --mount type=bind,src="$PWD/config",dst=/old-config,readonly -v nibby-config:/config ubuntu sh -c 'test -s /old-config/.env && test -z "$(find /config -mindepth 1 -print -quit)" && cp -p /old-config/.env /config/.env && chown -R 10001:10001 /config && chmod 700 /config && chmod 600 /config/.env'
 ```
 
 For PowerShell, replace `"$PWD/config"` with `"${PWD}/config"` (or `"${PWD}"` for a root `.env`) and `"$PWD:/backup"` with `"${PWD}:/backup"`. Restrict access to the backup folder on Windows. If inspection fails, stop before the copy command; if the destination is nonempty, stop—it may belong to another installation. Use a different explicit config volume name and matching Compose mount rather than overwriting it.
 
-Only after the private backup and copy succeed, replace/download Compose using **`discord-bot-config:/data/config`**, explicit volume name **`discord-bot-config`**, and **`PANEL_CONFIG_PATH=/data/config/.env`**. Remove old **`env_file: .env`** injection for browser-editable fields; do not add a new one. Keep the source file/folder, **`config-before-volume.env`**, old Compose file and data backup privately for rollback. Finish any data-volume migration before `docker compose up -d`.
+Only after the private backup and copy succeed, replace/download Compose using **`nibby-config:/data/config`**, explicit volume name **`nibby-config`**, and **`PANEL_CONFIG_PATH=/data/config/.env`**. Remove old **`env_file: .env`** injection for browser-editable fields; do not add a new one. Keep the source file/folder, **`config-before-volume.env`**, old Compose file and data backup privately for rollback. Finish any data-volume migration before `docker compose up -d`.
 
 If you deliberately keep external environment injection, it wins over file values and those fields appear read-only in Settings. Saving in the browser cannot override them.
 
@@ -382,11 +382,11 @@ If you deliberately keep external environment injection, it wins over file value
 
 Only choose this route if you want to **hand-edit `.env` on the host**. Default browser setup and [CLI setup](#headless-cli-setup) do not need it. Stop the bot and [back up both volumes](#back-up-the-memory), leaving it stopped after the backup rather than running that recipe's final start line.
 
-Create a private host `config` folder (`mkdir config` on PowerShell; `mkdir -p config` on Mac/Linux). For an existing named-volume installation, inspect `discord-bot-config` first and stop on failure, then export privately without printing secrets:
+Create a private host `config` folder (`mkdir config` on PowerShell; `mkdir -p config` on Mac/Linux). For an existing named-volume installation, inspect `nibby-config` first and stop on failure, then export privately without printing secrets:
 
 ```sh
-docker volume inspect discord-bot-config
-docker run --rm -v discord-bot-config:/config:ro -v "$PWD/config:/host-config" ubuntu sh -c 'umask 077; test -s /config/.env && test ! -e /host-config/.env && cp -p /config/.env /host-config/.env && chown -R 10001:10001 /host-config && chmod 700 /host-config && chmod 600 /host-config/.env'
+docker volume inspect nibby-config
+docker run --rm -v nibby-config:/config:ro -v "$PWD/config:/host-config" ubuntu sh -c 'umask 077; test -s /config/.env && test ! -e /host-config/.env && cp -p /config/.env /host-config/.env && chown -R 10001:10001 /host-config && chmod 700 /host-config && chmod 600 /host-config/.env'
 ```
 
 On PowerShell use `"${PWD}/config:/host-config"`. For a new installation, leave the folder empty and let browser setup or CLI init create `.env`.
@@ -406,35 +406,88 @@ Skip the last two lines if `.env` does not exist yet. Docker Desktop users do no
 
 ### Existing Compose installations
 
-Changing a volume name does **not** move memory. Before adopting the new Compose file:
+The project was formerly `discord-bot`. Changing a volume name does **not** move memory or settings: the old fixed volumes `discord-bot-data` and `discord-bot-config`, and older project-prefixed volumes such as `mybot_durum` or `mybot_discord-bot-config`, are migration sources only. Current destinations are **`nibby-data`** and **`nibby-config`**. The Compose data key stays **`durum`**, and the container paths stay `/data/durum` and `/data/config`.
 
-1. Stop the service using the **old** file: `docker compose stop bot`.
-2. Find the old container ID with `docker compose ps -a`. Run `docker inspect --format '{{range .Mounts}}{{println .Destination .Name}}{{end}}' CONTAINER_ID` with that ID and read the `/data/durum` line. Do not guess its volume from the folder name. If there is no container/volume name, locate the original storage before continuing. Do not post full `docker inspect` or `docker compose config` output: it may expose credentials.
-3. [Copy the existing host `config/.env` or `.env` into the named config volume](#migrating-an-existing-docker-env) before removing the old mount/`env_file`. Keep the original and private backup. If already using `discord-bot-config`, inspect it and back it up rather than attempting the empty-destination copy.
-4. If the old data volume is already **`discord-bot-data`**, keep it: inspect it first and stop on failure; while stopped check the database and make its private state backup using the commands below with `discord-bot-data` substituted for `mybot_durum`. Then run `docker run --rm -v discord-bot-data:/data ubuntu chown -R 10001:10001 /data`. Update Compose only after config migration succeeds; no data-volume copy is needed.
-5. Otherwise, inspect/back up the **actual old volume** before creating the destination. **Run each line separately, continuing only after success.** The example uses `mybot_durum`; replace that with the name you found:
+Use the **old Compose file in its original folder** throughout copying; do not replace it or start the new image yet. Stop the old container with `docker compose stop bot`, then inspect its mounts without printing credentials:
 
 ```sh
-docker volume inspect mybot_durum
-docker run --rm -v mybot_durum:/data:ro ubuntu test -s /data/hafiza.redb
-docker run --rm -v mybot_durum:/data:ro -v "$PWD:/backup" ubuntu sh -c 'umask 077; test ! -e /backup/durum-backup.tar.gz && tar czf /backup/durum-backup.tar.gz -C /data .'
-docker volume create discord-bot-data
+docker compose ps -a
+docker compose ps -a -q bot | xargs docker inspect --format '{{range .Mounts}}{{println .Destination .Type .Name .Source}}{{end}}'
 ```
 
-If inspection, the database check or backup fails, stop and locate the data. Use a new backup filename if one already exists; keep every earlier backup. For PowerShell use `"${PWD}:/backup"` for the backup mount and restrict Windows folder access.
+Locate `/data/durum` and `/data/config`. The recipes below discover the actual named volumes from those mounts, so they handle both `discord-bot-data`/`discord-bot-config` and older project-prefixed names without guessing. If the container is missing, locate the original storage before continuing. If either destination is already populated, **stop**: it may belong to another installation. Choose distinct destination names and update the recipes and new Compose mounts/explicit names instead of overwriting or deleting anything.
 
-6. Update/download Compose with both fixed named volumes. If copying from an older data volume, restore **only the data archive** into an empty `discord-bot-data`; the config volume was populated separately in step 3:
+#### Copy the old data volume
+
+This block is for a configured installation with a nonempty `hafiza.redb`. Paste it into a **POSIX shell** (Terminal on Mac/Linux, or WSL on Windows). It stops on any failure. A source inspection precedes every source mount, so a misspelled name cannot silently create an empty source. It makes a private stopped-state archive, guards the empty destination, copies **all** files (including hidden files, archives and platform sessions), compares their contents and sets bot ownership:
 
 ```sh
-docker volume inspect discord-bot-data
-docker run --rm -v discord-bot-data:/data -v "$PWD:/backup:ro" ubuntu sh -c 'test -z "$(find /data -mindepth 1 -print -quit)" && test -s /backup/durum-backup.tar.gz && tar xzf /backup/durum-backup.tar.gz -C /data && test -s /data/hafiza.redb && chown -R 10001:10001 /data'
+(
+  set -eu
+  docker compose stop bot
+  old_container="$(docker compose ps -a -q bot)"
+  test -n "$old_container"
+  old_data="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data/durum"}}{{.Name}}{{end}}{{end}}' "$old_container")"
+  test -n "$old_data"
+  test "$old_data" != nibby-data
+  docker volume inspect "$old_data"
+  docker run --rm -v "$old_data:/from:ro" -v "$PWD:/backup" alpine sh -ec 'umask 077; test -s /from/hafiza.redb; test ! -e /backup/data-before-nibby.tar.gz; tar czf /backup/data-before-nibby.tar.gz -C /from .'
+  docker volume create nibby-data
+  docker volume inspect nibby-data
+  docker run --rm -v "$old_data:/from:ro" -v nibby-data:/to alpine sh -ec 'test -s /from/hafiza.redb; test -z "$(find /to -mindepth 1 -print -quit)"; cp -a /from/. /to/; diff -rq /from /to; chown -R 10001:10001 /to; test -s /to/hafiza.redb'
+  docker run --rm --user 10001:10001 -v nibby-data:/to alpine sh -ec 'test -r /to/hafiza.redb; test -w /to/hafiza.redb; test -w /to'
+)
 ```
 
-For PowerShell use `"${PWD}:/backup:ro"`. If inspect, the empty-volume guard, extraction or ownership fails, **stop without starting**. If the destination contains data, it may belong to another bot: choose a different named volume and update Compose instead of overwriting it. Once **both** configuration and data are ready, start with `docker compose up -d`.
+If a backup filename already exists, choose a new private filename; do not overwrite it. A failed copy may leave a partial destination: retain it for diagnosis and use a different empty volume for a retry. If the mounted data volume is **already `nibby-data`**, this block deliberately stops before copying onto itself; instead [back up the current volumes](#back-up-the-memory), **omit that recipe's final `up -d`**, leave the bot stopped and verify the existing data.
 
-7. Check the panel's **Memory** page and platform status. **Keep the old data volume, original settings, old Compose file and private backups.** These steps do not delete the originals. Never use `docker compose down -v` or `docker volume prune` as part of the upgrade.
+#### Copy the old config volume, or migrate a host `.env`
 
-This is a migration procedure, not a claim that a live migration was tested.
+If `/data/config` is a named volume, run this second POSIX-shell block **with the old Compose file still in place**. It handles `discord-bot-config` and actual project-prefixed config volumes identically, and never prints secret contents:
+
+```sh
+(
+  set -eu
+  docker compose stop bot
+  old_container="$(docker compose ps -a -q bot)"
+  test -n "$old_container"
+  old_config="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data/config"}}{{.Name}}{{end}}{{end}}' "$old_container")"
+  test -n "$old_config"
+  test "$old_config" != nibby-config
+  docker volume inspect "$old_config"
+  docker run --rm -v "$old_config:/from:ro" -v "$PWD:/backup" alpine sh -ec 'umask 077; test -s /from/.env; test ! -e /backup/config-before-nibby.tar.gz; tar czf /backup/config-before-nibby.tar.gz -C /from .'
+  docker volume create nibby-config
+  docker volume inspect nibby-config
+  docker run --rm -v "$old_config:/from:ro" -v nibby-config:/to alpine sh -ec 'test -s /from/.env; test -z "$(find /to -mindepth 1 -print -quit)"; cp -a /from/. /to/; diff -rq /from /to; chown -R 10001:10001 /to; chmod 700 /to; chmod 600 /to/.env; test -s /to/.env'
+  docker run --rm --user 10001:10001 -v nibby-config:/to alpine sh -ec 'test -r /to/.env; test -w /to/.env; test -w /to; test "$(stat -c %a /to)" = 700; test "$(stat -c %a /to/.env)" = 600'
+)
+```
+
+If `/data/config` is a **host bind**, or the old file uses **`env_file: .env`** without that mount, use [host `.env` migration](#migrating-an-existing-docker-env) instead of this config-volume block. Keep the data copy from the previous step. If the config volume is already `nibby-config`, back it up and verify it instead of copying onto itself. An incomplete setup may have no `.env` or database; these guards intentionally stop rather than treating missing files as permission to discard storage.
+
+#### Start and verify Nibby
+
+Only after **both** copies and ownership/access checks succeed, preserve the old Compose file privately and download the new launch file:
+
+```sh
+(
+  set -eu
+  docker volume inspect nibby-data
+  docker volume inspect nibby-config
+  docker run --rm --user 10001:10001 -v nibby-data:/data -v nibby-config:/config alpine sh -ec 'test -s /data/hafiza.redb; test -r /data/hafiza.redb; test -w /data/hafiza.redb; test -w /data; test -s /config/.env; test -r /config/.env; test -w /config/.env; test -w /config; test "$(stat -c %a /config)" = 700; test "$(stat -c %a /config/.env)" = 600'
+  test ! -e docker-compose.before-nibby.yml
+  (umask 077; cp -p docker-compose.yml docker-compose.before-nibby.yml; chmod 600 docker-compose.before-nibby.yml)
+  curl --fail -o docker-compose.yml https://raw.githubusercontent.com/krxi/nibby/main/docker-compose.yml
+  docker compose up -d
+  docker compose logs bot
+)
+```
+
+For an old launch file with a different filename, preserve that actual file before downloading the default `docker-compose.yml`. The new file must mount `durum:/data/durum` with explicit volume name `nibby-data`, and `nibby-config:/data/config` with explicit name `nibby-config`; retain `PANEL_CONFIG_PATH=/data/config/.env` and remove old `env_file` injection. Use the same explicit destination names you chose if they differ from the defaults. On Windows, keep migration archives and old launch/settings files in a folder restricted via **Properties → Security**; Unix `umask` does not replace Windows access controls.
+
+Sign in to the panel, inspect **Memory**, confirm existing settings/connections and use the platform's [status check](#verify-the-connection). Check local startup logs for migration failures; v1 identity conversion is [a separate automatic migration](#upgrading-from-v1-to-v2). Keep the original data/config volumes, host settings, old Compose file, old image version and both private backups for rollback. This procedure does not delete any originals and is not a claim that a live migration was tested.
+
+**Never run `docker compose down -v` before verifying the copied data, settings and working connections. Do not use `docker volume prune` during migration. Keep the old volumes and backups even after verification until rollback is no longer needed.**
 
 ## Privacy
 
@@ -457,16 +510,16 @@ All routes use the same browser setup and platform credentials. Run from a priva
 
 ### Download a release
 
-No Docker or Rust is needed, but a **terminal is required**. Download the matching archive from [GitHub Releases](https://github.com/krxi/discord-bot/releases): Linux x86_64 or arm64, macOS Apple Silicon, or Windows. Extract it into a private folder, open a terminal there and run:
+No Docker or Rust is needed, but a **terminal is required**. Download the matching archive from [GitHub Releases](https://github.com/krxi/nibby/releases): Linux x86_64 or arm64, macOS Apple Silicon, or Windows. Extract it into a private folder, open a terminal there and run:
 
 ```sh
-./discord-bot
+./nibby
 ```
 
-On Mac/Linux, use `chmod +x discord-bot` first if needed. On Windows PowerShell:
+On Mac/Linux, use `chmod +x nibby` first if needed. On Windows PowerShell:
 
 ```powershell
-.\discord-bot.exe
+.\nibby.exe
 ```
 
 Keep the terminal open. Open the printed one-use link, follow [browser setup](#browser-setup), then [verify your platform](#verify-the-connection). Configuration is `.env` in this launch folder; state is `durum/`. An existing valid configuration starts its configured connections alongside the panel.
@@ -476,8 +529,8 @@ Keep the terminal open. Open the printed one-use link, follow [browser setup](#b
 For people with Git and **Rust 1.96 or newer** installed:
 
 ```sh
-git clone https://github.com/krxi/discord-bot.git
-cd discord-bot
+git clone https://github.com/krxi/nibby.git
+cd nibby
 cargo run --release
 ```
 
@@ -485,7 +538,7 @@ Keep the terminal open, follow the printed browser link and [browser setup](#bro
 
 ### Headless CLI setup
 
-Use this if you cannot or do not want to use browser administration. With a release binary run `discord-bot init` (Windows: `.\discord-bot.exe init`); from source run `cargo run --release -- init`.
+Use this if you cannot or do not want to use browser administration. With a release binary run `nibby init` (Windows: `.\nibby.exe init`); from source run `cargo run --release -- init`.
 
 The CLI asks for a platform (Enter defaults to Discord), its credentials, provider/key/model, language, owner and UTC offset. Telegram, Slack and Matrix also ask for explicit room approval. Slack requires both tokens; Matrix asks for a token or password and a **raw full owner ID**, which the CLI encodes into `OWNER_KEY`. Discord asks for the legacy numeric owner ID. Interactive secrets are hidden; **piped input is not hidden**.
 
@@ -506,7 +559,7 @@ For Docker, download Compose as in [Docker setup](#start-with-docker) and comple
 docker compose run --rm -it --workdir /data/config bot init
 ```
 
-CLI init hardcodes **`.env` in its working directory**; it does **not** use `PANEL_CONFIG_PATH` to choose its output. The explicit `--workdir /data/config` writes `/data/config/.env` **inside `discord-bot-config`** as container UID `10001`, not `config/.env` on the host.
+CLI init hardcodes **`.env` in its working directory**; it does **not** use `PANEL_CONFIG_PATH` to choose its output. The explicit `--workdir /data/config` writes `/data/config/.env` **inside `nibby-config`** as container UID `10001`, not `config/.env` on the host.
 
 Before starting, add the no-panel setting inside that same volume. For a **fresh CLI-created file**, run this once:
 

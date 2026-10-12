@@ -1040,8 +1040,7 @@ pub(crate) mod test {
     static INIT: std::sync::Once = std::sync::Once::new();
     pub(crate) fn ensure_test_db() {
         INIT.call_once(|| {
-            let path =
-                std::env::temp_dir().join(format!("discord-bot-test-{}.redb", std::process::id()));
+            let path = std::env::temp_dir().join(format!("nibby-test-{}.redb", std::process::id()));
             let _ = fs::remove_file(&path);
             init_result(&path).expect("initialize isolated test memory database");
         });

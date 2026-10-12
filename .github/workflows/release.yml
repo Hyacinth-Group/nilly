@@ -9,7 +9,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE: ghcr.io/krxi/discord-bot
+  IMAGE: ghcr.io/krxi/nibby
 
 jobs:
   binaries:
@@ -38,9 +38,9 @@ jobs:
       - name: Package
         shell: bash
         run: |
-          name=discord-bot-${GITHUB_REF_NAME}-${{ matrix.target }}
+          name=nibby-${GITHUB_REF_NAME}-${{ matrix.target }}
           mkdir "$name"
-          cp "target/release/discord-bot${{ matrix.ext }}" .env.example README.md LICENSE "$name/"
+          cp "target/release/nibby${{ matrix.ext }}" .env.example README.md LICENSE "$name/"
           if [[ "${{ runner.os }}" == "Windows" ]]; then
             7z a "$name.zip" "$name"
           else
@@ -50,8 +50,8 @@ jobs:
         with:
           name: bin-${{ matrix.target }}
           path: |
-            discord-bot-*.tar.gz
-            discord-bot-*.zip
+            nibby-*.tar.gz
+            nibby-*.zip
           if-no-files-found: error
 
   publish:
@@ -65,8 +65,8 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            discord-bot-*.tar.gz
-            discord-bot-*.zip
+            nibby-*.tar.gz
+            nibby-*.zip
           generate_release_notes: true
 
   image:

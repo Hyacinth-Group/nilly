@@ -1,6 +1,8 @@
-# discord-bot
+# Nibby
 
 Discord, Telegram, Slack veya Matrix grup sohbetinize eklediğiniz; insanları hatırlayan, ruh halleri ve uyku düzeni olan, kendiliğinden sohbete katılan ve sizin bilgisayarınızda çalışan bir yapay zeka karakteri.
+
+Eski adı `discord-bot`.
 
 - Tarayıcınızdan kurun ve yönetin.
 - İnsanlar hakkında hatırladıklarını görün ve düzeltin.
@@ -38,7 +40,7 @@ Discord, Telegram, Slack veya Matrix grup sohbetinize eklediğiniz; insanları h
 **1. Bir klasör oluşturun ve başlatma dosyasını indirin.**
 
 ```sh
-mkdir mybot && cd mybot && curl -O https://raw.githubusercontent.com/krxi/discord-bot/main/docker-compose.yml
+mkdir mybot && cd mybot && curl -O https://raw.githubusercontent.com/krxi/nibby/main/docker-compose.yml
 ```
 
 **2. Başlatın.**
@@ -59,11 +61,11 @@ Kurulumdan sonra **http://localhost:8787** adresinde bağlantıları görebilir,
 
 Docker ayarları ve hafızayı kalıcı birimlerde tutar; bilgisayarınızda `.env` hazırlamanız gerekmez. [Gizli yedekler ve dosyayı elle düzenleme seçeneği](docs/setup-guide.md#where-your-memories-live) rehberde açıklanır.
 
-Terminal alternatifi: `discord-bot init` ile [komut satırından kurulum](docs/setup-guide.md#headless-cli-setup) hâlâ kullanılabilir.
+Terminal alternatifi: `nibby init` ile [komut satırından kurulum](docs/setup-guide.md#headless-cli-setup) hâlâ kullanılabilir.
 
 Docker olmadan: [hazır binary](docs/setup-guide.md#download-a-release) indirin, terminalden başlatın ve kurulum bağlantısını açın; Rust gerekmez.
 
-**v1 veya eski bir Compose dosyası zaten çalışıyor mu?** Önce [yükseltme adımlarını okuyun](docs/setup-guide.md#existing-compose-installations). Hafıza yedek alınarak otomatik taşınır; Docker artık ayarları bilgisayarınızdaki `.env` dosyasında değil, özel `discord-bot-config` biriminde tutar. [Her iki birimi yedekleyin](docs/setup-guide.md#back-up-the-memory).
+**v1 veya eski bir Compose dosyası zaten çalışıyor mu?** Önce [yükseltme adımlarını okuyun](docs/setup-guide.md#existing-compose-installations). Hafıza yedek alınarak otomatik taşınır; Docker artık ayarları bilgisayarınızdaki `.env` dosyasında değil, özel `nibby-config` biriminde tutar. Başlatmadan önce mevcut birimlerin yeni adlara kopyalanması gerekir. [Her iki birimi yedekleyin](docs/setup-guide.md#back-up-the-memory).
 
 ## Sohbet uygulamanızı seçin
 

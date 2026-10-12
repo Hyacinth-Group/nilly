@@ -10,7 +10,7 @@ pub const JS: &str = include_str!("assets/panel.js");
 pub const HTMX_JS: &str = include_str!("assets/htmx-2.0.4.min.js");
 
 /// One product-name source for the shell, page titles, and future project renames.
-pub const PROJECT_NAME: &str = "discord-bot";
+pub const PROJECT_NAME: &str = "Nibby";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Language {

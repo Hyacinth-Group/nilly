@@ -6,7 +6,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 // Add Reactions and Change Nickname.
 const INVITE_PERMISSIONS: u64 = 67226688;
 const FREE_OPENROUTER_MODEL: &str = "google/gemma-4-31b-it:free";
-const EXISTING_ENV_MESSAGE: &str = ".env already exists. Your existing settings were not changed. Open .env to edit them, or rerun discord-bot init --force to replace them.";
+const EXISTING_ENV_MESSAGE: &str = ".env already exists. Your existing settings were not changed. Open .env to edit them, or rerun nibby init --force to replace them.";
 
 #[derive(Debug, PartialEq, Eq)]
 enum SetupTarget {
@@ -428,7 +428,7 @@ fn next_steps(app_id: Option<u64>) -> String {
     };
     format!(
         "1. Enable Message Content Intent and Server Members Intent in Developer Portal -> Bot -> Privileged Gateway Intents. Leave Presence Intent off.\n\
-         2. Start the bot: discord-bot (binary), cargo run --release (source), or docker compose up -d (Docker).\n\
+         2. Start the bot: nibby (binary), cargo run --release (source), or docker compose up -d (Docker).\n\
          3. Invite the bot to your server by opening this link:\n{invite}\n\
          4. In Discord, run /status to confirm the bot responds (/durum if you selected Turkish)."
     )
@@ -971,7 +971,7 @@ mod test {
     fn existing_env_message_explains_preservation_editing_and_replacement() {
         assert!(EXISTING_ENV_MESSAGE.contains("Your existing settings were not changed"));
         assert!(EXISTING_ENV_MESSAGE.contains("Open .env to edit them"));
-        assert!(EXISTING_ENV_MESSAGE.contains("discord-bot init --force to replace them"));
+        assert!(EXISTING_ENV_MESSAGE.contains("nibby init --force to replace them"));
     }
 
     #[test]

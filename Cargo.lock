@@ -824,35 +824,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "discord-bot"
-version = "2.0.0"
-dependencies = [
- "argon2",
- "askama",
- "axum",
- "base64 0.22.1",
- "cookie",
- "dotenvy",
- "futures-util",
- "log",
- "matrix-sdk",
- "parking_lot",
- "rand 0.8.8",
- "redb",
- "reqwest 0.12.28",
- "rpassword",
- "serde",
- "serde_json",
- "serde_yaml",
- "serenity",
- "sha2 0.10.9",
- "tempfile",
- "tokio",
- "tokio-tungstenite 0.30.0",
- "tower",
-]
-
-[[package]]
 name = "displaydoc"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2054,6 +2025,35 @@ name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
+
+[[package]]
+name = "nibby"
+version = "2.0.0"
+dependencies = [
+ "argon2",
+ "askama",
+ "axum",
+ "base64 0.22.1",
+ "cookie",
+ "dotenvy",
+ "futures-util",
+ "log",
+ "matrix-sdk",
+ "parking_lot",
+ "rand 0.8.8",
+ "redb",
+ "reqwest 0.12.28",
+ "rpassword",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "serenity",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
+ "tower",
+]
 
 [[package]]
 name = "nu-ansi-term"

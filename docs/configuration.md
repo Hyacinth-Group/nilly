@@ -1,8 +1,8 @@
 # Configuration
 
-For normal browser setup, [start with Docker](setup-guide.md#start-with-docker), open the printed `http://localhost:8787/setup#token=...` link and follow [the five browser steps](setup-guide.md#browser-setup). The panel starts before chat credentials are required. The setup token expires after **15 minutes** and is consumed on claim, before password creation. Set a private panel administrator password of at least **12 characters**, separate from platform tokens and bot-owner identity. If the token/session is lost before saving that password, restart for a new link; once saved, log in to resume. `discord-bot init` remains the [headless CLI path](setup-guide.md#headless-cli-setup), with interactive secrets hidden and no live credential test. [`.env.example`](../.env.example) is the advanced field reference.
+For normal browser setup, [start with Docker](setup-guide.md#start-with-docker), open the printed `http://localhost:8787/setup#token=...` link and follow [the five browser steps](setup-guide.md#browser-setup). The panel starts before chat credentials are required. The setup token expires after **15 minutes** and is consumed on claim, before password creation. Set a private panel administrator password of at least **12 characters**, separate from platform tokens and bot-owner identity. If the token/session is lost before saving that password, restart for a new link; once saved, log in to resume. `nibby init` remains the [headless CLI path](setup-guide.md#headless-cli-setup), with interactive secrets hidden and no live credential test. [`.env.example`](../.env.example) is the advanced field reference.
 
-Restart after saving Settings or editing environment settings; first browser setup starts the runtime without restarting. Treat `.env` (Compose: **`/data/config/.env` inside `discord-bot-config`**) as a plaintext password file. Typed saves use mode `600` on Unix, not encryption; protect Docker access and private backups too. [Verify the actual connection](setup-guide.md#verify-the-connection) after starting: authenticated credentials are not evidence of live room health or successful model replies.
+Restart after saving Settings or editing environment settings; first browser setup starts the runtime without restarting. Treat `.env` (Compose: **`/data/config/.env` inside `nibby-config`**) as a plaintext password file. Typed saves use mode `600` on Unix, not encryption; protect Docker access and private backups too. [Verify the actual connection](setup-guide.md#verify-the-connection) after starting: authenticated credentials are not evidence of live room health or successful model replies.
 
 | Variable | Required | Purpose |
 |---|---|---|
@@ -34,7 +34,7 @@ Restart after saving Settings or editing environment settings; first browser set
 | `PANEL_CONFIG_PATH` | no | panel/runtime editable dotenv path, default `.env`; Compose sets `/data/config/.env`; CLI `init` instead writes `.env` in its working directory |
 | `PANEL_PUBLIC_URL` | no | explicit public HTTPS origin when using a correctly configured reverse proxy |
 
-Settings uses typed validation and atomic file replacement, preserving unrelated settings/comments. Token/key fields are write-only: blank keeps the saved value; use the explicit clear control to remove it. External process environment values take precedence over file values and appear read-only. Default Compose mounts the named **directory volume** `discord-bot-config:/data/config` and sets `PANEL_CONFIG_PATH=/data/config/.env`, with no `env_file` injection. A fresh volume inherits the image directory's ownership for the bot account (UID/GID `10001`); no host config folder is needed. A single-file mount cannot support atomic replacement. Follow [old configuration migration](setup-guide.md#migrating-an-existing-docker-env) before changing an existing installation; [host-file editing](setup-guide.md#advanced-host-folder-for-settings) is an optional advanced route. Docker CLI init needs [explicit `--workdir /data/config`](setup-guide.md#headless-cli-setup), not just `PANEL_CONFIG_PATH`. First setup starts the runtime without a process restart; saving later Settings/platform additions requires a restart (`docker compose restart bot`). Do not expose port 8787 publicly; use an [SSH tunnel](setup-guide.md#accessing-a-remote-server). [Back up both named volumes](setup-guide.md#back-up-the-memory). The fixed `discord-bot-data` volume requires explicit [old-volume migration](setup-guide.md#existing-compose-installations), not just a Compose name change. [Database identity conversion](setup-guide.md#upgrading-from-v1-to-v2) is a separate automatic migration.
+Settings uses typed validation and atomic file replacement, preserving unrelated settings/comments. Token/key fields are write-only: blank keeps the saved value; use the explicit clear control to remove it. External process environment values take precedence over file values and appear read-only. Default Compose mounts the named **directory volume** `nibby-config:/data/config` and sets `PANEL_CONFIG_PATH=/data/config/.env`, with no `env_file` injection. A fresh volume inherits the image directory's ownership for the bot account (UID/GID `10001`); no host config folder is needed. A single-file mount cannot support atomic replacement. Follow [old configuration migration](setup-guide.md#migrating-an-existing-docker-env) before changing an existing installation; [host-file editing](setup-guide.md#advanced-host-folder-for-settings) is an optional advanced route. Docker CLI init needs [explicit `--workdir /data/config`](setup-guide.md#headless-cli-setup), not just `PANEL_CONFIG_PATH`. First setup starts the runtime without a process restart; saving later Settings/platform additions requires a restart (`docker compose restart bot`). Do not expose port 8787 publicly; use an [SSH tunnel](setup-guide.md#accessing-a-remote-server). [Back up both named volumes](setup-guide.md#back-up-the-memory). The fixed `nibby-data` volume requires explicit [old-volume migration](setup-guide.md#existing-compose-installations), not just a Compose name change. [Database identity conversion](setup-guide.md#upgrading-from-v1-to-v2) is a separate automatic migration.
 
 Separate collapsed Settings test cards select Discord, Telegram, Slack or Matrix explicitly, followed by the provider test. They test only the selected platform's required credentials; supplied nonblank fields are used without saving, while blank fields use saved effective values. Environment-managed fields cannot be replaced by a probe. You can test a later platform addition before saving/restarting without changing wizard drafts.
 
@@ -132,7 +132,7 @@ For a separate credential-free startup/authentication-failure smoke with an
 already-built release binary, isolate it from any real `.env` or saved memory:
 
 ```sh
-bot="$PWD/target/release/discord-bot"
+bot="$PWD/target/release/nibby"
 scratch="$(mktemp -d)"
 (cd "$scratch" && env -i HOME="$HOME" PATH="$PATH" PANEL_ENABLED=off TELEGRAM_TOKEN=123:fake OPENROUTER_KEY=x "$bot")
 ```
@@ -159,7 +159,7 @@ and [privacy mode](https://core.telegram.org/bots/features#privacy-mode).
 
 ## Slack and simultaneous platforms
 
-Run `discord-bot init` and choose `slack` for terminal setup; the browser wizard
+Run `nibby init` and choose `slack` for terminal setup; the browser wizard
 also supports Slack. CLI prompts hide both tokens in an interactive terminal;
 piped input is not hidden, and CLI init performs no live authentication. The
 browser wizard checks `auth.test` with the bot token and `apps.connections.open`
@@ -349,7 +349,7 @@ Imports the legacy Markdown tree into redb without moving or deleting the source
 Back up the entire stopped state directory/volume and private configuration
 before replacing the executable/image. Docker's old project-prefixed volume
 and `env_file` configuration require [manual Compose migration](setup-guide.md#existing-compose-installations).
-The default config path is `/data/config/.env` inside the `discord-bot-config`
+The default config path is `/data/config/.env` inside the `nibby-config`
 named volume, not a host bind or `env_file` injection. Copy an older host
 `./config/.env` or `.env` while stopped, retaining a private backup; external
 environment values would remain read-only and override browser saves.

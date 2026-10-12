@@ -2355,7 +2355,7 @@ async fn login_explains_existing_ownership_and_nonsecret_settings_have_no_secret
     .unwrap();
     assert!(html.contains("Enter the administrator password you saved during setup"));
     assert!(!html.contains("Choose a unique admin password"));
-    assert!(html.contains("discord-bot panel reset-password"));
+    assert!(html.contains("nibby panel reset-password"));
     let response = router
         .clone()
         .oneshot(request("GET", "/settings", Some(&owner.token), ""))

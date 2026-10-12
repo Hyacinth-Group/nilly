@@ -1,6 +1,6 @@
 // Lightweight logging: `log` macros + a hand-written sink. Level comes from the
 // LOG_LEVEL environment variable (default info); color is automatic on a terminal, or
-// forced with LOG_COLOR=on|off. Only discord_bot's own records pass the level filter as
+// forced with LOG_COLOR=on|off. Only nibby's own records pass the level filter as
 // configured; other crates' (serenity, reqwest, ...) internal events are shown only at
 // warn/error, so they don't flood the console.
 
@@ -439,7 +439,7 @@ fn level_color(l: Level) -> &'static str {
 }
 
 fn is_our_target(target: &str) -> bool {
-    target.starts_with("discord_bot")
+    target.starts_with("nibby")
 }
 
 /// The existing global `log::Log` sink. Level/color are atomics; bounded history and

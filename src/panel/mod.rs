@@ -65,7 +65,7 @@ pub async fn entry() -> Result<bool, BotError> {
     }
     if command.as_deref() == Some("panel") {
         if std::env::args().nth(2).as_deref() != Some("reset-password") {
-            return Err("usage: discord-bot panel reset-password".into());
+            return Err("usage: nibby panel reset-password".into());
         }
         let directory = state_directory()?;
         crate::memory::init_result(&directory.join("hafiza.redb"))?;

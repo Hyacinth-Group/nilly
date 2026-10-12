@@ -4,13 +4,13 @@ Released changes are in [CHANGELOG](../CHANGELOG.md). These items remain open; t
 
 ## Bounded contribution
 
-- [#7: English weekday and mood-keyword localization](https://github.com/krxi/discord-bot/issues/7). English mode still has Turkish weekday/mood logic.
+- [#7: English weekday and mood-keyword localization](https://github.com/krxi/nibby/issues/7). English mode still has Turkish weekday/mood logic.
 
 ## Design decisions before implementation
 
-- [#5: Custom emoji reactions](https://github.com/krxi/discord-bot/issues/5): agree on accepted protocol syntax and invalid-emoji behavior; current output supports Unicode reactions only.
-- [#6: English-mode travel](https://github.com/krxi/discord-bot/issues/6): choose a locale/event set and travel windows, not an undefined “international” calendar. Travel remains disabled in English.
-- [#8: Interest-triggered participation](https://github.com/krxi/discord-bot/issues/8): define the interest source, matching boundary and sleep/mention behavior before bypassing willingness.
+- [#5: Custom emoji reactions](https://github.com/krxi/nibby/issues/5): agree on accepted protocol syntax and invalid-emoji behavior; current output supports Unicode reactions only.
+- [#6: English-mode travel](https://github.com/krxi/nibby/issues/6): choose a locale/event set and travel windows, not an undefined “international” calendar. Travel remains disabled in English.
+- [#8: Interest-triggered participation](https://github.com/krxi/nibby/issues/8): define the interest source, matching boundary and sleep/mention behavior before bypassing willingness.
 
 ## Evidence and operational limits
 

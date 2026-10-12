@@ -15,9 +15,10 @@ Notable changes are recorded here in [Keep a Changelog](https://keepachangelog.c
 - Real admin panel screenshots, with fictional sample memory clearly labeled.
 
 ### Changed
+- Renamed the project from `discord-bot` to **Nibby**. The binary, repository and container image use `nibby`; current Docker volumes are `nibby-data` and `nibby-config`. Discord platform names, persisted Turkish keys and protocol identifiers are unchanged.
 - The default persona answers AI/bot identity questions honestly; its fictional university biography and fixed political identity are removed. `STEALTH` means reduced bot UI, not human impersonation.
 - Browser setup can start the first configured platform without restarting. Later Settings changes need a restart; credential checks are not proof of live room access.
-- Compose mounts the fixed named `discord-bot-config` volume at `/data/config`, uses `PANEL_CONFIG_PATH=/data/config/.env`, and publishes the panel only on `127.0.0.1:8787:8787`. Fresh config volumes inherit bot UID/GID `10001` ownership; default Docker setup needs no host config folder or Linux permission commands. Saved data keeps the `durum` key and explicit `discord-bot-data` volume.
+- Compose mounts the fixed named `nibby-config` volume at `/data/config`, uses `PANEL_CONFIG_PATH=/data/config/.env`, and publishes the panel only on `127.0.0.1:8787:8787`. Fresh config volumes inherit bot UID/GID `10001` ownership; default Docker setup needs no host config folder or Linux permission commands. Saved data keeps the `durum` key and explicit `nibby-data` volume.
 - README and setup docs lead with three-command Docker/browser configuration, platform-specific requirements, collection boundaries and unmeasured-cost disclosure. Backup/restore covers both named volumes; Docker CLI setup uses explicit `--workdir /data/config`, while host `.env` editing is an advanced directory-bind option.
 - Usage shows observed process-local calls/tokens; missing monetary charges stay “Not reported,” not estimated. Provider dashboards remain the billing source.
 
@@ -33,11 +34,13 @@ Notable changes are recorded here in [Keep a Changelog](https://keepachangelog.c
 ### Upgrading from 1.x
 - Stop the old bot and make a private backup of the entire saved-data directory/volume before launching v2. First startup automatically creates a migration snapshot/manifest and commits identity changes atomically; unresolved legacy material is retained, not silently deleted.
 - Keep the migration backup and old binary for rollback. Stop v2 and restore its pre-migration snapshot before using the old binary; do not run v1 against the migrated database. See [memory migration and rollback](docs/state-files.md#identity-schema-migration-and-rollback).
-- With the old service stopped, preserve a private settings backup and copy the existing host `.env` or `./config/.env` into `discord-bot-config` with bot ownership before replacing Compose; remove old `env_file` injection for browser-editable settings. Port 8787 is local-only. Do not discard an old project-prefixed data volume: [migrate config and data explicitly](docs/setup-guide.md#existing-compose-installations).
+- With the old service stopped, preserve private backups and migrate `discord-bot-data`/`discord-bot-config` or older project-prefixed volumes into empty `nibby-data`/`nibby-config` volumes with bot ownership. Copy existing host `.env` or `./config/.env` if no config volume exists; remove old `env_file` injection for browser-editable settings. Port 8787 is local-only. Changing names does not move data: [migrate config and data explicitly](docs/setup-guide.md#existing-compose-installations), verify both, and keep originals for rollback. Never use `docker compose down -v` before verification.
 - Set optional `OWNER_KEY` to a canonical platform-qualified user identity for Telegram/Slack/Matrix administration. It takes precedence over legacy Discord-only `OWNER_ID`; invalid nonblank values fail validation. See [configuration](docs/configuration.md).
 - All connected platforms share memory/personality. Only approve trusted rooms; use separate installations for unrelated groups.
 
 ## [1.1.0] - 2026-10-11
+
+Historical command names below are retained as shipped before the Nibby rename.
 
 ### Added
 - `discord-bot init` guided `.env` creation and Discord invite link.
@@ -56,7 +59,7 @@ Notable changes are recorded here in [Keep a Changelog](https://keepachangelog.c
 
 ## 1.0.0 - 2026-09-04
 
-This version was marked by commit [`7472fb9`](https://github.com/krxi/discord-bot/commit/7472fb9); there is no published GitHub release or `v1.0.0` tag.
+This version was marked by commit [`7472fb9`](https://github.com/krxi/nibby/commit/7472fb9); there is no published GitHub release or `v1.0.0` tag.
 
 ### Added
 - Discord conversation replies, silence and Unicode reactions, streamed output, and slash-command management.
@@ -65,5 +68,5 @@ This version was marked by commit [`7472fb9`](https://github.com/krxi/discord-bo
 - English and Turkish prompt/UI dispatch, OpenRouter and Mistral model support, and a terminal chat bench.
 - Sleep schedules, staged growth and name selection, image commentary, and reaction observation.
 
-[2.0.0]: https://github.com/krxi/discord-bot/compare/v1.1.0...HEAD
-[1.1.0]: https://github.com/krxi/discord-bot/releases/tag/v1.1.0
+[2.0.0]: https://github.com/krxi/nibby/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/krxi/nibby/releases/tag/v1.1.0
