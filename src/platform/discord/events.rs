@@ -237,7 +237,7 @@ pub(crate) fn decode_member_join(
                     .as_ref()
                     .is_none_or(|channels| channels.contains(id))
             };
-            if let Some(id) = discovered.preferred_room.filter(&allowed) {
+            if let Some(id) = discovered.preferred_room.filter(allowed) {
                 return Some(id);
             }
             if let Some(room) = discovered.rooms.into_iter().find(|room| allowed(&room.id)) {
